@@ -1,7 +1,7 @@
 nats-py
-pydantic>=2.0
-langchain
-langchain-google-genai
+asyncio-nats-client
+pydantic
+# langchain
+# langchain-google-genai
 python-dotenv
 asyncio
-

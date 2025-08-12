@@ -1,0 +1,16 @@
+
+# POLARIS SWIM Adapters Configuration
+
+nats:
+  url: "nats://localhost:4222"
+  
+swim:
+  host: "localhost"
+  port: 6565
+  
+monitoring:
+  interval_seconds: 5.0
+  
+logging:
+  level: "INFO"
+  file: "logs/polaris_adapters.log"
