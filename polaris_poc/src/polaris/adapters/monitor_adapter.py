@@ -1,11 +1,10 @@
+#!/usr/bin/env python3
 """
 SWIM Monitor Adapter for POLARIS POC
 
 Subjects (configurable):
 - publish to: POLARIS_TELEMETRY_SUBJECT (default: "polaris.telemetry.events")
 - batch publish: POLARIS_TELEMETRY_BATCH_SUBJECT (default: "polaris.telemetry.events.batch")
-
-Environment variables (all optional):
 
 """
 
@@ -25,8 +24,13 @@ from nats.aio.client import Client as NATS
 from polaris.common import setup_logging, now_iso, jittered_backoff
 from polaris.common.config import load_config, get_config
 
-load_config(search_paths=[Path("/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/config/polaris_config.yaml")],
-            required_keys=["SWIM_HOST", "SWIM_PORT", "NATS_URL"])
+# load config (adjust path(s) as needed)
+load_config(
+    search_paths=[Path(
+        "/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/config/polaris_config.yaml")],
+    required_keys=["SWIM_HOST", "SWIM_PORT", "NATS_URL"],
+)
+
 
 # --------------------------------- Data Model ---------------------------------
 
@@ -52,6 +56,7 @@ class TelemetryEvent:
 
 # ---------------------------- SWIM Async TCP Client ----------------------------
 
+
 class SwimTCPClientAsync:
     """
     Async TCP client for SWIM External Control.
@@ -74,7 +79,7 @@ class SwimTCPClientAsync:
                 timeout=self.timeout_sec,
             )
         except Exception as e:
-            raise TimeoutError(f"connect failed: {e}")
+            raise TimeoutError(f"connect failed: {e}") from e
 
         try:
             writer.write((command + "\n").encode())
@@ -123,10 +128,16 @@ class SwimTCPClientAsync:
                 await asyncio.sleep(delay)
                 attempt += 1
 
-# ------------------------------- Execution Adapter (NATS) --------------------------------
+
+# ------------------------------- Monitor Adapter (NATS) --------------------------------
 
 
 class SwimMonitorAdapter:
+    """Monitor adapter: collects metrics from SWIM and publishes telemetry to NATS."""
+
+    # safety limit for outstanding immediate publish tasks
+    MAX_IMMEDIATE_TASKS = 1000
+
     def __init__(self):
         # ---------------- Config (ENV) ----------------
         self.nats_url = get_config("NATS_URL", "nats://localhost:4222")
@@ -139,21 +150,30 @@ class SwimMonitorAdapter:
         self.retry_max_delay = get_config("SWIM_RETRY_MAX_DELAY", "4.0", float)
 
         self.monitor_interval = get_config("MONITOR_INTERVAL", "5.0", float)
-        # keep 1 by default due to SWIM single-threading
         self.metrics_concurrency = get_config("METRICS_CONCURRENCY", "1", int)
 
-        self.telemetry_subject = get_config(
-            "POLARIS_TELEMETRY_SUBJECT", "polaris.telemetry.events")
+        self.telemetry_stream_subject = get_config(
+            "POLARIS_TELEMETRY_STREAM_SUBJECT", "polaris.telemetry.events.stream")
         self.telemetry_batch_subject = get_config(
             "POLARIS_TELEMETRY_BATCH_SUBJECT", "polaris.telemetry.events.batch")
         self.telemetry_batch_size = get_config(
-            "TELEMETRY_BATCH_SIZE", "100", int)    # max events per batch
+            "TELEMETRY_BATCH_SIZE", "100", int)
         self.telemetry_batch_max_wait = get_config(
-            "TELEMETRY_BATCH_MAX_WAIT", "1.0", float)  # seconds to wait to fill batch
+            "TELEMETRY_BATCH_MAX_WAIT", "1.0", float)
+
+        # streaming per-event flag: publish each event immediately if True (in addition to batch)
+        self.telemetry_stream = get_config(
+            "TELEMETRY_STREAM", "false").lower() == "true"
+
+        # Always present: track immediate per-event publish tasks
+        self._immediate_publish_tasks: List[asyncio.Task] = []
+
+        # NATS connect guard to avoid concurrent connect() calls
+        self._nats_connect_lock = asyncio.Lock()
 
         self.queue_maxsize = get_config(
             "TELEMETRY_QUEUE_MAXSIZE", "5000", int)  # 0 => unbounded
-        
+
         # Dynamic metric list (JSON or comma-separated)
         default_metrics = "dimmer,get_active_servers,get_max_servers,get_servers,get_basic_rt,get_opt_rt,get_basic_throughput,get_opt_throughput,get_arrival_rate"
         metrics_env = get_config("SWIM_METRIC_COMMANDS", default_metrics)
@@ -207,11 +227,12 @@ class SwimMonitorAdapter:
             "retry_max_delay": self.retry_max_delay,
             "monitor_interval": self.monitor_interval,
             "metrics_concurrency": self.metrics_concurrency,
-            "telemetry_subject": self.telemetry_subject,
+            "telemetry_stream_subject": self.telemetry_stream_subject,
             "telemetry_batch_subject": self.telemetry_batch_subject,
             "telemetry_batch_size": self.telemetry_batch_size,
             "telemetry_batch_max_wait": self.telemetry_batch_max_wait,
             "queue_maxsize": self.queue_maxsize,
+            "telemetry_stream": self.telemetry_stream,
         })
 
         # --------------- NATS & Queues ---------------
@@ -222,10 +243,7 @@ class SwimMonitorAdapter:
 
         # --------------- SWIM Client ---------------
         self.swim = SwimTCPClientAsync(
-            host=self.swim_host,
-            port=self.swim_port,
-            timeout_sec=self.swim_cmd_timeout,
-            logger=self.logger,
+            host=self.swim_host, port=self.swim_port, timeout_sec=self.swim_cmd_timeout, logger=self.logger
         )
 
         # Lifecycle
@@ -236,27 +254,46 @@ class SwimMonitorAdapter:
     # ---------------- NATS Connection ----------------
 
     async def _ensure_nats(self) -> None:
-        """Ensure NATS connected; reconnect with backoff if needed."""
-        if self.nc is None:
-            self.nc = NATS()
+        """Ensure NATS connected; reconnect with backoff if needed.
 
-        if self.nc.is_connected:
+        This method is protected by an asyncio.Lock so that only one coroutine
+        attempts to connect at a time (prevents read() races).
+        """
+        # Fast path: already connected
+        if self.nc is not None and getattr(self.nc, "is_connected", False):
             return
 
-        attempt = 0
-        while True:
-            try:
-                await self.nc.connect(self.nats_url)
-                self.logger.info("nats_connected", extra={
-                                 "nats_url": self.nats_url})
+        async with self._nats_connect_lock:
+            # double-check under lock
+            if self.nc is not None and getattr(self.nc, "is_connected", False):
                 return
-            except Exception as e:
-                delay = jittered_backoff(
-                    attempt, self.retry_base_delay, self.retry_max_delay)
-                self.logger.warning("nats_connect_retry", extra={
-                                    "attempt": attempt, "error": str(e), "retry_in_sec": round(delay, 3)})
-                await asyncio.sleep(delay)
-                attempt += 1
+
+            # create a new client object if necessary
+            if self.nc is None:
+                self.nc = NATS()
+
+            attempt = 0
+            while True:
+                try:
+                    await self.nc.connect(self.nats_url)
+                    self.logger.info("nats_connected", extra={
+                                     "nats_url": self.nats_url})
+                    return
+                except Exception as e:
+                    # Defensive: try to close and discard the client so subsequent attempts recreate clean state.
+                    try:
+                        await self.nc.close()
+                    except Exception:
+                        pass
+                    self.nc = None
+
+                    delay = jittered_backoff(
+                        attempt, self.retry_base_delay, self.retry_max_delay)
+                    self.logger.warning("nats_connect_retry", extra={
+                                        "attempt": attempt, "error": str(e), "retry_in_sec": round(delay, 3)})
+                    await asyncio.sleep(delay)
+                    attempt += 1
+                    self.nc = NATS()
 
     # ---------------- SWIM Metric Helpers ----------------
 
@@ -264,7 +301,6 @@ class SwimMonitorAdapter:
         return self.metric_units.get(metric_or_name, "unknown")
 
     def _normalized_name(self, cmd: str) -> str:
-        # Map SWIM commands to clean metric names
         mapping = {
             "get_dimmer": "dimmer",
             "get_active_servers": "active_servers",
@@ -288,7 +324,6 @@ class SwimMonitorAdapter:
                 max_delay=self.retry_max_delay,
                 ctx={**cycle_ctx, "metric_cmd": cmd},
             )
-            # Convert to float if possible
             try:
                 val = float(resp)
             except Exception:
@@ -323,7 +358,21 @@ class SwimMonitorAdapter:
                                     **cycle_ctx, "metric_cmd": cmd, "error": str(e)})
         return total
 
-    # ---------------- Collection → Queue ----------------
+    # ----------------- Collection → Stream -------------------------
+
+    async def _publish_event(self, event: TelemetryEvent) -> None:
+        """Publish a single telemetry event to the per-event subject."""
+        try:
+            await self._ensure_nats()
+            assert self.nc is not None
+            await self.nc.publish(self.telemetry_stream_subject, json.dumps(event.to_dict()).encode())
+            self.logger.debug("telemetry_event_published", extra={
+                              "name": event.name, "subject": self.telemetry_stream_subject})
+        except Exception as e:
+            self.logger.warning("telemetry_event_publish_failed", extra={
+                                "error": str(e), "event": event.name})
+
+    # ---------------- Collection → Queue (with a Stream Flag) ----------------
 
     async def _collect_once(self) -> int:
         """
@@ -334,7 +383,7 @@ class SwimMonitorAdapter:
         cycle_ctx = {"cycle_id": cycle_id}
         t0 = time.perf_counter()
 
-        # Optionally limit concurrency (default 1)
+        # Optional concurrency limit
         sem = asyncio.Semaphore(self.metrics_concurrency)
 
         async def _wrapped(cmd: str):
@@ -348,9 +397,8 @@ class SwimMonitorAdapter:
         metrics: Dict[str, float] = {
             name: val for r in results if r is not None for name, val in [r]}
 
-        # 2) Derived metrics (avg response time)
-        if all(k in metrics for k in ("basic_response_time", "optional_response_time",
-                                      "basic_throughput", "optional_throughput")):
+        # 2) Derived avg response time
+        if all(k in metrics for k in ("basic_response_time", "optional_response_time", "basic_throughput", "optional_throughput")):
             tput = metrics["basic_throughput"] + metrics["optional_throughput"]
             if tput > 0:
                 avg_rt = (
@@ -366,26 +414,39 @@ class SwimMonitorAdapter:
             if util_sum is not None:
                 metrics[self.utilization_metric_name] = util_sum
 
-        # 4) Enqueue telemetry events
+        # 4) Enqueue telemetry events + optional immediate publish
         enqueued = 0
         ts = now_iso()
         for metric_name, value in metrics.items():
             unit = self._unit_for(metric_name)
             evt = TelemetryEvent(
-                name=f"swim.{metric_name}",
-                value=value,
-                unit=unit,
-                ts=ts,
-                source="swim_monitor",
-            )
+                name=f"swim.{metric_name}", value=value, unit=unit, ts=ts, source="swim_monitor")
             try:
                 self.telemetry_q.put_nowait(evt)
                 enqueued += 1
             except asyncio.QueueFull:
-                # Drop oldest or log — we choose to log and drop newest to avoid unbounded memory
                 self.logger.error("telemetry_queue_full", extra={
                                   "cycle_id": cycle_id, "dropped_metric": metric_name})
                 break
+
+            # streaming mode: schedule immediate per-event publish (fire-and-forget tracked)
+            if self.telemetry_stream:
+                try:
+                    task = asyncio.create_task(self._publish_event(evt))
+                    self._immediate_publish_tasks.append(task)
+                    if len(self._immediate_publish_tasks) > self.MAX_IMMEDIATE_TASKS:
+                        self.logger.warning("too_many_immediate_publish_tasks", extra={
+                                            "count": len(self._immediate_publish_tasks)})
+
+                    def _on_done(t: asyncio.Task):
+                        try:
+                            self._immediate_publish_tasks.remove(t)
+                        except ValueError:
+                            pass
+                    task.add_done_callback(_on_done)
+                except Exception as e:
+                    self.logger.warning(
+                        "immediate_publish_task_failed", extra={"error": str(e)})
 
         elapsed = time.perf_counter() - t0
         self.logger.info("collect_cycle_done", extra={
@@ -422,19 +483,12 @@ class SwimMonitorAdapter:
         await self._ensure_nats()
         assert self.nc is not None
 
-        # Preferred: publish batch as a single message
-        payload = {
-            "batch_ts": now_iso(),
-            "count": len(batch),
-            "events": [e.to_dict() for e in batch],
-        }
+        payload = {"batch_ts": now_iso(), "count": len(
+            batch), "events": [e.to_dict() for e in batch]}
         try:
             await self.nc.publish(self.telemetry_batch_subject, json.dumps(payload).encode())
-            self.logger.info("telemetry_batch_published", extra={
-                "count": len(batch),
-                "subject": self.telemetry_batch_subject,
-                "queue_size_after": self.telemetry_q.qsize(),
-            })
+            self.logger.info("telemetry_batch_published", extra={"count": len(
+                batch), "subject": self.telemetry_batch_subject, "queue_size_after": self.telemetry_q.qsize()})
             return
         except Exception as e:
             self.logger.warning(
@@ -444,7 +498,7 @@ class SwimMonitorAdapter:
         published = 0
         for e in batch:
             try:
-                await self.nc.publish(self.telemetry_subject, json.dumps(e.to_dict()).encode())
+                await self.nc.publish(self.telemetry_stream_subject, json.dumps(e.to_dict()).encode())
                 published += 1
             except Exception as ex:
                 self.logger.error("telemetry_publish_failed", extra={
@@ -452,17 +506,12 @@ class SwimMonitorAdapter:
                 break
 
         self.logger.info("telemetry_fallback_publish_done", extra={
-            "published": published,
-            "attempted": len(batch),
-            "subject": self.telemetry_subject,
-            "queue_size_after": self.telemetry_q.qsize(),
+            "published": published, "attempted": len(batch), "subject": self.telemetry_stream_subject, "queue_size_after": self.telemetry_q.qsize()
         })
 
     async def _publisher_loop(self):
         self.logger.info("publisher_started", extra={
-            "batch_size": self.telemetry_batch_size,
-            "batch_max_wait": self.telemetry_batch_max_wait,
-        })
+                         "batch_size": self.telemetry_batch_size, "batch_max_wait": self.telemetry_batch_max_wait})
         try:
             while self.running:
                 batch: List[TelemetryEvent] = []
@@ -504,10 +553,19 @@ class SwimMonitorAdapter:
 
     async def start(self):
         self.logger.info("monitor_starting")
+        # Try to establish NATS early to reduce race/handshake attempts later
+        try:
+            await self._ensure_nats()
+        except Exception as e:
+            self.logger.warning("initial_nats_connect_failed",
+                                extra={"error": str(e)})
+
         self.running = True
         self.collect_task = asyncio.create_task(self._collector_loop())
+        # always run publisher loop for batch behaviour
         self.publish_task = asyncio.create_task(self._publisher_loop())
-        self.logger.info("monitor_started", extra={"status": "running"})
+        self.logger.info("monitor_started", extra={
+                         "status": "running", "telemetry_stream": self.telemetry_stream})
 
     async def drain_and_stop(self, drain_timeout: float = 10.0):
         """Graceful shutdown: stop intake, drain queue, and close NATS."""
@@ -522,7 +580,7 @@ class SwimMonitorAdapter:
             except asyncio.CancelledError:
                 pass
 
-        # Drain queue (let publisher flush)
+        # Drain Batch queue (let publisher flush)
         try:
             await asyncio.wait_for(self.telemetry_q.join(), timeout=drain_timeout)
         except asyncio.TimeoutError:
@@ -537,6 +595,24 @@ class SwimMonitorAdapter:
             except asyncio.CancelledError:
                 pass
 
+        # Drain Stream immediate publish tasks (if any)
+        if self._immediate_publish_tasks:
+            self.logger.info("waiting_immediate_publish_tasks", extra={
+                             "count": len(self._immediate_publish_tasks)})
+            try:
+                done, pending = await asyncio.wait(self._immediate_publish_tasks, timeout=2.0)
+            except Exception:
+                for t in list(self._immediate_publish_tasks):
+                    t.cancel()
+                pending = []
+                done = []
+            for t in pending:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+            self._immediate_publish_tasks.clear()
+
         # Close NATS
         try:
             if self.nc:
@@ -545,6 +621,7 @@ class SwimMonitorAdapter:
             pass
 
         self.logger.info("monitor_stopped")
+
 
 # ----------------------------------- Main -------------------------------------
 

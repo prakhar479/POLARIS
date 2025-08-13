@@ -26,11 +26,12 @@ monitor:
   metrics_concurrency: 1   # keep low because SWIM is single-threaded
 
 telemetry:
-  subject: "polaris.telemetry.events"
+  stream_subject: "polaris.telemetry.events.stream"
   batch_subject: "polaris.telemetry.events.batch"
   batch_size: 100
   batch_max_wait: 1.0       # seconds to wait before sending incomplete batch
   queue_maxsize: 5000       # 0 = unbounded
+  stream: True   # Whether to stream the metrics in a continious indivisual packets ( along with batch ) 
 
 execution:
   queue_maxsize: 1000       # execution adapter queue size
