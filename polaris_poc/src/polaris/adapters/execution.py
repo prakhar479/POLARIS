@@ -479,7 +479,7 @@ class ExecutionAdapter(BaseAdapter):
             )
             
             self.logger.error(
-                "Action execution failed",
+                f"Action execution failed {error_msg},{action}",
                 extra={
                     **ctx,
                     "error": error_msg,

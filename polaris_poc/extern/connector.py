@@ -345,6 +345,7 @@ class SwimTCPConnector(ManagedSystemConnector):
         Returns:
             Response from SWIM
         """
+        
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"Dimmer value must be between 0.0 and 1.0, got {value}")
         

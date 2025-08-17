@@ -8,7 +8,7 @@ from enum import Enum
 
 from polaris.common.config import load_config, get_config
 
-load_config(search_paths=[Path("/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/src/config/polaris_config.yaml")],
+load_config(search_paths=[Path("/home/divyansh/serc/POLARIS/polaris_poc/src/config/polaris_config.yaml")],
             required_keys=["LOGGER_NAME", "LOGGER_LEVEL", "LOGGER_FORMAT"])
 
 class LogFormat(Enum):
