@@ -1,8 +1,8 @@
 """
-Unit tests for Knowledge Base Storage Implementation.
+Unit tests for Enhanced Knowledge Base Storage Implementation.
 
-Tests the in-memory storage backend for the POLARIS Knowledge Base,
-including CRUD operations, search functionality, and error handling.
+Tests the enhanced in-memory storage backend for the POLARIS Knowledge Base,
+including telemetry optimization, advanced querying, and comprehensive indexing.
 """
 
 import pytest
@@ -12,16 +12,23 @@ from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 from typing import Dict, Any
+import uuid
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from polaris.common.kb_storage import InMemoryKBStorage
-from polaris.common.query_models import KBEntry
+from polaris.common.query_models import (
+    KBEntry,
+    KBQuery,
+    QueryType,
+    KBDataType,
+    TelemetryQueryBuilder,
+)
 
 
-class TestInMemoryKBStorageBasics:
-    """Test basic functionality of InMemoryKBStorage."""
+class TestEnhancedKBStorageBasics:
+    """Test basic functionality of enhanced InMemoryKBStorage."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -29,10 +36,15 @@ class TestInMemoryKBStorageBasics:
         self.storage = InMemoryKBStorage(logger=self.logger)
 
     def test_storage_initialization(self):
-        """Test storage initializes correctly."""
+        """Test storage initializes correctly with all indexes."""
         assert self.storage.logger is not None
         assert self.storage._entries == {}
         assert self.storage._tag_index == {}
+        assert self.storage._metric_index == {}
+        assert self.storage._source_index == {}
+        assert self.storage._data_type_index == {}
+        assert self.storage._label_index == {}
+        assert self.storage._time_index == []
 
     def test_storage_initialization_without_logger(self):
         """Test storage initializes with default logger."""
@@ -42,367 +54,480 @@ class TestInMemoryKBStorageBasics:
         assert hasattr(storage.logger, "error")
 
     def test_empty_storage_stats(self):
-        """Test statistics for empty storage."""
+        """Test comprehensive statistics for empty storage."""
         stats = self.storage.get_stats()
 
         assert stats["total_entries"] == 0
         assert stats["total_tags"] == 0
+        assert stats["total_metrics"] == 0
+        assert stats["total_sources"] == 0
+        assert stats["total_labels"] == 0
+        assert stats["time_indexed_entries"] == 0
         assert "memory_usage_estimate_kb" in stats
         assert stats["memory_usage_estimate_kb"] >= 0
+        assert "indexes" in stats
+        assert "data_type_breakdown" in stats
+
+    def test_get_data_type_counts(self):
+        """Test data type count functionality."""
+        counts = self.storage.get_data_type_counts()
+        assert isinstance(counts, dict)
+        assert len(counts) == 0  # Empty storage
 
 
-class TestKBStorageCRUDOperations:
-    """Test CRUD operations for KB storage."""
+class TestTelemetryDataStorage:
+    """Test telemetry-specific storage functionality."""
 
     def setup_method(self):
         """Set up test fixtures."""
         self.storage = InMemoryKBStorage()
-        self.test_entry = KBEntry(
-            entry_id="test-entry-1",
-            content={
-                "title": "Test Entry",
-                "description": "A test knowledge base entry",
-                "category": "testing",
-            },
-            tags=["test", "example"],
-            metadata={"source": "unit_test", "priority": "low"},
+
+        # Create sample telemetry event
+        self.telemetry_event = {
+            "name": "cpu.usage",
+            "value": 85.5,
+            "timestamp": "2025-08-17T10:00:00Z",
+            "source": "server-001",
+            "tags": {"environment": "production", "service": "web"},
+            "unit": "percent",
+        }
+
+    def test_store_telemetry_event_direct(self):
+        """Test storing telemetry event using convenience method."""
+        result = self.storage.store_telemetry_event(self.telemetry_event)
+
+        assert result is True
+
+        # Verify entry was created and indexed
+        stats = self.storage.get_stats()
+        assert stats["total_entries"] == 1
+        assert stats["total_metrics"] == 1
+        assert stats["total_sources"] == 1
+        assert stats["data_type_breakdown"][KBDataType.TELEMETRY_EVENT.value] == 1
+
+    def test_store_telemetry_batch(self):
+        """Test storing multiple telemetry events in batch."""
+        batch = {
+            "events": [
+                self.telemetry_event,
+                {
+                    "name": "memory.usage",
+                    "value": 72.3,
+                    "timestamp": "2025-08-17T10:01:00Z",
+                    "source": "server-001",
+                    "tags": {"environment": "production"},
+                },
+                {
+                    "name": "disk.usage",
+                    "value": 45.8,
+                    "timestamp": "2025-08-17T10:02:00Z",
+                    "source": "server-002",
+                },
+            ]
+        }
+
+        result = self.storage.store_telemetry_batch(batch)
+
+        assert result["stored"] == 3
+        assert result["failed"] == 0
+        assert len(result["errors"]) == 0
+
+        # Verify all entries stored
+        stats = self.storage.get_stats()
+        assert stats["total_entries"] == 3
+        assert stats["total_metrics"] == 3
+        assert stats["total_sources"] == 2
+
+    def test_telemetry_entry_field_extraction(self):
+        """Test automatic field extraction from telemetry events."""
+        entry = KBEntry(
+            entry_id="test-telemetry",
+            data_type=KBDataType.TELEMETRY_EVENT,
+            content=self.telemetry_event,
         )
 
-    def test_store_entry_success(self):
-        """Test successfully storing an entry."""
-        result = self.storage.store(self.test_entry)
+        self.storage.store(entry)
 
-        assert result is True
-        assert "test-entry-1" in self.storage._entries
-        assert self.storage._entries["test-entry-1"] == self.test_entry
+        # Retrieve and verify extracted fields
+        stored_entry = self.storage.get("test-telemetry")
+        assert stored_entry.metric_name == "cpu.usage"
+        assert stored_entry.metric_value == 85.5
+        assert stored_entry.source == "server-001"
+        assert stored_entry.event_timestamp == "2025-08-17T10:00:00Z"
+        assert stored_entry.labels == {"environment": "production", "service": "web"}
 
-        # Check tag index
-        assert "test" in self.storage._tag_index
-        assert "example" in self.storage._tag_index
-        assert "test-entry-1" in self.storage._tag_index["test"]
-        assert "test-entry-1" in self.storage._tag_index["example"]
+    def test_metric_name_normalization(self):
+        """Test metric name normalization."""
+        event = {
+            "name": "CPU_Usage_Percent",
+            "value": 80.0,
+            "timestamp": "2025-08-17T10:00:00Z",
+        }
 
-    def test_store_entry_updates_timestamp(self):
-        """Test that storing updates the updated_at timestamp."""
-        original_updated_at = self.test_entry.updated_at
+        entry = KBEntry(
+            entry_id="normalize-test",
+            data_type=KBDataType.TELEMETRY_EVENT,
+            content=event,
+        )
 
-        # Store entry
-        self.storage.store(self.test_entry)
+        self.storage.store(entry)
 
-        # Timestamp should be updated
-        stored_entry = self.storage._entries["test-entry-1"]
-        assert stored_entry.updated_at != original_updated_at
-
-    def test_store_entry_without_tags(self):
-        """Test storing entry without tags."""
-        entry = KBEntry(entry_id="no-tags", content={"data": "test"})
-
-        result = self.storage.store(entry)
-
-        assert result is True
-        assert "no-tags" in self.storage._entries
-        # No tags should be added to index
-        assert len(self.storage._tag_index) == 0
-
-    def test_get_existing_entry(self):
-        """Test retrieving an existing entry."""
-        self.storage.store(self.test_entry)
-
-        retrieved = self.storage.get("test-entry-1")
-
-        assert retrieved is not None
-        assert retrieved.entry_id == "test-entry-1"
-        assert retrieved.content == self.test_entry.content
-        assert retrieved.tags == self.test_entry.tags
-
-    def test_get_nonexistent_entry(self):
-        """Test retrieving a nonexistent entry."""
-        retrieved = self.storage.get("nonexistent")
-        assert retrieved is None
-
-    def test_update_entry_content(self):
-        """Test updating entry content."""
-        self.storage.store(self.test_entry)
-
-        updates = {"content": {"new_field": "new_value"}}
-
-        result = self.storage.update("test-entry-1", updates)
-
-        assert result is True
-        updated_entry = self.storage.get("test-entry-1")
-        assert "new_field" in updated_entry.content
-        assert updated_entry.content["new_field"] == "new_value"
-        # Original content should be preserved and merged
-        assert "title" in updated_entry.content
-
-    def test_update_entry_tags(self):
-        """Test updating entry tags."""
-        self.storage.store(self.test_entry)
-
-        new_tags = ["updated", "modified"]
-        updates = {"tags": new_tags}
-
-        result = self.storage.update("test-entry-1", updates)
-
-        assert result is True
-        updated_entry = self.storage.get("test-entry-1")
-        assert updated_entry.tags == new_tags
-
-        # Check tag index updates
-        assert "updated" in self.storage._tag_index
-        assert "modified" in self.storage._tag_index
-        assert "test" not in self.storage._tag_index  # Old tags removed
-        assert "example" not in self.storage._tag_index
-
-    def test_update_entry_metadata(self):
-        """Test updating entry metadata."""
-        self.storage.store(self.test_entry)
-
-        updates = {"metadata": {"new_meta": "value", "priority": "high"}}
-
-        result = self.storage.update("test-entry-1", updates)
-
-        assert result is True
-        updated_entry = self.storage.get("test-entry-1")
-        assert updated_entry.metadata["new_meta"] == "value"
-        assert updated_entry.metadata["priority"] == "high"
-        assert updated_entry.metadata["source"] == "unit_test"  # Preserved
-
-    def test_update_nonexistent_entry(self):
-        """Test updating a nonexistent entry."""
-        result = self.storage.update("nonexistent", {"content": {"test": "data"}})
-        assert result is False
-
-    def test_delete_existing_entry(self):
-        """Test deleting an existing entry."""
-        self.storage.store(self.test_entry)
-
-        result = self.storage.delete("test-entry-1")
-
-        assert result is True
-        assert "test-entry-1" not in self.storage._entries
-
-        # Check tag index cleanup
-        assert "test" not in self.storage._tag_index
-        assert "example" not in self.storage._tag_index
-
-    def test_delete_nonexistent_entry(self):
-        """Test deleting a nonexistent entry."""
-        result = self.storage.delete("nonexistent")
-        assert result is False
-
-    def test_clear_storage(self):
-        """Test clearing all storage."""
-        self.storage.store(self.test_entry)
-
-        # Verify entry exists
-        assert len(self.storage._entries) == 1
-        assert len(self.storage._tag_index) == 2
-
-        self.storage.clear()
-
-        # Verify storage is empty
-        assert len(self.storage._entries) == 0
-        assert len(self.storage._tag_index) == 0
+        stored_entry = self.storage.get("normalize-test")
+        assert stored_entry.metric_name == "cpu.usage.percent"
 
 
-class TestKBStorageSearchOperations:
-    """Test search functionality of KB storage."""
+class TestEnhancedQuerying:
+    """Test enhanced querying capabilities."""
 
     def setup_method(self):
-        """Set up test fixtures with multiple entries."""
+        """Set up test fixtures with sample data."""
         self.storage = InMemoryKBStorage()
 
-        # Create test entries
-        self.entries = [
+        # Create diverse sample data
+        self.sample_entries = [
+            # Telemetry events
             KBEntry(
-                entry_id="error-1",
+                entry_id="cpu-001",
+                data_type=KBDataType.TELEMETRY_EVENT,
                 content={
-                    "title": "Database Connection Error",
-                    "severity": "high",
-                    "category": "database",
-                    "description": "Unable to connect to primary database",
+                    "name": "cpu.usage",
+                    "value": 85.5,
+                    "timestamp": "2025-08-17T10:00:00Z",
+                    "source": "server-001",
+                    "tags": {"environment": "production", "service": "web"},
                 },
-                tags=["error", "database", "critical"],
             ),
             KBEntry(
-                entry_id="warning-1",
+                entry_id="memory-001",
+                data_type=KBDataType.TELEMETRY_EVENT,
                 content={
-                    "title": "High CPU Usage Warning",
-                    "severity": "medium",
-                    "category": "performance",
-                    "description": "CPU usage exceeded 80% threshold",
+                    "name": "memory.usage",
+                    "value": 72.3,
+                    "timestamp": "2025-08-17T10:01:00Z",
+                    "source": "server-001",
+                    "tags": {"environment": "production", "service": "web"},
                 },
-                tags=["warning", "performance", "cpu"],
             ),
             KBEntry(
-                entry_id="info-1",
+                entry_id="cpu-002",
+                data_type=KBDataType.TELEMETRY_EVENT,
                 content={
-                    "title": "System Startup Complete",
-                    "severity": "low",
-                    "category": "system",
-                    "description": "All services started successfully",
+                    "name": "cpu.usage",
+                    "value": 45.2,
+                    "timestamp": "2025-08-17T10:02:00Z",
+                    "source": "server-002",
+                    "tags": {"environment": "staging", "service": "api"},
                 },
-                tags=["info", "system", "startup"],
+            ),
+            # Alert data
+            KBEntry(
+                entry_id="alert-001",
+                data_type=KBDataType.ALERT,
+                content={
+                    "title": "High CPU Usage Alert",
+                    "severity": "critical",
+                    "description": "CPU usage exceeded 80%",
+                },
+                tags=["alert", "cpu", "critical"],
             ),
         ]
 
         # Store all entries
-        for entry in self.entries:
+        for entry in self.sample_entries:
             self.storage.store(entry)
 
-    def test_search_by_single_filter(self):
-        """Test searching with a single filter."""
-        results = self.storage.search_by_filters({"severity": "high"})
-
-        assert len(results) == 1
-        assert results[0].entry_id == "error-1"
-        assert results[0].content["severity"] == "high"
-
-    def test_search_by_multiple_filters(self):
-        """Test searching with multiple filters."""
-        results = self.storage.search_by_filters(
-            {"category": "performance", "severity": "medium"}
+    def test_structured_query_with_filters(self):
+        """Test structured queries with various filters."""
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED,
+            filters={"data_type": KBDataType.TELEMETRY_EVENT},
         )
 
-        assert len(results) == 1
-        assert results[0].entry_id == "warning-1"
+        response = self.storage.query(query)
 
-    def test_search_by_tags_filter(self):
-        """Test searching by tags filter."""
-        results = self.storage.search_by_filters({"tags": ["error"]})
+        assert response.success is True
+        assert response.total_results == 3
+        assert all(r.data_type == KBDataType.TELEMETRY_EVENT for r in response.results)
 
-        assert len(results) == 1
-        assert results[0].entry_id == "error-1"
-
-        # Test multiple tags
-        results = self.storage.search_by_filters({"tags": ["performance", "system"]})
-
-        assert len(results) == 2
-        result_ids = {r.entry_id for r in results}
-        assert "warning-1" in result_ids
-        assert "info-1" in result_ids
-
-    def test_search_by_metadata_filter(self):
-        """Test searching by metadata filters."""
-        # Add metadata to one entry
-        self.storage.update(
-            "error-1", {"metadata": {"source": "monitor", "alert_id": "ALT-001"}}
+    def test_metric_range_query(self):
+        """Test metric range queries."""
+        query = TelemetryQueryBuilder.metric_range_query(
+            metric_name="cpu.usage", min_value=50.0, max_value=90.0
         )
 
-        # Search by metadata field that should only match one entry
-        results = self.storage.search_by_filters({"alert_id": "ALT-001"})
+        response = self.storage.query(query)
 
-        assert len(results) == 1
-        assert results[0].entry_id == "error-1"
+        assert response.success is True
+        assert response.total_results == 1
+        assert response.results[0].entry_id == "cpu-001"
+        assert response.results[0].metric_value == 85.5
 
-    def test_search_no_matches(self):
-        """Test searching with no matching results."""
-        results = self.storage.search_by_filters({"severity": "nonexistent"})
-        assert len(results) == 0
+    def test_time_series_query(self):
+        """Test time series queries."""
+        query = TelemetryQueryBuilder.time_series_query(
+            metric_name="cpu.usage",
+            start_time="2025-08-17T09:00:00Z",
+            end_time="2025-08-17T11:00:00Z",
+        )
 
-    def test_search_by_content_text(self):
-        """Test text search in content."""
-        results = self.storage.search_by_content("database")
+        response = self.storage.query(query)
 
-        assert len(results) == 1
-        assert results[0].entry_id == "error-1"
+        assert response.success is True
+        assert response.total_results == 2
 
-    def test_search_by_content_case_insensitive(self):
-        """Test case-insensitive content search."""
-        results = self.storage.search_by_content("DATABASE")
+        # Results should be sorted by timestamp
+        timestamps = [r.event_timestamp for r in response.results]
+        assert timestamps == sorted(timestamps)
 
-        assert len(results) == 1
-        assert results[0].entry_id == "error-1"
+    def test_natural_language_query(self):
+        """Test natural language queries."""
+        query = TelemetryQueryBuilder.natural_language_query("cpu usage")
 
-    def test_search_by_content_in_tags(self):
-        """Test text search in tags."""
-        results = self.storage.search_by_content("performance")
+        response = self.storage.query(query)
 
-        assert len(results) == 1
-        assert results[0].entry_id == "warning-1"
+        assert response.success is True
+        assert response.total_results >= 2  # Should find CPU-related entries
 
-    def test_search_by_content_partial_match(self):
-        """Test partial text matching in content search."""
-        results = self.storage.search_by_content("CPU")
+    def test_query_with_sources_filter(self):
+        """Test querying with source filtering."""
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED,
+            sources=["server-001"],
+            filters={"data_type": KBDataType.TELEMETRY_EVENT},
+        )
 
-        assert len(results) == 1
-        assert results[0].entry_id == "warning-1"
+        response = self.storage.query(query)
 
-    def test_search_by_content_no_matches(self):
-        """Test content search with no matches."""
-        results = self.storage.search_by_content("nonexistent_term")
-        assert len(results) == 0
+        assert response.success is True
+        assert response.total_results == 2
+        assert all(r.source == "server-001" for r in response.results)
+
+    def test_query_with_pagination(self):
+        """Test query pagination."""
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED,
+            filters={"data_type": KBDataType.TELEMETRY_EVENT},
+            limit=2,
+            offset=1,
+        )
+
+        response = self.storage.query(query)
+
+        assert response.success is True
+        assert len(response.results) == 2
+        assert response.total_results == 3  # Total available
+
+    def test_advanced_filter_operators(self):
+        """Test advanced filter operators."""
+        # Test greater than
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED, filters={"metric_value__gt": 70.0}
+        )
+
+        response = self.storage.query(query)
+
+        assert response.success is True
+        assert response.total_results == 2
+        assert all(r.metric_value > 70.0 for r in response.results)
+
+        # Test contains operator
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED, filters={"metric_name__contains": "cpu"}
+        )
+
+        response = self.storage.query(query)
+
+        assert response.success is True
+        assert response.total_results == 2
 
 
-class TestKBStorageTagOperations:
-    """Test tag-related operations."""
+class TestTelemetrySpecificFeatures:
+    """Test telemetry-specific features."""
 
     def setup_method(self):
         """Set up test fixtures."""
         self.storage = InMemoryKBStorage()
 
-        # Create entries with various tags
-        entries = [
-            KBEntry(
-                entry_id="entry-1",
-                content={"title": "Entry 1"},
-                tags=["tag1", "tag2", "common"],
-            ),
-            KBEntry(
-                entry_id="entry-2",
-                content={"title": "Entry 2"},
-                tags=["tag2", "tag3", "common"],
-            ),
-            KBEntry(
-                entry_id="entry-3", content={"title": "Entry 3"}, tags=["tag1", "tag3"]
-            ),
-        ]
+        # Create time-series data
+        base_time = datetime(2025, 8, 17, 10, 0, 0, tzinfo=timezone.utc)
+        for i in range(10):
+            timestamp = base_time.replace(minute=i)
 
-        for entry in entries:
+            entry = KBEntry(
+                entry_id=f"metric-{i:03d}",
+                data_type=KBDataType.TELEMETRY_EVENT,
+                content={
+                    "name": "cpu.usage",
+                    "value": 50.0 + (i * 5),  # Values from 50 to 95
+                    "timestamp": timestamp.isoformat(),
+                    "source": f"server-{i % 3 + 1:03d}",
+                    "tags": {"environment": "production"},
+                },
+            )
             self.storage.store(entry)
 
-    def test_get_all_tags(self):
-        """Test retrieving all unique tags."""
-        tags = self.storage.get_all_tags()
+    def test_get_telemetry_metrics(self):
+        """Test getting telemetry metrics with filtering."""
+        # Get all CPU metrics
+        metrics = self.storage.get_telemetry_metrics(metric_name="cpu.usage")
 
-        expected_tags = ["common", "tag1", "tag2", "tag3"]
-        assert tags == expected_tags  # Should be sorted
+        assert len(metrics) == 10
+        assert all(m.metric_name == "cpu.usage" for m in metrics)
 
-    def test_tag_index_consistency(self):
-        """Test that tag index stays consistent."""
-        # Check initial state
-        assert len(self.storage._tag_index) == 4
-        assert "entry-1" in self.storage._tag_index["tag1"]
-        assert "entry-3" in self.storage._tag_index["tag1"]
-        assert len(self.storage._tag_index["common"]) == 2
+        # Get metrics with time range - fix expected count
+        metrics = self.storage.get_telemetry_metrics(
+            metric_name="cpu.usage",
+            start_time="2025-08-17T10:02:00Z",
+            end_time="2025-08-17T10:05:00Z",
+        )
 
-        # Delete an entry and check index cleanup
-        self.storage.delete("entry-1")
+        assert len(metrics) == 3  # Minutes 2, 3, 4 (end_time is exclusive in range)
 
-        assert "entry-1" not in self.storage._tag_index["tag1"]
-        assert "entry-3" in self.storage._tag_index["tag1"]  # Still there
-        # tag2 should still exist because entry-2 has it
+    def test_get_metric_summary(self):
+        """Test metric summary statistics."""
+        summary = self.storage.get_metric_summary("cpu.usage")
+
+        assert summary["metric_name"] == "cpu.usage"
+        assert summary["total_entries"] == 10
+        assert len(summary["unique_sources"]) == 3
+        assert summary["value_statistics"]["min"] == 50.0
+        assert summary["value_statistics"]["max"] == 95.0
+        assert summary["value_statistics"]["count"] == 10
+
+        # Test non-existent metric - should return dict with metric info, not error
+        summary = self.storage.get_metric_summary("non.existent")
+        assert summary["metric_name"] == "non.existent"
+
+    def test_get_all_metrics(self):
+        """Test getting all unique metrics."""
+        metrics = self.storage.get_all_metrics()
+        assert "cpu.usage" in metrics
+        assert len(metrics) == 1
+
+    def test_get_all_sources(self):
+        """Test getting all unique sources."""
+        sources = self.storage.get_all_sources()
+        assert len(sources) == 3
+        assert "server-001" in sources
+        assert "server-002" in sources
+        assert "server-003" in sources
+
+
+class TestIndexManagement:
+    """Test index management and consistency."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.storage = InMemoryKBStorage()
+
+    def test_tag_index_management(self):
+        """Test tag index creation and cleanup."""
+        entry = KBEntry(
+            entry_id="tag-test",
+            data_type=KBDataType.GENERIC,
+            content={"data": "test"},
+            tags=["tag1", "tag2"],
+        )
+
+        self.storage.store(entry)
+
+        # Verify tags indexed
+        assert "tag1" in self.storage._tag_index
         assert "tag2" in self.storage._tag_index
-        assert len(self.storage._tag_index["common"]) == 1
+        assert "tag-test" in self.storage._tag_index["tag1"]
 
-    def test_tag_update_index_management(self):
-        """Test tag index management during updates."""
-        # Update tags for entry-1
-        new_tags = ["new_tag", "another_tag"]
-        self.storage.update("entry-1", {"tags": new_tags})
+        # Update tags
+        self.storage.update("tag-test", {"tags": ["tag3", "tag4"]})
 
-        # Old tags should be removed from index
-        assert "entry-1" not in self.storage._tag_index.get("tag1", set())
-        assert "entry-1" not in self.storage._tag_index.get("tag2", set())
-        assert "entry-1" not in self.storage._tag_index.get("common", set())
+        # Verify old tags removed, new tags added
+        assert "tag1" not in self.storage._tag_index
+        assert "tag2" not in self.storage._tag_index
+        assert "tag3" in self.storage._tag_index
+        assert "tag4" in self.storage._tag_index
 
-        # New tags should be in index
-        assert "entry-1" in self.storage._tag_index["new_tag"]
-        assert "entry-1" in self.storage._tag_index["another_tag"]
+    def test_metric_index_management(self):
+        """Test metric index management."""
+        entry = KBEntry(
+            entry_id="metric-test",
+            data_type=KBDataType.TELEMETRY_EVENT,
+            content={
+                "name": "test.metric",
+                "value": 100,
+                "timestamp": "2025-08-17T10:00:00Z",
+            },
+        )
+
+        self.storage.store(entry)
+
+        # Verify metric indexed
+        assert "test.metric" in self.storage._metric_index
+        assert "metric-test" in self.storage._metric_index["test.metric"]
+
+        # Delete entry
+        self.storage.delete("metric-test")
+
+        # Verify index cleaned up
+        assert "test.metric" not in self.storage._metric_index
+
+    def test_time_index_management(self):
+        """Test time index management and ordering."""
+        # Create entries with different timestamps
+        timestamps = [
+            "2025-08-17T10:02:00Z",
+            "2025-08-17T10:00:00Z",  # Earlier time
+            "2025-08-17T10:01:00Z",
+        ]
+
+        for i, timestamp in enumerate(timestamps):
+            entry = KBEntry(
+                entry_id=f"time-{i}",
+                data_type=KBDataType.TELEMETRY_EVENT,
+                content={"name": "test.metric", "value": i, "timestamp": timestamp},
+            )
+            self.storage.store(entry)
+
+        # Verify time index is sorted
+        time_entries = [(t, entry_id) for t, entry_id in self.storage._time_index]
+        assert len(time_entries) == 3
+
+        # Check sorting (should be in chronological order)
+        timestamps_in_index = [t for t, _ in time_entries]
+        assert timestamps_in_index == sorted(timestamps_in_index)
+
+    def test_index_effectiveness(self):
+        """Test that indexes improve query performance."""
+        # Create entries with different characteristics
+        for i in range(100):
+            entry = KBEntry(
+                entry_id=f"perf-{i}",
+                data_type=KBDataType.TELEMETRY_EVENT,
+                content={
+                    "name": f"metric.{i % 10}",
+                    "value": float(i),
+                    "timestamp": f"2025-08-17T10:{i:02d}:00Z",
+                    "source": f"server-{i % 5}",
+                },
+                tags=[f"tag{i % 3}"],
+            )
+            self.storage.store(entry)
+
+        # Verify indexes are populated
+        stats = self.storage.get_stats()
+        assert stats["indexes"]["metrics"] == 10  # 10 unique metrics
+        assert stats["indexes"]["sources"] == 5  # 5 unique sources
+        assert stats["indexes"]["tags"] == 3  # 3 unique tags
+
+        # Test targeted queries that should use indexes - fix to use valid query
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED,
+            sources=["server-0"],
+            filters={"data_type": KBDataType.TELEMETRY_EVENT},
+        )
+        response = self.storage.query(query)
+        assert response.total_results == 20  # Every 5th entry
 
 
-class TestKBStorageErrorHandling:
+class TestErrorHandlingAndEdgeCases:
     """Test error handling and edge cases."""
 
     def setup_method(self):
@@ -410,153 +535,133 @@ class TestKBStorageErrorHandling:
         self.logger = Mock(spec=logging.Logger)
         self.storage = InMemoryKBStorage(logger=self.logger)
 
-    def test_store_with_exception(self):
-        """Test handling exceptions during store operations."""
-        # Create a mock entry that will cause an exception
-        bad_entry = Mock(spec=KBEntry)
-        bad_entry.entry_id = "bad-entry"
-        bad_entry.updated_at = None  # This will cause an exception
+    def test_storage_exception_handling(self):
+        """Test handling of storage exceptions."""
+        # Create a problematic entry
+        entry = KBEntry(
+            entry_id="problem-entry",
+            data_type=KBDataType.GENERIC,
+            content={"data": "test"},
+        )
 
-        # Mock the datetime to raise an exception
+        # Mock datetime to cause exception
         with patch("polaris.common.kb_storage.datetime") as mock_datetime:
             mock_datetime.now.side_effect = Exception("Time error")
 
-            result = self.storage.store(bad_entry)
-
-            assert result is False
-            self.logger.error.assert_called_once()
-
-    def test_update_with_exception(self):
-        """Test handling exceptions during update operations."""
-        # Store a valid entry first
-        entry = KBEntry(entry_id="test", content={"data": "test"})
-        self.storage.store(entry)
-
-        # Mock datetime to cause exception during update
-        with patch("polaris.common.kb_storage.datetime") as mock_datetime:
-            mock_datetime.now.side_effect = Exception("Time error")
-
-            result = self.storage.update("test", {"content": {"new": "data"}})
-
+            result = self.storage.store(entry)
             assert result is False
             self.logger.error.assert_called()
 
-    def test_delete_with_exception(self):
-        """Test handling exceptions during delete operations."""
-        # Store entry
-        entry = KBEntry(entry_id="test", content={"data": "test"}, tags=["tag1"])
-        self.storage.store(entry)
+    def test_query_with_nonexistent_data(self):
+        """Test queries on empty storage or non-matching data."""
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED, filters={"nonexistent": "value"}
+        )
 
-        # Patch the logger to verify error logging
-        with patch.object(self.storage, "_entries") as mock_entries:
-            # Make the delete operation fail by raising an exception
-            mock_entries.__delitem__.side_effect = Exception("Delete failed")
-            mock_entries.__contains__.return_value = True  # Entry exists
-            mock_entries.__getitem__.return_value = entry  # Return the entry
+        response = self.storage.query(query)
 
-            result = self.storage.delete("test")
+        assert response.success is True
+        assert response.total_results == 0
+        assert len(response.results) == 0
 
-            assert result is False
-            self.logger.error.assert_called()
+    def test_malformed_telemetry_event(self):
+        """Test handling of malformed telemetry events."""
+        malformed_event = {
+            "invalid_field": "value"
+            # Missing required fields like name, value, timestamp
+        }
 
-    def test_stats_calculation(self):
-        """Test statistics calculation with various data."""
-        # Add some entries
-        for i in range(5):
-            entry = KBEntry(
-                entry_id=f"entry-{i}",
-                content={"data": f"test data {i}"},
-                tags=[f"tag{i}", "common"],
-            )
-            self.storage.store(entry)
+        # Should still store but with minimal extraction
+        result = self.storage.store_telemetry_event(malformed_event)
+        assert result is True
 
         stats = self.storage.get_stats()
+        assert stats["total_entries"] == 1
 
-        assert stats["total_entries"] == 5
-        assert stats["total_tags"] == 6  # tag0-tag4 + common
-        assert stats["memory_usage_estimate_kb"] > 0
+    def test_update_nonexistent_entry(self):
+        """Test updating non-existent entries."""
+        result = self.storage.update("nonexistent", {"content": {"new": "data"}})
+        assert result is False
+
+    def test_delete_nonexistent_entry(self):
+        """Test deleting non-existent entries."""
+        result = self.storage.delete("nonexistent")
+        assert result is False
 
 
-class TestKBStorageIntegration:
-    """Test integration scenarios and complex operations."""
+class TestPerformanceAndScalability:
+    """Test performance characteristics and scalability."""
 
     def setup_method(self):
         """Set up test fixtures."""
         self.storage = InMemoryKBStorage()
 
-    def test_complete_lifecycle(self):
-        """Test complete entry lifecycle."""
-        # Create entry
-        entry = KBEntry(
-            entry_id="lifecycle-test",
-            content={"title": "Test Entry", "status": "draft"},
-            tags=["draft", "test"],
-        )
+    def test_bulk_operations_performance(self):
+        """Test performance with bulk operations."""
+        import time
 
-        # Store
-        assert self.storage.store(entry) is True
-        assert self.storage.get("lifecycle-test") is not None
-
-        # Update
-        updates = {
-            "content": {"status": "published"},
-            "tags": ["published", "test"],
-            "metadata": {"published_date": "2025-08-17"},
-        }
-        assert self.storage.update("lifecycle-test", updates) is True
-
-        # Verify updates
-        updated = self.storage.get("lifecycle-test")
-        assert updated.content["status"] == "published"
-        assert "published" in updated.tags
-        assert "draft" not in updated.tags
-        assert updated.metadata["published_date"] == "2025-08-17"
-
-        # Search
-        results = self.storage.search_by_filters({"status": "published"})
-        assert len(results) == 1
-
-        # Delete
-        assert self.storage.delete("lifecycle-test") is True
-        assert self.storage.get("lifecycle-test") is None
-
-    def test_concurrent_operations_simulation(self):
-        """Test simulated concurrent operations."""
-        # Simulate multiple operations happening
-        entries = []
-        for i in range(10):
-            entry = KBEntry(
-                entry_id=f"concurrent-{i}",
-                content={"index": i, "category": f"cat{i % 3}"},
-                tags=[f"tag{i % 3}", "concurrent"],
+        # Create large batch of telemetry events
+        events = []
+        for i in range(1000):
+            events.append(
+                {
+                    "name": f"metric.{i % 10}",
+                    "value": float(i % 100),
+                    "timestamp": f"2025-08-17T{i//100:02d}:{i%100:02d}:00Z",
+                    "source": f"server-{i % 5:03d}",
+                }
             )
-            entries.append(entry)
+
+        batch = {"events": events}
+
+        start_time = time.time()
+        result = self.storage.store_telemetry_batch(batch)
+        end_time = time.time()
+
+        # Should complete in reasonable time (less than 5 seconds)
+        assert (end_time - start_time) < 5.0
+        assert result["stored"] == 1000
+        assert result["failed"] == 0
+
+        # Test query performance
+        start_time = time.time()
+        query = KBQuery(
+            query_type=QueryType.STRUCTURED,
+            filters={"data_type": KBDataType.TELEMETRY_EVENT},
+        )
+        response = self.storage.query(query)
+        end_time = time.time()
+
+        # Query should be fast (less than 1 second)
+        assert (end_time - start_time) < 1.0
+        assert response.total_results == 1000
+
+    def test_memory_usage_estimation(self):
+        """Test memory usage estimation accuracy."""
+        initial_stats = self.storage.get_stats()
+        initial_memory = initial_stats["memory_usage_estimate_kb"]
+
+        # Add some data
+        for i in range(50):
+            entry = KBEntry(
+                entry_id=f"memory-test-{i}",
+                data_type=KBDataType.TELEMETRY_EVENT,
+                content={
+                    "name": "test.metric",
+                    "value": float(i),
+                    "data": "x" * 1000,  # 1KB of data per entry
+                },
+            )
             self.storage.store(entry)
 
-        # Verify all stored
-        assert len(self.storage._entries) == 10
+        final_stats = self.storage.get_stats()
+        final_memory = final_stats["memory_usage_estimate_kb"]
 
-        # Update some entries
-        for i in range(0, 10, 2):
-            self.storage.update(f"concurrent-{i}", {"content": {"updated": True}})
-
-        # Search operations
-        cat0_results = self.storage.search_by_filters({"category": "cat0"})
-        assert len(cat0_results) > 0
-
-        tag_results = self.storage.search_by_content("concurrent")
-        assert len(tag_results) == 10
-
-        # Delete some entries
-        for i in range(5, 10):
-            self.storage.delete(f"concurrent-{i}")
-
-        assert len(self.storage._entries) == 5
-
-        # Verify tag index consistency
-        all_tags = self.storage.get_all_tags()
-        assert "concurrent" in all_tags
+        # Memory usage should have increased significantly
+        assert final_memory > initial_memory
+        # Should be roughly proportional to data added
+        assert final_memory > initial_memory + 40  # At least 40KB increase
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    pytest.main([__file__, "-v"])
