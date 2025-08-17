@@ -8,8 +8,15 @@ from enum import Enum
 
 from polaris.common.config import load_config, get_config
 
-load_config(search_paths=[Path("/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/src/config/polaris_config.yaml")],
-            required_keys=["LOGGER_NAME", "LOGGER_LEVEL", "LOGGER_FORMAT"])
+load_config(
+    search_paths=[
+        Path(
+            "/home/vyakhya/Desktop/serc/self_adapt/POLARIS/polaris_poc/src/config/polaris_config.yaml"
+        )
+    ],
+    required_keys=["LOGGER_NAME", "LOGGER_LEVEL", "LOGGER_FORMAT"],
+)
+
 
 class LogFormat(Enum):
     PRETTY = "pretty"
@@ -19,18 +26,19 @@ class LogFormat(Enum):
 # ANSI color codes
 RESET = "\033[0m"
 COLORS = {
-    "DEBUG": "\033[37m",   # White
-    "INFO": "\033[36m",    # Cyan
-    "WARNING": "\033[33m", # Yellow
-    "ERROR": "\033[31m",   # Red
+    "DEBUG": "\033[37m",  # White
+    "INFO": "\033[36m",  # Cyan
+    "WARNING": "\033[33m",  # Yellow
+    "ERROR": "\033[31m",  # Red
     "CRITICAL": "\033[41m\033[97m",  # White on Red background
-    "TIME": "\033[90m",    # Gray for timestamps
+    "TIME": "\033[90m",  # Gray for timestamps
     "MODULE": "\033[35m",  # Magenta
     "MESSAGE": "\033[0m",  # Default
 }
 
 
 # ----------------------------- Utilities & Logging -----------------------------
+
 
 class PrettyColoredFormatter(logging.Formatter):
     """
@@ -41,7 +49,9 @@ class PrettyColoredFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         # Timestamp in UTC
-        timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S.%f"
+        )[:-3]
         timestamp_colored = f"{COLORS['TIME']}{timestamp} UTC{RESET}"
 
         # Level name with color
@@ -60,8 +70,10 @@ class PrettyColoredFormatter(logging.Formatter):
 
         return f"{timestamp_colored} | {level_name_colored} | {location_colored} | {message_colored}"
 
+
 class JsonFormatter(logging.Formatter):
     """Minimal JSON formatter for structured logs."""
+
     def format(self, record: logging.LogRecord) -> str:
         base = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -71,10 +83,27 @@ class JsonFormatter(logging.Formatter):
         }
         # Merge extra dict-like attributes, if present
         for k, v in record.__dict__.items():
-            if k in ("args", "msg", "levelname", "levelno", "pathname", "filename",
-                     "module", "exc_info", "exc_text", "stack_info", "lineno",
-                     "funcName", "created", "msecs", "relativeCreated", "thread",
-                     "threadName", "processName", "process"):  # skip std keys
+            if k in (
+                "args",
+                "msg",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+            ):  # skip std keys
                 continue
             # only include JSON-serializable-ish values
             try:
@@ -89,7 +118,9 @@ class JsonFormatter(logging.Formatter):
 
 def setup_logging() -> logging.Logger:
     logger = logging.getLogger(get_config("LOGGER_NAME", "polaris"))
-    logger.setLevel(getattr(logging, get_config("LOGGER_LEVEL", "INFO" ).upper(), logging.INFO))
+    logger.setLevel(
+        getattr(logging, get_config("LOGGER_LEVEL", "INFO").upper(), logging.INFO)
+    )
     handler = logging.StreamHandler(sys.stdout)
 
     log_format = get_config("LOGGER_FORMAT", LogFormat.PRETTY.value).lower()
@@ -108,4 +139,3 @@ def setup_logging() -> logging.Logger:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
