@@ -44,34 +44,137 @@ class InMemoryKBStorage:
         return self._entries.get(entry_id)
 
     def search_by_filters(self, filters: Dict[str, Any]) -> List[KBEntry]:
-        """Search entries by structured filters."""
+        """Search entries by structured filters with advanced metric support."""
         results = []
 
         for entry in self._entries.values():
-            match = True
-
-            # Check filters
-            for key, value in filters.items():
-                if key == "tags" and isinstance(value, list):
-                    if not entry.tags or not any(tag in entry.tags for tag in value):
-                        match = False
-                        break
-                elif key in entry.content:
-                    if entry.content[key] != value:
-                        match = False
-                        break
-                elif entry.metadata and key in entry.metadata:
-                    if entry.metadata[key] != value:
-                        match = False
-                        break
-                else:
-                    match = False
-                    break
-
-            if match:
+            if self._matches_filters(entry, filters):
                 results.append(entry)
 
         return results
+
+    def _matches_filters(self, entry: KBEntry, filters: Dict[str, Any]) -> bool:
+        """Check if entry matches all filters with advanced operators."""
+        for key, value in filters.items():
+            if not self._matches_single_filter(entry, key, value):
+                return False
+        return True
+
+    def _matches_single_filter(self, entry: KBEntry, key: str, value: Any) -> bool:
+        """Check if entry matches a single filter with operator support."""
+        # Handle special tags filter
+        if key == "tags" and isinstance(value, list):
+            if not entry.tags or not any(tag in entry.tags for tag in value):
+                return False
+            return True
+
+        # Handle operator-based filters (e.g., "cpu_usage__gt": 80)
+        if "__" in key:
+            field, operator = key.rsplit("__", 1)
+            field_value = self._get_field_value(entry, field)
+            if field_value is None:
+                return False
+            return self._apply_operator(field_value, operator, value)
+
+        # Handle exact match filters
+        field_value = self._get_field_value(entry, key)
+        if field_value is None:
+            return False
+        return field_value == value
+
+    def _get_field_value(self, entry: KBEntry, field: str):
+        """Get field value from entry, supporting nested fields."""
+        # Support nested field access (e.g., "metrics.cpu.usage")
+        if "." in field:
+            parts = field.split(".")
+            value = entry.content
+            for part in parts:
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    return None
+            return value
+
+        # Check in content first
+        if field in entry.content:
+            return entry.content[field]
+
+        # Check in metadata
+        if entry.metadata and field in entry.metadata:
+            return entry.metadata[field]
+
+        return None
+
+    def _apply_operator(
+        self, field_value: Any, operator: str, compare_value: Any
+    ) -> bool:
+        """Apply comparison operator to field value."""
+        try:
+            # Convert values to numbers if possible for numeric comparisons
+            if operator in ["gt", "gte", "lt", "lte"] and isinstance(
+                field_value, (int, float, str)
+            ):
+                try:
+                    field_num = (
+                        float(field_value)
+                        if isinstance(field_value, str)
+                        else field_value
+                    )
+                    compare_num = (
+                        float(compare_value)
+                        if isinstance(compare_value, str)
+                        else compare_value
+                    )
+
+                    if operator == "gt":
+                        return field_num > compare_num
+                    elif operator == "gte":
+                        return field_num >= compare_num
+                    elif operator == "lt":
+                        return field_num < compare_num
+                    elif operator == "lte":
+                        return field_num <= compare_num
+                except (ValueError, TypeError):
+                    pass
+
+            # String operations
+            if operator == "contains" and isinstance(field_value, str):
+                return str(compare_value).lower() in field_value.lower()
+            elif operator == "startswith" and isinstance(field_value, str):
+                return field_value.lower().startswith(str(compare_value).lower())
+            elif operator == "endswith" and isinstance(field_value, str):
+                return field_value.lower().endswith(str(compare_value).lower())
+            elif operator == "regex" and isinstance(field_value, str):
+                import re
+
+                return bool(re.search(str(compare_value), field_value, re.IGNORECASE))
+
+            # List operations
+            elif operator == "in" and isinstance(compare_value, list):
+                return field_value in compare_value
+            elif operator == "not_in" and isinstance(compare_value, list):
+                return field_value not in compare_value
+
+            # Exact match with negation
+            elif operator == "ne":  # not equal
+                return field_value != compare_value
+
+        except Exception:
+            return False
+
+        return False
+
+    def search_by_metric_range(
+        self, metric_name: str, min_value: float = None, max_value: float = None
+    ) -> List[KBEntry]:
+        """Convenient method for metric range queries."""
+        filters = {}
+        if min_value is not None:
+            filters[f"{metric_name}__gte"] = min_value
+        if max_value is not None:
+            filters[f"{metric_name}__lte"] = max_value
+
+        return self.search_by_filters(filters)
 
     def search_by_content(self, query: str) -> List[KBEntry]:
         """Simple text search in entry content."""

@@ -558,5 +558,232 @@ class TestKBStorageIntegration:
         assert "concurrent" in all_tags
 
 
+class TestKBStorageAdvancedMetricSearch:
+    """Test advanced metric search capabilities."""
+
+    def setup_method(self):
+        """Set up test fixtures with metric data."""
+        self.storage = InMemoryKBStorage()
+
+        # Create entries with various metrics
+        self.metric_entries = [
+            KBEntry(
+                entry_id="server-001",
+                content={
+                    "hostname": "web-server-001",
+                    "cpu_usage": 85.5,
+                    "memory_usage": 76.2,
+                    "disk_usage": 45,
+                    "status": "warning",
+                    "metrics": {
+                        "cpu": {"usage": 85.5, "cores": 8},
+                        "memory": {"total": 16384, "used": 12288},
+                        "network": {"bytes_in": 1024000, "bytes_out": 512000},
+                    },
+                },
+                tags=["server", "web", "production"],
+                metadata={"datacenter": "us-east-1", "tier": "frontend"},
+            ),
+            KBEntry(
+                entry_id="server-002",
+                content={
+                    "hostname": "db-server-002",
+                    "cpu_usage": 42.1,
+                    "memory_usage": 89.7,
+                    "disk_usage": 78,
+                    "status": "critical",
+                    "metrics": {
+                        "cpu": {"usage": 42.1, "cores": 16},
+                        "memory": {"total": 32768, "used": 29384},
+                        "network": {"bytes_in": 2048000, "bytes_out": 1024000},
+                    },
+                },
+                tags=["server", "database", "production"],
+                metadata={"datacenter": "us-west-2", "tier": "backend"},
+            ),
+            KBEntry(
+                entry_id="server-003",
+                content={
+                    "hostname": "cache-server-003",
+                    "cpu_usage": 15.3,
+                    "memory_usage": 23.8,
+                    "disk_usage": 12,
+                    "status": "ok",
+                    "metrics": {
+                        "cpu": {"usage": 15.3, "cores": 4},
+                        "memory": {"total": 8192, "used": 1948},
+                        "network": {"bytes_in": 512000, "bytes_out": 256000},
+                    },
+                },
+                tags=["server", "cache", "production"],
+                metadata={"datacenter": "us-east-1", "tier": "cache"},
+            ),
+        ]
+
+        for entry in self.metric_entries:
+            self.storage.store(entry)
+
+    def test_exact_metric_search(self):
+        """Test exact metric value searches."""
+        # Exact CPU usage
+        results = self.storage.search_by_filters({"cpu_usage": 85.5})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-001"
+
+        # Exact status
+        results = self.storage.search_by_filters({"status": "critical"})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-002"
+
+    def test_range_metric_searches(self):
+        """Test range-based metric searches."""
+        # CPU usage greater than 80
+        results = self.storage.search_by_filters({"cpu_usage__gt": 80})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-001"
+
+        # CPU usage greater than or equal to 42.1
+        results = self.storage.search_by_filters({"cpu_usage__gte": 42.1})
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+        # Memory usage less than 80
+        results = self.storage.search_by_filters({"memory_usage__lt": 80})
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-003" in result_ids
+
+        # Disk usage between 40 and 80
+        results = self.storage.search_by_filters(
+            {"disk_usage__gte": 40, "disk_usage__lte": 80}
+        )
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+    def test_nested_metric_searches(self):
+        """Test searches on nested metric fields."""
+        # CPU cores greater than 8
+        results = self.storage.search_by_filters({"metrics.cpu.cores__gt": 8})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-002"
+
+        # Memory total exactly 16384
+        results = self.storage.search_by_filters({"metrics.memory.total": 16384})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-001"
+
+        # Network bytes_in greater than 1MB
+        results = self.storage.search_by_filters(
+            {"metrics.network.bytes_in__gt": 1000000}
+        )
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+    def test_string_metric_operations(self):
+        """Test string-based metric searches."""
+        # Hostname contains "web"
+        results = self.storage.search_by_filters({"hostname__contains": "web"})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-001"
+
+        # Hostname starts with "db"
+        results = self.storage.search_by_filters({"hostname__startswith": "db"})
+        assert len(results) == 1
+        assert results[0].entry_id == "server-002"
+
+        # Status not equal to "ok"
+        results = self.storage.search_by_filters({"status__ne": "ok"})
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+    def test_list_operations(self):
+        """Test list-based filter operations."""
+        # Status in list
+        results = self.storage.search_by_filters(
+            {"status__in": ["warning", "critical"]}
+        )
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+        # Tier not in list
+        results = self.storage.search_by_filters(
+            {"tier__not_in": ["frontend", "backend"]}
+        )
+        assert len(results) == 1
+        assert results[0].entry_id == "server-003"
+
+    def test_metric_range_convenience_method(self):
+        """Test the convenience method for metric ranges."""
+        # CPU usage between 40 and 90
+        results = self.storage.search_by_metric_range(
+            "cpu_usage", min_value=40, max_value=90
+        )
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+        # Only minimum value
+        results = self.storage.search_by_metric_range("memory_usage", min_value=50)
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-002" in result_ids
+
+        # Only maximum value
+        results = self.storage.search_by_metric_range("disk_usage", max_value=50)
+        assert len(results) == 2
+        result_ids = {r.entry_id for r in results}
+        assert "server-001" in result_ids
+        assert "server-003" in result_ids
+
+    def test_combined_metric_filters(self):
+        """Test complex queries with multiple metric filters."""
+        # High CPU and high memory
+        results = self.storage.search_by_filters(
+            {"cpu_usage__gt": 80, "memory_usage__gt": 70}
+        )
+        assert len(results) == 1
+        assert results[0].entry_id == "server-001"
+
+        # Production servers with low resource usage
+        results = self.storage.search_by_filters(
+            {"tags": ["production"], "cpu_usage__lt": 50, "memory_usage__lt": 50}
+        )
+        assert len(results) == 1
+        assert results[0].entry_id == "server-003"
+
+        # Servers in specific datacenter with very high network traffic (> 1MB)
+        results = self.storage.search_by_filters(
+            {
+                "datacenter": "us-east-1",
+                "metrics.network.bytes_in__gt": 1000000,  # Changed from 500000 to 1000000
+            }
+        )
+        assert len(results) == 1
+        assert results[0].entry_id == "server-001"
+
+    def test_invalid_operators(self):
+        """Test handling of invalid operators."""
+        # Invalid operator should not match anything
+        results = self.storage.search_by_filters({"cpu_usage__invalid": 50})
+        assert len(results) == 0
+
+        # Invalid field should not match anything
+        results = self.storage.search_by_filters({"nonexistent_field": "value"})
+        assert len(results) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
