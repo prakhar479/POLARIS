@@ -1,5 +1,6 @@
 - Add reasoner, verification, meta-adapter interface
-- modify the start component to spin up all components
+- refactor knowledge, kernel
+- modify the start component to spin up all components, kernel, knowledge base, verification
 - baseline swin adaptation
 - start ablation implementation tests
 - decide conference
