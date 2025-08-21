@@ -77,6 +77,17 @@ telemetry:
   # false = Only batch publishing (more efficient, slightly higher latency)
   # Recommended: true for development, false for high-volume production
   stream: true
+  
+  # Knowledge Base configuration for telemetry storage
+  # Enables local storage and aggregation of telemetry events
+  knowledge_base:
+    # Enable knowledge base storage of telemetry events
+    enabled: true
+
+    # Buffer size for raw telemetry events before aggregation
+    # When buffer fills, events are aggregated into observations
+    # Recommended: 100-200 based on metric frequency and memory constraints
+    buffer_size: 100
 
 # =============================================================================
 # Execution Control Configuration

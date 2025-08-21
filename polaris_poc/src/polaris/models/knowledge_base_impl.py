@@ -94,7 +94,7 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
     def _aggregate_and_store_buffer(
         self, buffer_key: Tuple[str, str], events: List[KBEntry]
     ):
-        """Calculates stats from a buffer and stores a summary OBSERVATION entry."""
+        """Calculates stats from a buffer and updates or creates an OBSERVATION entry with trend info."""
         metric_name, source = buffer_key
         values = [
             e.metric_value for e in events if isinstance(e.metric_value, (int, float))
@@ -102,37 +102,86 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         if not values:
             return
 
-        # Calculate statistics
+        # Calculate current statistics
         count = len(values)
-        avg_val = sum(values) / count
+        current_avg = sum(values) / count
         min_val = min(values)
         max_val = max(values)
 
-        summary = (
-            f"Aggregated {count} events for '{metric_name}' from '{source}'. "
-            f"Avg: {avg_val:.2f}, Min: {min_val}, Max: {max_val}."
+        # Look for existing observation entry
+        observation_id = f"obs_{metric_name}_{source}".replace(".", "_").replace(
+            " ", "_"
         )
-        self.logger.info(f"Aggregating telemetry buffer: {summary}")
+        existing_entry = self._entries.get(observation_id)
 
-        aggregated_entry = KBEntry(
-            data_type=KBDataType.OBSERVATION,
-            summary=summary,
-            metric_name=metric_name,
-            source=source,
-            content={
-                "statistic": "aggregation",
-                "count": count,
-                "average_value": avg_val,
-                "min_value": min_val,
-                "max_value": max_val,
-                "time_window_start": events[0].timestamp,
-                "time_window_end": events[-1].timestamp,
-            },
-            tags=["aggregated", "observation", metric_name.lower(), source.lower()],
-        )
+        if existing_entry:
+            # Update existing entry with trend
+            prev_avg = existing_entry.content.get("average_value", current_avg)
+            total_updates = existing_entry.content.get("total_updates", 0) + 1
 
-        # Use the normal store method to save the permanent aggregated entry
-        self.store(aggregated_entry)
+            # Simple trend calculation
+            if abs(current_avg - prev_avg) < (prev_avg * 0.05):  # Within 5%
+                trend = "stable"
+            elif current_avg > prev_avg:
+                trend = "increasing"
+            else:
+                trend = "decreasing"
+
+            # Update the existing entry
+            existing_entry.content.update(
+                {
+                    "statistic": "aggregation",
+                    "count": count,
+                    "average_value": current_avg,
+                    "previous_average": prev_avg,
+                    "min_value": min_val,
+                    "max_value": max_val,
+                    "trend": trend,
+                    "total_updates": total_updates,
+                    "last_update": datetime.now().isoformat(),
+                    "time_window_start": events[0].timestamp,
+                    "time_window_end": events[-1].timestamp,
+                }
+            )
+
+            existing_entry.summary = (
+                f"Updated metric '{metric_name}' from '{source}' (#{total_updates}). "
+                f"Avg: {current_avg:.2f} (was {prev_avg:.2f}, trend: {trend}), "
+                f"Min: {min_val}, Max: {max_val}."
+            )
+
+            self.logger.info(f"Updated observation: {existing_entry.summary}")
+        else:
+            # Create new observation entry
+            summary = (
+                f"First observation for '{metric_name}' from '{source}'. "
+                f"Avg: {current_avg:.2f}, Min: {min_val}, Max: {max_val}."
+            )
+
+            new_entry = KBEntry(
+                entry_id=observation_id,
+                data_type=KBDataType.OBSERVATION,
+                summary=summary,
+                metric_name=metric_name,
+                source=source,
+                content={
+                    "statistic": "aggregation",
+                    "count": count,
+                    "average_value": current_avg,
+                    "min_value": min_val,
+                    "max_value": max_val,
+                    "trend": "baseline",
+                    "total_updates": 1,
+                    "last_update": datetime.now().isoformat(),
+                    "time_window_start": events[0].timestamp,
+                    "time_window_end": events[-1].timestamp,
+                },
+                tags=["aggregated", "observation", metric_name.lower(), source.lower()],
+            )
+
+            # Store the new observation entry
+            self.store(new_entry)
+            self.logger.info(f"Created new observation: {summary}")
 
     def _handle_raw_telemetry(self, entry: KBEntry) -> bool:
         """Handles buffering and aggregation of raw telemetry."""
@@ -148,6 +197,8 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         # If buffer is full, aggregate its current contents BEFORE adding the new one.
         if len(buffer) == self._telemetry_buffer_size:
             self._aggregate_and_store_buffer(buffer_key, list(buffer))
+            # Clear the buffer after aggregation
+            buffer.clear()
 
         buffer.append(entry)
         return True

@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from polaris.adapters.monitor import MonitorAdapter
 from polaris.adapters.execution import ExecutionAdapter
 from polaris.agents.digital_twin_agent import DigitalTwinAgent
+from polaris.services.knowledge_base_service import KnowledgeBaseService
 from polaris.common.logging_setup import setup_logging
 from polaris.common.digital_twin_config import DigitalTwinConfigManager, DigitalTwinConfigError
 from polaris.common.digital_twin_logging import setup_digital_twin_logging
@@ -53,12 +54,13 @@ Examples:
   %(prog)s execution --plugin-dir extern        # Start execution adapter
   %(prog)s digital-twin                         # Start Digital Twin
   %(prog)s digital-twin --world-model gemini    # Start Digital Twin with Gemini
+  %(prog)s knowledge-base                       # Start Knowledge Base Service
         """
     )
     
     parser.add_argument(
         "component",
-        choices=["monitor", "execution", "digital-twin"],
+        choices=["monitor", "execution", "digital-twin", "knowledge-base"],
         help="Component to start"
     )
     
@@ -111,7 +113,7 @@ Examples:
     if args.component in ["monitor", "execution"] and not args.plugin_dir:
         parser.error(f"{args.component} component requires --plugin-dir")
     
-    if args.component != "digital-twin" and (args.world_model or args.health_check):
+    if args.component not in ["digital-twin", "knowledge-base"] and (args.world_model or args.health_check):
         parser.error("--world-model and --health-check are only valid for digital-twin component")
     
     # Resolve configuration path
@@ -123,6 +125,11 @@ Examples:
     # Handle Digital Twin component
     if args.component == "digital-twin":
         await start_digital_twin(args, config_path)
+        return
+    
+    # Handle Knowledge Base Service
+    if args.component == "knowledge-base":
+        await start_knowledge_base(args, config_path)
         return
     
     # Handle adapter components (monitor/execution)
@@ -212,6 +219,55 @@ async def start_adapter(args, config_path: Path):
         sys.exit(1)
     
     logger.info(f"🛑 {args.component.capitalize()} adapter stopped")
+
+
+async def start_knowledge_base(args, config_path: Path):
+    """Start Knowledge Base Service."""
+    # Setup logging
+    logger = setup_logging()
+    logger.setLevel(getattr(logging, args.log_level))
+    
+    # Create Knowledge Base Service
+    service = KnowledgeBaseService(
+        nats_url="nats://localhost:4222",
+        telemetry_buffer_size=50,
+        logger=logger
+    )
+    
+    # Setup graceful shutdown
+    stop_event = asyncio.Event()
+    
+    def signal_handler(signum, frame):
+        logger.info(f"🔔 Received signal {signum}")
+        stop_event.set()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        # Start service in the background
+        service_task = asyncio.create_task(service.start())
+        
+        # Wait for shutdown signal
+        await stop_event.wait()
+        
+        # Graceful shutdown
+        await service.shutdown()
+        service_task.cancel()
+        
+        try:
+            await service_task
+        except asyncio.CancelledError:
+            pass
+            
+    except Exception as e:
+        logger.error(f"❌ Knowledge Base Service error: {e}")
+        if args.log_level == "DEBUG":
+            import traceback
+            traceback.print_exc()
+        raise
+    
+        logger.info("🛑 Knowledge Base Service stopped")
 
 
 async def start_digital_twin(args, config_path: Path):

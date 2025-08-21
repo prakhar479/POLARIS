@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 from polaris.adapters.base import BaseAdapter
 from polaris.models.telemetry import TelemetryEvent, TelemetryBatch
 from polaris.common.utils import safe_eval
+from polaris.knowledge_base.models import KBEntry, KBDataType
+from polaris.models.knowledge_base_impl import InMemoryKnowledgeBase
 
 
 class MonitorAdapter(BaseAdapter):
@@ -93,6 +95,17 @@ class MonitorAdapter(BaseAdapter):
         self.collect_task: Optional[asyncio.Task] = None
         self.publish_task: Optional[asyncio.Task] = None
         self._immediate_publish_tasks: List[asyncio.Task] = []
+        
+        # Knowledge base for telemetry storage
+        kb_config = telemetry_config.get("knowledge_base", {})
+        if kb_config.get("enabled", False):
+            buffer_size = kb_config.get("buffer_size", 100)
+            self.knowledge_base = InMemoryKnowledgeBase(
+                logger=self.logger, 
+                telemetry_buffer_size=buffer_size
+            )
+        else:
+            self.knowledge_base = None
         
         # Build metric name to unit mapping
         self.metric_units = {}
@@ -257,6 +270,28 @@ class MonitorAdapter(BaseAdapter):
                 }
             )
 
+    def _store_in_knowledge_base(self, event: TelemetryEvent) -> None:
+        """Store telemetry event in knowledge base if enabled."""
+        if not self.knowledge_base:
+            return
+            
+        try:
+            kb_entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=event.name,
+                metric_value=event.value,
+                source=event.source,
+                summary=f"Telemetry: {event.name} = {event.value} {event.unit}",
+                content=event.to_dict(),
+                tags=["telemetry", event.source] + list(event.tags.values()) if event.tags else ["telemetry", event.source]
+            )
+            self.knowledge_base.store(kb_entry)
+        except Exception as e:
+            self.logger.warning(
+                "Failed to store telemetry in knowledge base",
+                extra={"metric": event.name, "error": str(e)}
+            )
+
     async def _collect_once(self) -> int:
         """Collect metrics once and enqueue TelemetryEvents.
         
@@ -330,6 +365,9 @@ class MonitorAdapter(BaseAdapter):
             try:
                 self.telemetry_queue.put_nowait(event)
                 enqueued += 1
+                
+                # Store in knowledge base if enabled
+                self._store_in_knowledge_base(event)
                 
                 # Immediate publish if streaming enabled
                 if self.telemetry_stream:

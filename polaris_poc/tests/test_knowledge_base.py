@@ -181,13 +181,13 @@ class TestInMemoryKnowledgeBase:
         # Check that aggregation occurred
         assert len(self.kb._entries) == 1  # One aggregated observation
 
-        # The buffer should still have 3 entries (maxlen=3, oldest is dropped, new one added)
-        assert len(self.kb._raw_telemetry_buffers[buffer_key]) == 3
-        # The buffer should contain entries 2, 3, 4 (indices 1, 2, 3)
+        # After aggregation, buffer should be cleared and contain only the new entry
+        assert len(self.kb._raw_telemetry_buffers[buffer_key]) == 1
+        # The buffer should contain only the 4th entry
         buffer_values = [
             e.metric_value for e in self.kb._raw_telemetry_buffers[buffer_key]
         ]
-        assert buffer_values == [81.0, 82.0, 83.0]  # Values from entries 2, 3, 4
+        assert buffer_values == [83.0]  # Value from entry 4
 
     def test_telemetry_aggregation_content(self):
         """Test the content of aggregated telemetry observations."""
@@ -229,6 +229,218 @@ class TestInMemoryKnowledgeBase:
         assert content["min_value"] == 75.0
         assert content["max_value"] == 85.0
         assert content["statistic"] == "aggregation"
+        assert content["trend"] == "baseline"  # First observation
+        assert content["total_updates"] == 1
+
+    def test_telemetry_trend_updates(self):
+        """Test trend calculation and observation updates."""
+        metric_name = "cpu.usage"
+        source = "test_monitor"
+
+        # First batch: values around 50 (will aggregate after 3rd entry)
+        first_batch_values = [48.0, 50.0, 52.0]
+        for i, value in enumerate(first_batch_values):
+            entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=value,
+                source=source,
+                summary=f"CPU reading {i+1}",
+            )
+            self.kb.store(entry)
+
+        # Store one more to trigger first aggregation
+        trigger1 = KBEntry(
+            data_type=KBDataType.RAW_TELEMETRY_EVENT,
+            metric_name=metric_name,
+            metric_value=49.0,
+            source=source,
+            summary="Trigger first aggregation",
+        )
+        self.kb.store(trigger1)
+
+        # Check first observation
+        assert len(self.kb._entries) == 1
+        obs1 = list(self.kb._entries.values())[0]
+        assert obs1.content["trend"] == "baseline"
+        assert obs1.content["total_updates"] == 1
+        first_avg = obs1.content["average_value"]
+
+        # Second batch: significantly higher values (around 70) for clear increasing trend
+        # Store 3 more entries to trigger second aggregation
+        second_batch_values = [68.0, 70.0, 72.0]
+        for i, value in enumerate(second_batch_values):
+            entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=value,
+                source=source,
+                summary=f"CPU reading batch 2 - {i+1}",
+            )
+            self.kb.store(entry)
+
+        # Check observation after second aggregation is triggered
+        obs2 = list(self.kb._entries.values())[0]
+        assert obs2.content["trend"] == "increasing"  # Should be increasing now
+        assert obs2.content["total_updates"] == 2
+        assert obs2.content["previous_average"] == first_avg
+
+    def test_telemetry_stable_trend(self):
+        """Test stable trend detection (within 5% threshold)."""
+        metric_name = "memory.usage"
+        source = "system_monitor"
+
+        # First batch: average 100 (trigger aggregation with 4th entry)
+        for i, value in enumerate([98.0, 100.0, 102.0, 100.0]):
+            entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=value,
+                source=source,
+            )
+            self.kb.store(entry)
+
+        # Check first observation
+        assert len(self.kb._entries) == 1
+        obs1 = list(self.kb._entries.values())[0]
+        first_avg = obs1.content["average_value"]
+
+        # Second batch: average 103 (within 5% of first average, should be stable)
+        for value in [101.0, 103.0, 105.0]:
+            entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=value,
+                source=source,
+            )
+            self.kb.store(entry)
+
+        # Check that we now have stable trend
+        obs2 = list(self.kb._entries.values())[0]
+        assert obs2.content["trend"] == "stable"  # Should be within 5% threshold
+        assert obs2.content["total_updates"] == 2
+
+    def test_observation_entry_id_consistency(self):
+        """Test that observations use consistent IDs for same metric/source."""
+        metric_name = "disk.io"
+        source = "storage_monitor"
+
+        # Store entries in batches to trigger exactly 3 aggregations
+        for batch in range(3):
+            # Store exactly 3 entries to trigger one aggregation per batch
+            for i in range(3):
+                entry = KBEntry(
+                    data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                    metric_name=metric_name,
+                    metric_value=10.0 + batch * 10 + i,
+                    source=source,
+                    summary=f"Batch {batch} reading {i}",
+                )
+                self.kb.store(entry)
+
+            # Add one more to trigger aggregation
+            trigger = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=15.0 + batch * 10,
+                source=source,
+            )
+            self.kb.store(trigger)
+
+        # Should still have only one observation entry (updated multiple times)
+        assert len(self.kb._entries) == 1
+        obs = list(self.kb._entries.values())[0]
+        assert obs.content["total_updates"] == 3
+
+        # Check that entry ID follows expected pattern
+        expected_id = f"obs_{metric_name}_{source}".replace(".", "_")
+        assert obs.entry_id == expected_id
+
+    def test_telemetry_stable_trend(self):
+        """Test stable trend detection (within 5% threshold)."""
+        metric_name = "memory.usage"
+        source = "system_monitor"
+
+        # First batch: average 100
+        for value in [98.0, 100.0, 102.0]:
+            entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=value,
+                source=source,
+            )
+            self.kb.store(entry)
+
+        # Trigger first aggregation
+        self.kb.store(
+            KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=100.0,
+                source=source,
+            )
+        )
+
+        # Second batch: average 103 (within 5% of 100, should be stable)
+        for value in [101.0, 103.0, 105.0]:
+            entry = KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=value,
+                source=source,
+            )
+            self.kb.store(entry)
+
+        # Trigger second aggregation
+        self.kb.store(
+            KBEntry(
+                data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                metric_name=metric_name,
+                metric_value=102.0,
+                source=source,
+            )
+        )
+
+        # Check stable trend
+        obs = list(self.kb._entries.values())[0]
+        assert obs.content["trend"] == "stable"  # 103 is within 5% of 100
+        assert obs.content["total_updates"] == 2
+
+    def test_observation_entry_id_consistency(self):
+        """Test that observations use consistent IDs for same metric/source."""
+        metric_name = "disk.io"
+        source = "storage_monitor"
+
+        # Store multiple batches for same metric/source
+        for batch in range(3):
+            for i in range(3):
+                entry = KBEntry(
+                    data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                    metric_name=metric_name,
+                    metric_value=10.0 + batch * 10 + i,
+                    source=source,
+                    summary=f"Batch {batch} reading {i}",
+                )
+                self.kb.store(entry)
+
+            # Trigger aggregation
+            self.kb.store(
+                KBEntry(
+                    data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                    metric_name=metric_name,
+                    metric_value=15.0 + batch * 10,
+                    source=source,
+                )
+            )
+
+        # Should still have only one observation entry (updated multiple times)
+        assert len(self.kb._entries) == 1
+        obs = list(self.kb._entries.values())[0]
+        assert obs.content["total_updates"] == 3
+
+        # Check that entry ID follows expected pattern
+        expected_id = f"obs_{metric_name}_{source}".replace(".", "_")
+        assert obs.entry_id == expected_id
 
     def test_multiple_metric_buffers(self):
         """Test handling multiple telemetry metrics simultaneously."""
@@ -254,6 +466,58 @@ class TestInMemoryKnowledgeBase:
         assert len(self.kb._raw_telemetry_buffers) == 2
         assert ("cpu.usage", "monitor_a") in self.kb._raw_telemetry_buffers
         assert ("memory.usage", "monitor_b") in self.kb._raw_telemetry_buffers
+
+    def test_multiple_sources_trend_tracking(self):
+        """Test that different sources for same metric maintain separate trends."""
+        metric_name = "network.latency"
+        sources = ["datacenter_a", "datacenter_b"]
+
+        # Create observations for both sources with different trends
+        for source in sources:
+            base_value = 10.0 if source == "datacenter_a" else 50.0
+
+            # First batch for this source
+            for i in range(3):
+                entry = KBEntry(
+                    data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                    metric_name=metric_name,
+                    metric_value=base_value + i,
+                    source=source,
+                    summary=f"Latency from {source}",
+                )
+                self.kb.store(entry)
+
+            # Trigger aggregation
+            self.kb.store(
+                KBEntry(
+                    data_type=KBDataType.RAW_TELEMETRY_EVENT,
+                    metric_name=metric_name,
+                    metric_value=base_value + 1.5,
+                    source=source,
+                )
+            )
+
+        # Should have 2 separate observation entries
+        assert len(self.kb._entries) == 2
+
+        # Get observations by source
+        observations = list(self.kb._entries.values())
+        obs_by_source = {obs.source: obs for obs in observations}
+
+        assert "datacenter_a" in obs_by_source
+        assert "datacenter_b" in obs_by_source
+
+        # Both should have baseline trend (first observations)
+        assert obs_by_source["datacenter_a"].content["trend"] == "baseline"
+        assert obs_by_source["datacenter_b"].content["trend"] == "baseline"
+
+        # Verify different averages
+        assert (
+            obs_by_source["datacenter_a"].content["average_value"] == 11.0
+        )  # (10+11+12)/3
+        assert (
+            obs_by_source["datacenter_b"].content["average_value"] == 51.0
+        )  # (50+51+52)/3
 
     def test_invalid_telemetry_handling(self):
         """Test handling of invalid telemetry entries."""
