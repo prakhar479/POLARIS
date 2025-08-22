@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -55,12 +56,13 @@ Examples:
   %(prog)s digital-twin                         # Start Digital Twin
   %(prog)s digital-twin --world-model gemini    # Start Digital Twin with Gemini
   %(prog)s knowledge-base                       # Start Knowledge Base Service
+  %(prog)s kernel                               # Start Kernel Service 
         """
     )
     
     parser.add_argument(
         "component",
-        choices=["monitor", "execution", "digital-twin", "knowledge-base"],
+        choices=["monitor", "execution", "digital-twin", "knowledge-base", "kernel"],
         help="Component to start"
     )
     
@@ -132,8 +134,13 @@ Examples:
         await start_knowledge_base(args, config_path)
         return
     
+    if args.component == "kernel":
+        await start_kernel(args, config_path)
+    
     # Handle adapter components (monitor/execution)
     await start_adapter(args, config_path)
+
+
 
 
 async def start_adapter(args, config_path: Path):
@@ -220,6 +227,103 @@ async def start_adapter(args, config_path: Path):
     
     logger.info(f"🛑 {args.component.capitalize()} adapter stopped")
 
+async def start_kernel(args, config_path: Path):
+    """Start POLARIS kernel."""
+    # Setup logging
+    logger = setup_logging()
+    logger.setLevel(getattr(logging, args.log_level))
+    
+    # Validation-only mode
+    if args.validate_only:
+        logger.info("✅ Kernel validation passed (configuration file exists)")
+        logger.info("🏁 Validation complete - exiting")
+        return
+    
+    # Dry run mode
+    if args.dry_run:
+        logger.info("🧪 Dry run mode - kernel would be started but not executing")
+        logger.info("🏁 Dry run complete - exiting")
+        return
+    
+    # Find the src directory (should be one level up from the script location)
+    script_dir = Path(__file__).parent
+    src_dir = script_dir.parent
+    
+    if not src_dir.exists():
+        logger.error(f"❌ Source directory not found: {src_dir}")
+        sys.exit(1)
+    
+    # Prepare the kernel command
+    kernel_cmd = [
+        sys.executable, "-m", "polaris.kernel.kernel"
+    ]
+    
+    # Add config argument if not default
+    if args.config != "src/config/polaris_config.yaml":
+        kernel_cmd.extend(["--config", str(config_path)])
+    
+    logger.info("🚀 Starting POLARIS kernel...")
+    logger.info(f"   Working directory: {src_dir}")
+    logger.info(f"   Command: {' '.join(kernel_cmd)}")
+    
+    # Setup signal handling for graceful shutdown
+    kernel_process = None
+    
+    def signal_handler(signum, frame):
+        logger.info(f"🔔 Received signal {signum}")
+        if kernel_process:
+            logger.info("🛑 Terminating kernel process...")
+            kernel_process.terminate()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        # Start the kernel process
+        kernel_process = subprocess.Popen(
+            kernel_cmd,
+            cwd=src_dir,
+            env=dict(os.environ, PYTHONPATH=str(src_dir))
+        )
+        
+        logger.info("✅ POLARIS kernel started successfully")
+        logger.info("📡 Kernel is running - press Ctrl+C to stop")
+        
+        # Wait for the process to complete
+        return_code = kernel_process.wait()
+        
+        if return_code == 0:
+            logger.info("✅ POLARIS kernel stopped cleanly")
+        else:
+            logger.error(f"❌ POLARIS kernel exited with code: {return_code}")
+            sys.exit(return_code)
+            
+    except FileNotFoundError:
+        logger.error("❌ Could not find Python interpreter or kernel module")
+        logger.error("   Make sure you're running from the correct directory")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Kernel process failed: {e}")
+        sys.exit(e.returncode)
+    except KeyboardInterrupt:
+        logger.info("🔔 Received interrupt signal")
+        if kernel_process:
+            logger.info("🛑 Terminating kernel process...")
+            kernel_process.terminate()
+            try:
+                # Wait a bit for graceful shutdown
+                kernel_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("⚠️  Kernel didn't stop gracefully, killing...")
+                kernel_process.kill()
+                kernel_process.wait()
+        logger.info("🛑 POLARIS kernel stopped")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error starting kernel: {e}")
+        if args.log_level == "DEBUG":
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
 
 async def start_knowledge_base(args, config_path: Path):
     """Start Knowledge Base Service."""
