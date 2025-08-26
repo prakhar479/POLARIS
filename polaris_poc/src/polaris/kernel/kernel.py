@@ -4,6 +4,8 @@ import logging
 from abc import ABC, abstractmethod
 from polaris.common.nats_client import NATSClient
 from polaris.controllers.fast_controller import FastController
+from polaris.controllers.slow_controller import SlowController
+from polaris.controllers.controller_strategy import ControllerStrategy
 
 # BaseKernel class
 class BaseKernel(ABC):
@@ -12,15 +14,20 @@ class BaseKernel(ABC):
         self.logger = logger
         self.running = False
 
-    @abstractmethod
     async def start(self):
         """Start the kernel."""
+        self.logger.info(f"Starting {self.__class__.__name__}")
+        await self.nats_client.connect()
+        self.running = True
+
+        await self.nats_client.subscribe("polaris.telemetry.events.batch", self.process_telemetry_event)
+        self.logger.info(f"Subscribed to 'polaris.telemetry.events.batch'")
         pass
 
-    @abstractmethod
     async def stop(self):
-        """Stop the kernel."""
-        pass
+        self.logger.info(f"Stopping {self.__class__.__name__}")
+        self.running = False
+        await self.nats_client.close()
 
     @abstractmethod
     async def process_telemetry_event(self, msg):
@@ -36,24 +43,13 @@ class BaseKernel(ABC):
 class SWIMKernel(BaseKernel):
     def __init__(self, nats_url: str, logger: logging.Logger):
         super().__init__(nats_url=nats_url, logger=logger, name="SWIMKernel")
-        self.fast_controller = FastController()
-
-    async def start(self):
-        self.logger.info(f"Starting {self.__class__.__name__}")
-        await self.nats_client.connect()
-        self.running = True
-
-        await self.nats_client.subscribe("polaris.telemetry.events.batch", self.process_telemetry_event)
-        self.logger.info(f"Subscribed to 'polaris.telemetry.events.batch'")
-
-    async def stop(self):
-        self.logger.info(f"Stopping {self.__class__.__name__}")
-        self.running = False
-        await self.nats_client.close()
+        self.strategy = ControllerStrategy()
 
     async def process_telemetry_event(self, msg):
         try:
             telemetry_data = json.loads(msg.data.decode())
+            controller = self.strategy.select_controller(telemetry_data)
+            self.logger.info(f"Selected controller: {controller.__class__.__name__}")
             action = self.generate_action(telemetry_data)
             if action is None:
                 self.logger.warning("No action generated from telemetry data")
@@ -64,7 +60,7 @@ class SWIMKernel(BaseKernel):
             self.logger.error("Error processing telemetry event", extra={"error": str(e)})
 
     def generate_action(self, telemetry_data):
-        return self.fast_controller.decide_action(telemetry_data)
+        return self.controller.decide_action(telemetry_data)
     
 async def main():
     logger = logging.getLogger("SWIMKernel")
