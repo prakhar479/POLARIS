@@ -55,6 +55,7 @@ CONFIG_DIR = REPO_ROOT / "src" / "config"
 DEFAULT_SCHEMAS = {
     "framework": CONFIG_DIR / "framework_config.schema.json",
     "world_model": CONFIG_DIR / "world_model_config.schema.json",
+    "plugin": CONFIG_DIR / "plugin_config.schema.json",
 }
 
 # Simple filename heuristics for schema selection
@@ -62,6 +63,7 @@ FILENAME_HINTS = [
     ("polaris_config.yaml", "framework"),
     ("world_model.yaml", "world_model"),
     ("_world_model.yaml", "world_model"),
+    ("plugin_config_template.yaml", "plugin"),
 ]
 
 
