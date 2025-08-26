@@ -96,9 +96,9 @@ polaris_poc/
 │   │   ├── services/            # gRPC services
 │   │   │   └── digital_twin_service.py  # Digital Twin gRPC service
 │   │   ├── proto/               # Protocol buffer definitions
-│   │   │   ├── digital_twin.proto      # Digital Twin gRPC interface
 │   │   │   ├── digital_twin_pb2.py     # Generated protobuf code
-│   │   │   └── digital_twin_pb2_grpc.py
+│   │   │   ├── digital_twin_pb2_grpc.py
+│   │   │   └── wrappers.py              # Protobuf helpers
 │   │   ├── common/              # Shared utilities
 │   │   │   ├── config.py       # Configuration management
 │   │   │   ├── nats_client.py  # NATS communication
@@ -110,15 +110,16 @@ polaris_poc/
 │   │       ├── digital_twin_events.py  # Digital Twin events
 │   │       └── world_model.py  # World Model interface
 │   └── scripts/                 # Utility scripts
-│       ├── start_component.py  # Adapter entry point
-│       ├── start_digital_twin.py  # Digital Twin entry point
+│       ├── start_component.py  # Adapter/Kernel/DT/KV entry point
 │       └── nats_spy.py         # NATS message monitor
 ├── scripts/                     # Additional scripts
-│   ├── verify_digital_twin_integration.py  # Integration verification
-│   └── test_digital_twin_integration.py    # Comprehensive tests
+│   ├── run_tests.py                   # Test runner
+│   ├── build.py                       # Build helpers
+│   ├── generate_proto.py              # Generate protobuf stubs
+│   └── setup_test_env.py              # Test env setup
 ├── docs/                        # Documentation
 │   └── digital_twin_integration.md  # Digital Twin integration guide
-├── test_adapters.py             # Integration tests
+├── tests/                        # Test suite
 └── requirements.txt
 ```
 
@@ -306,13 +307,41 @@ Action Results → NATS → Digital Twin
 
 ## 🤖 Digital Twin Usage
 
+### Start components via dispatcher
+```bash
+# Monitor adapter (requires plugin dir)
+python src/scripts/start_component.py monitor --plugin-dir extern
+
+# Execution adapter (requires plugin dir)
+python src/scripts/start_component.py execution --plugin-dir extern
+
+# Digital Twin agent
+python src/scripts/start_component.py digital-twin --world-model mock
+
+# Knowledge Base service
+python src/scripts/start_component.py knowledge-base
+
+# Kernel
+python src/scripts/start_component.py kernel
+```
+
+CLI options (common):
+- `--config <path>`: Framework config (default: `src/config/polaris_config.yaml`)
+- `--log-level <LEVEL>`: DEBUG | INFO | WARNING | ERROR
+- `--validate-only`: Load and validate configuration, then exit
+- `--dry-run`: Initialize without connecting to external systems
+
+Component-specific:
+- Monitor/Execution: `--plugin-dir <dir>` points to managed system plugin (e.g., `extern/`)
+- Digital Twin: `--world-model <mock|gemini|...>`, `--health-check`
+
 ### Starting the Digital Twin
 ```bash
 # Start with default configuration
-python start_component.py digital-twin --world-model mock
+python src/scripts/start_component.py digital-twin --world-model mock
 
 # Health Check
-python start_component.py digital-twin --health-check
+python src/scripts/start_component.py digital-twin --health-check
 ```
 
 ### gRPC Client Examples
@@ -342,22 +371,25 @@ sim_response = stub.Simulate(simulation)
 
 ### Integration Verification
 ```bash
-# Verify Digital Twin integration
-python scripts/verify_digital_twin_integration.py
+# Run full test suite
+python scripts/run_tests.py
 
-# Run comprehensive integration tests
-python scripts/test_digital_twin_integration.py
+# Run only non-async tests (fast sanity check)
+python scripts/run_tests.py --non-async
+
+# Or run pytest directly
+python -m pytest tests/ -v
 ```
 
 ## 🧪 Testing
 
 ### Integration Tests
 ```bash
-# Run adapter tests
-python test_adapters.py
+# Run full test suite
+python scripts/run_tests.py
 
-# Test Digital Twin integration
-python scripts/test_digital_twin_integration.py
+# Run only non-async tests (fast sanity check)
+python scripts/run_tests.py --non-async
 
 # Test specific components
 python -m pytest tests/ -v
@@ -368,7 +400,7 @@ python -m pytest tests/ -v
 # Start all components
 python src/scripts/start_component.py monitor --plugin-dir extern &
 python src/scripts/start_component.py execution --plugin-dir extern &
-python src/scripts/start_digital_twin.py &
+python src/scripts/start_component.py digital-twin &
 
 # Monitor messages
 python src/scripts/nats_spy.py --preset all
@@ -425,3 +457,155 @@ grpcurl -plaintext localhost:50051 polaris.digitaltwin.DigitalTwin/Query
 3. Try dry run mode (`--dry-run`)
 4. Monitor NATS messages (`nats_spy.py`)
 5. Check connector health methods
+
+## 🔧 Implementation Details
+
+### Core Components
+
+#### 1. Kernel
+- **Fast Controller** (`src/polaris/controllers/fast_controller.py`)
+  - Implements threshold-based control logic
+  - Handles rapid response to critical system states
+  - Processes telemetry data and generates immediate control actions
+
+- **State Management** (`src/polaris/kernel/kernel.py`)
+  - Maintains system state in memory
+  - Implements state transition logic
+  - Enforces safety constraints and invariants
+
+#### 2. Digital Twin
+- **World Model** (`src/polaris/models/world_model.py`)
+  - Abstract interface for system representation
+  - Supports multiple implementations (e.g., mock, Gemini-based)
+  - Handles state updates and queries
+
+- **Knowledge Base** (`src/polaris/knowledge_base/`)
+  - Stores system models and historical data
+  - Implements knowledge graph for relationship modeling
+  - Provides query interface for system state and history
+
+#### 3. Adapters
+- **Monitor Adapter** (`src/polaris/adapters/monitor.py`)
+  - Collects and processes telemetry data
+  - Implements batching and rate limiting
+  - Supports multiple data collection strategies
+
+- **Execution Adapter** (`src/polaris/adapters/execution.py`)
+  - Executes control actions on managed systems
+  - Implements action queuing and retry logic
+  - Validates action parameters and preconditions
+
+### Data Flow
+
+1. **Telemetry Collection**
+   ```python
+   # Monitor Adapter (simplified)
+   async def collect_metrics(self):
+       while self.running:
+           metrics = await self.connector.collect_metrics()
+           events = self._process_metrics(metrics)
+           await self._publish_events(events)
+           await asyncio.sleep(self.collection_interval)
+   ```
+
+2. **Event Processing**
+   ```python
+   # Digital Twin (simplified)
+   async def process_telemetry(self, event):
+       self.world_model.update_state(event)
+       if self._requires_adaptation(event):
+           action = await self._determine_adaptation(event)
+           if action:
+               await self._execute_adaptation(action)
+   ```
+
+3. **Action Execution**
+   ```python
+   # Execution Adapter (simplified)
+   async def execute_action(self, action):
+       try:
+           result = await self.connector.execute_action(action)
+           await self._publish_result(action.id, result)
+       except Exception as e:
+           await self._handle_error(action.id, str(e))
+   ```
+
+### Extension Points
+
+1. **Adding a New Managed System**
+   - Implement `ManagedSystemConnector` interface
+   - Create configuration schema
+   - Register with the plugin system
+
+2. **Custom Control Logic**
+   - Extend `BaseController` class
+   - Implement custom decision logic
+   - Register with the control plane
+
+3. **World Model Implementations**
+   - Extend `WorldModel` base class
+   - Implement required methods
+   - Register with `WorldModelFactory`
+
+### Configuration
+
+Example configuration for a managed system:
+
+```yaml
+managed_system:
+  name: "example_system"
+  type: "http"
+  connection:
+    base_url: "http://example.com/api"
+    timeout: 5.0
+  monitoring:
+    interval: 5.0
+    metrics:
+      - name: "cpu_usage"
+        path: "/metrics/cpu"
+        type: "gauge"
+  actions:
+    - name: "scale_out"
+      method: "POST"
+      path: "/scale"
+      parameters:
+        count: "integer"
+```
+
+## 🚀 Getting Started
+### Prerequisites
+- Python 3.8+
+- NATS Server (included in `bin/`)
+- Required Python packages (see `requirements.txt`)
+
+### Installation
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Start NATS server
+./bin/nats-server
+
+# Validate configuration
+python src/scripts/start_component.py monitor --plugin-dir extern --validate-only
+
+# Start monitor adapter
+python src/scripts/start_component.py monitor --plugin-dir extern
+
+# Start execution adapter (in another terminal)
+python src/scripts/start_component.py execution --plugin-dir extern
+
+# Start Digital Twin (in another terminal)
+python src/scripts/start_component.py digital-twin
+```
+
+### Monitor NATS Messages
+```bash
+# Monitor all POLARIS messages
+python src/scripts/nats_spy.py
+
+# Monitor only telemetry
+python src/scripts/nats_spy.py --preset telemetry
+
+# Monitor with full message content
+python src/scripts/nats_spy.py --show-data
