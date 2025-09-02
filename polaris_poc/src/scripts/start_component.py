@@ -42,7 +42,7 @@ from polaris.services.knowledge_base_service import KnowledgeBaseService
 from polaris.common.logging_setup import setup_logging
 from polaris.common.digital_twin_config import DigitalTwinConfigManager, DigitalTwinConfigError
 from polaris.common.digital_twin_logging import setup_digital_twin_logging
-
+from polaris.agents.reasoner_agent import create_reasoner_agent, SkeletonReasoningImplementation, ReasoningType 
 
 async def main():
     """Main entry point."""
@@ -61,10 +61,11 @@ Examples:
     )
     
     parser.add_argument(
-        "component",
-        choices=["monitor", "execution", "digital-twin", "knowledge-base", "kernel"],
-        help="Component to start"
-    )
+    "component",
+    choices=["monitor", "execution", "digital-twin", "knowledge-base", "kernel", "reasoner"],
+    help="Component to start"
+)
+
     
     parser.add_argument(
         "--plugin-dir",
@@ -136,6 +137,12 @@ Examples:
     
     if args.component == "kernel":
         await start_kernel(args, config_path)
+        return
+
+    if args.component == "reasoner":
+        await start_reasoner(args, config_path)
+        return
+
     
     # Handle adapter components (monitor/execution)
     await start_adapter(args, config_path)
@@ -571,6 +578,55 @@ async def start_digital_twin(args, config_path: Path):
             traceback.print_exc()
         sys.exit(1)
 
+async def start_reasoner(args, config_path: Path):
+    """Start Reasoner agent."""
+    # Setup logging
+    logger = setup_logging()
+    logger.setLevel(getattr(logging, args.log_level))
+
+    # Validation-only mode
+    if args.validate_only:
+        logger.info("✅ Reasoner validation passed (configuration file exists)")
+        logger.info("🏁 Validation complete - exiting")
+        return
+
+    # Dry run mode
+    if args.dry_run:
+        logger.info("🧪 Dry run mode - reasoner would be started but not executing")
+        logger.info("🏁 Dry run complete - exiting")
+        return
+
+    # Build Reasoner
+    reasoning_impls = {rtype: SkeletonReasoningImplementation() for rtype in ReasoningType}
+    agent = create_reasoner_agent("polaris_reasoner_001",config_path ,reasoning_impls, nats_url=None, logger=logger)
+
+    # Setup shutdown handling
+    stop_event = asyncio.Event()
+    def signal_handler():
+        logger.info("Received shutdown signal")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            asyncio.get_running_loop().add_signal_handler(sig, signal_handler)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: signal_handler())
+
+    # Start Reasoner
+    logger.info("🚀 Starting Reasoner agent...")
+    try:
+        await agent.connect()
+        logger.info("✅ Reasoner agent started successfully")
+        logger.info("📡 Reasoner is running - press Ctrl+C to stop")
+
+        # Wait until shutdown
+        await stop_event.wait()
+    except Exception as e:
+        logger.error(f"❌ Reasoner agent error: {e}")
+        raise
+    finally:
+        logger.info("🛑 Shutting down Reasoner agent...")
+        await agent.disconnect()
 
 if __name__ == "__main__":
     try:

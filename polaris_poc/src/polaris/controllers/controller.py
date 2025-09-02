@@ -1,10 +1,10 @@
 # Base class
 class BaseController:
-    def __init__(self, kernel):
+    def __init__(self):
         """
         Initialize the controller with a reference to the kernel.
         """
-        self.kernel = kernel
+        pass
 
     def decide_action(self, telemetry):
         """

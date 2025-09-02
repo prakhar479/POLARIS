@@ -89,6 +89,12 @@ telemetry:
     # Recommended: 100-200 based on metric frequency and memory constraints
     buffer_size: 100
 
+
+
+
+reasoner:
+  kernel_request_subject: "polaris.reasoner.kernel.requests"
+
 # =============================================================================
 # Execution Control Configuration
 # =============================================================================
@@ -290,6 +296,8 @@ digital_twin:
     # Separate from framework logs for easier analysis
     # Ensure directory exists and has write permissions
     log_file: "logs/digital_twin.log"
+
+
 
 
 # =============================================================================
