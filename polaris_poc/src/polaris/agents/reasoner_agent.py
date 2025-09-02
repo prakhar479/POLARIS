@@ -91,21 +91,36 @@ class ReasoningInterface(ABC):
 
 class KnowledgeQueryInterface(ABC):
     """Interface for knowledge base query operations."""
-    
+
     @abstractmethod
-    async def query_relevant_knowledge(self, 
-                                     search_terms: List[str],
-                                     knowledge_types: List[str],
-                                     reasoning_type: ReasoningType,
-                                     limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+    async def query_structured(self, 
+                              data_types: List[str],
+                              filters: Optional[Dict[str, Any]] = None,
+                              limit: int = 10,
+                              min_score: float = 0.0) -> Optional[List[Dict[str, Any]]]:
         pass
-    
+
+    @abstractmethod
+    async def query_natural_language(self, 
+                                    query_text: str,
+                                    limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+        pass
+
+    @abstractmethod
+    async def query_recent_observations(self, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+        pass
+
+    @abstractmethod
+    async def query_raw_telemetry(self, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+        pass
+
     @abstractmethod
     async def store_reasoning_result(self, 
-                                   context: ReasoningContext,
-                                   result: Any,
-                                   confidence: float) -> bool:
+                                    context: ReasoningContext,
+                                    result: Any,
+                                    confidence: float) -> bool:
         pass
+
 
 
 class NATSReasonerBase(ABC):
@@ -317,23 +332,45 @@ class DefaultKnowledgeQuery(KnowledgeQueryInterface):
     def __init__(self, nats_base: NATSReasonerBase, logger: Optional[logging.Logger] = None):
         self.nats_base = nats_base
         self.logger = logger or logging.getLogger(f"KBQuery.{nats_base.agent_id}")
-    
-    async def query_relevant_knowledge(self, 
-                                     search_terms: List[str],
-                                     knowledge_types: List[str],
-                                     reasoning_type: ReasoningType,
-                                     limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+
+    async def query_structured(self, 
+                              data_types: List[str],
+                              filters: Optional[Dict[str, Any]] = None,
+                              limit: int = 10,
+                              min_score: float = 0.0) -> Optional[List[Dict[str, Any]]]:
         query_data = {
             "query_type": "structured",
-            "search_term": " ".join(search_terms),
-            "data_types": knowledge_types,
+            "data_types": data_types,
+            "filters": filters or {},
             "limit": limit,
-            "min_score": 0.7
+            "min_score": min_score
         }
-        response = await self.nats_base.query_knowledge_base(query_data)
-        if response and response.get("results"):
-            return response["results"]
-        return None
+        return await self._execute_query(query_data)
+
+    async def query_natural_language(self, query_text: str, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+        query_data = {
+            "query_type": "natural_language",
+            "query_text": query_text,
+            "limit": limit
+        }
+        return await self._execute_query(query_data)
+
+    async def query_recent_observations(self, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+        return await self.query_structured(["observation"], limit=limit)
+
+    async def query_raw_telemetry(self, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+        return await self.query_structured(["raw_telemetry_event"], limit=limit)
+
+    async def _execute_query(self, query_data: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        try:
+            response = await self.nats_base.query_knowledge_base(query_data)
+            if response and response.get("results"):
+                return response["results"]
+            return None
+        except Exception as e:
+            self.logger.error(f"KB query failed: {e}", exc_info=True)
+            return None
+
     
     async def store_reasoning_result(self, 
                                    context: ReasoningContext,
