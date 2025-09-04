@@ -1,0 +1,242 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "POLARIS Verification Configuration Schema",
+  "description": "Configuration schema for POLARIS Verification Adapter",
+  "type": "object",
+  "properties": {
+    "verification": {
+      "type": "object",
+      "description": "Verification adapter configuration",
+      "properties": {
+        "constraints": {
+          "type": "array",
+          "description": "Safety and resource constraints to enforce",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique constraint identifier"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["safety", "resource", "policy", "temporal", "dependency"],
+                "description": "Type of constraint"
+              },
+              "condition": {
+                "type": "string",
+                "description": "Boolean expression that must evaluate to true"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["critical", "high", "medium", "low"],
+                "default": "high",
+                "description": "Severity level of constraint violation"
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable description of the constraint"
+              },
+              "suggested_fix": {
+                "type": "string",
+                "description": "Suggested fix for constraint violations"
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this constraint is active"
+              }
+            },
+            "required": ["id", "condition", "description"],
+            "additionalProperties": false
+          }
+        },
+        "policies": {
+          "type": "array",
+          "description": "Organizational policies to enforce",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique policy identifier"
+              },
+              "name": {
+                "type": "string",
+                "description": "Human-readable policy name"
+              },
+              "description": {
+                "type": "string",
+                "description": "Policy description and purpose"
+              },
+              "rules": {
+                "type": "array",
+                "description": "Policy rules to evaluate",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Rule identifier"
+                    },
+                    "condition": {
+                      "type": "string",
+                      "description": "Boolean expression for rule evaluation"
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": ["critical", "high", "medium", "low"],
+                      "default": "medium",
+                      "description": "Severity of policy violation"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Rule description"
+                    },
+                    "suggested_fix": {
+                      "type": "string",
+                      "description": "Suggested fix for policy violations"
+                    }
+                  },
+                  "required": ["condition", "description"],
+                  "additionalProperties": false
+                }
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this policy is active"
+              }
+            },
+            "required": ["id", "name", "rules"],
+            "additionalProperties": false
+          }
+        },
+        "settings": {
+          "type": "object",
+          "description": "Verification adapter settings",
+          "properties": {
+            "default_timeout_sec": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 300,
+              "default": 30,
+              "description": "Default timeout for verification requests in seconds"
+            },
+            "max_concurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 5,
+              "description": "Maximum concurrent verification requests"
+            },
+            "queue_size": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 10000,
+              "default": 1000,
+              "description": "Maximum verification request queue size"
+            },
+            "enable_digital_twin": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable digital twin integration for predictive verification"
+            },
+            "enable_formal_verification": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable formal verification methods (experimental)"
+            },
+            "verification_levels": {
+              "type": "object",
+              "description": "Configuration for different verification levels",
+              "properties": {
+                "basic": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {"type": "boolean", "default": true},
+                    "timeout_sec": {"type": "number", "default": 5}
+                  }
+                },
+                "policy": {
+                  "type": "object", 
+                  "properties": {
+                    "enabled": {"type": "boolean", "default": true},
+                    "timeout_sec": {"type": "number", "default": 15}
+                  }
+                },
+                "formal": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {"type": "boolean", "default": true},
+                    "timeout_sec": {"type": "number", "default": 30}
+                  }
+                },
+                "comprehensive": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {"type": "boolean", "default": true},
+                    "timeout_sec": {"type": "number", "default": 60}
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "integrations": {
+          "type": "object",
+          "description": "External tool integrations",
+          "properties": {
+            "digital_twin": {
+              "type": "object",
+              "properties": {
+                "grpc_endpoint": {
+                  "type": "string",
+                  "default": "localhost:50051",
+                  "description": "Digital Twin gRPC service endpoint"
+                },
+                "simulation_horizon_minutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1440,
+                  "default": 30,
+                  "description": "Default simulation horizon in minutes"
+                },
+                "timeout_sec": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 120,
+                  "default": 30,
+                  "description": "Timeout for digital twin queries"
+                }
+              }
+            },
+            "formal_verification": {
+              "type": "object",
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "enum": ["prism", "tla+", "spin", "cbmc"],
+                  "description": "Formal verification tool to use"
+                },
+                "model_path": {
+                  "type": "string",
+                  "description": "Path to formal model files"
+                },
+                "properties": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Properties to verify"
+                }
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["verification"],
+  "additionalProperties": true
+}

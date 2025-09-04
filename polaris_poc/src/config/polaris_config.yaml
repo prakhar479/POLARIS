@@ -121,6 +121,39 @@ execution:
   metrics_subject: "polaris.execution.metrics"
 
 # =============================================================================
+# Verification Control Configuration
+# =============================================================================
+# Defines NATS subjects for action verification flow between components.
+# The Verification Adapter validates actions before execution to ensure
+# safety, policy compliance, and system constraints are met.
+#
+# Optimized Data Flow: 
+# - Kernel/DigitalTwin -> VerificationAdapter (via input_subject)
+# - VerificationAdapter -> ExecutionAdapter (direct for approved actions)
+# - VerificationAdapter -> output_subject (for rejected actions and monitoring)
+verification:
+  # NATS subject where verification requests are published
+  # Components send actions here for pre-execution validation
+  input_subject: "polaris.verification.requests"
+  
+  # NATS subject where verification results are published
+  # Contains approval/rejection decisions with detailed reasoning
+  output_subject: "polaris.verification.results"
+  
+  # NATS subject for policy updates and configuration changes
+  # Allows dynamic policy updates without adapter restart
+  policy_subject: "polaris.verification.policies"
+  
+  # NATS subject for verification performance metrics
+  # Includes verification latency, approval rates, and constraint violations
+  metrics_subject: "polaris.verification.metrics"
+  
+  # Default verification settings (can be overridden by plugins)
+  default_timeout_sec: 30
+  max_concurrent_verifications: 5
+  enable_by_default: true
+
+# =============================================================================
 # Logging Configuration
 # =============================================================================
 # Controls framework-wide logging behavior. Proper logging configuration is

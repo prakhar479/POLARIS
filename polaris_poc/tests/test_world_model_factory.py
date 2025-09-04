@@ -72,7 +72,11 @@ from polaris.models.world_model import (
     WorldModelFactory, 
     WorldModelValidator
 )
-    
+
+from polaris.models.mock_world_model import (
+    MockWorldModel,
+    TestableWorldModel
+)
    
 
 class TestWorldModelFactory:
@@ -135,10 +139,11 @@ class TestWorldModelFactory:
     
     def test_create_testable_model(self):
         """Test creation of TestableWorldModel if available."""
+        WorldModelFactory.register("testable", TestableWorldModel)
         available_types = WorldModelFactory.get_registered_types()
         
-        if "testable" not in available_types:
-            pytest.skip("Testable model not registered")
+        # if "testable" not in available_types:
+        #     pytest.skip("Testable model not registered")
         
         config = {"test_param": "test_value", "enable_logging": True}
         model = WorldModelFactory.create_model("testable", config)
@@ -211,10 +216,11 @@ class TestWorldModelValidator:
     @pytest_asyncio.fixture(scope="function")
     async def testable_model_instance(self):
         """Create and initialize a testable model instance."""
+        WorldModelFactory.register("testable", TestableWorldModel)
         available_types = WorldModelFactory.get_registered_types()
         
-        if "testable" not in available_types:
-            pytest.skip("Testable model not available")
+        # if "testable" not in available_types:
+        #     pytest.skip("Testable model not available")
         
         config = {"test": True, "timeout": 30}
         model = WorldModelFactory.create_model("testable", config)

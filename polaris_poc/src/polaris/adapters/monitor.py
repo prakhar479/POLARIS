@@ -11,14 +11,14 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from polaris.adapters.base import BaseAdapter
+from polaris.adapters.core import ExternalAdapter
 from polaris.models.telemetry import TelemetryEvent, TelemetryBatch
 from polaris.common.utils import safe_eval
 from polaris.knowledge_base.models import KBEntry, KBDataType
 from polaris.models.knowledge_base_impl import InMemoryKnowledgeBase
 
 
-class MonitorAdapter(BaseAdapter):
+class MonitorAdapter(ExternalAdapter):
     """Generic monitor adapter that collects metrics from any managed system.
     
     This adapter provides a plugin-driven approach to metric collection, supporting:

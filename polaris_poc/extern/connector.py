@@ -14,7 +14,7 @@ from pathlib import Path
 # Add parent directory to path to import from polaris
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from polaris.adapters.base import ManagedSystemConnector
+from polaris.adapters.core import ManagedSystemConnector
 from polaris.common.nats_client import jittered_backoff
 
 

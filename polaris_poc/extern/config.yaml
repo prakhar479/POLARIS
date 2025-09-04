@@ -254,6 +254,49 @@ execution:
         estimated_duration: 2.0   # SWIM server removal takes ~2 seconds
     
     # -------------------------------------------------------------------------
+    # Scaling Actions (Aliases for Server Management)
+    # -------------------------------------------------------------------------
+    - type: "SCALE_UP"
+      command: "add_server"
+      description: "Scale up system capacity by adding servers"
+      parameters:
+        - name: "count"
+          type: "integer"
+          required: false
+          validation:
+            min: 1
+            max: 5
+      
+      preconditions:
+        - check: "get_servers < get_max_servers"
+          message: "Cannot scale up: already at maximum capacity limit"
+      
+      impact:
+        severity: "medium"
+        reversible: true
+        estimated_duration: 2.0
+    
+    - type: "SCALE_DOWN"
+      command: "remove_server"
+      description: "Scale down system capacity by removing servers"
+      parameters:
+        - name: "count"
+          type: "integer"
+          required: false
+          validation:
+            min: 1
+            max: 3
+      
+      preconditions:
+        - check: "get_servers > 1"
+          message: "Cannot scale down: minimum of 1 server required"
+      
+      impact:
+        severity: "medium"
+        reversible: true
+        estimated_duration: 2.0
+
+    # -------------------------------------------------------------------------
     # Quality of Service Actions
     # -------------------------------------------------------------------------
     - type: "SET_DIMMER"
@@ -394,3 +437,86 @@ metadata:
 # 2. Command failures: Check SWIM console for error messages
 # 3. Metric collection errors: Ensure SWIM simulation is active (not paused)
 # 4. Action execution failures: Verify preconditions and SWIM state consistency
+
+# =============================================================================
+# Verification Configuration
+# =============================================================================
+# Defines safety constraints and policies for SWIM action verification.
+# The verification adapter validates actions before execution to ensure
+# system safety, policy compliance, and operational constraints are met.
+verification:
+  # Safety and Resource Constraints
+  constraints:
+    - id: "max_servers_limit"
+      type: "resource"
+      condition: "action_type != 'ADD_SERVER' or (current_state.get('active_servers', 0) + params.get('count', 1)) <= current_state.get('max_servers', 10)"
+      severity: "critical"
+      description: "Cannot exceed maximum server limit"
+      suggested_fix: "Remove existing servers before adding new ones or increase max_servers limit"
+      
+    - id: "min_servers_requirement"
+      type: "safety"
+      condition: "action_type != 'REMOVE_SERVER' or (current_state.get('active_servers', 1) - params.get('count', 1)) >= 1"
+      severity: "critical"
+      description: "Must maintain at least one active server"
+      suggested_fix: "Ensure minimum server count is maintained"
+      
+    - id: "dimmer_range_check"
+      type: "safety"
+      condition: "action_type != 'SET_DIMMER' or (0.0 <= params.get('value', 1.0) <= 1.0)"
+      severity: "high"
+      description: "Dimmer value must be between 0.0 and 1.0"
+      suggested_fix: "Set dimmer value within valid range [0.0, 1.0]"
+      
+    - id: "utilization_threshold"
+      type: "resource"
+      condition: "action_type != 'REMOVE_SERVER' or current_state.get('utilization', 0) < 0.8"
+      severity: "high"
+      description: "Cannot remove servers when utilization is high"
+      suggested_fix: "Wait for utilization to decrease before removing servers"
+
+  # Organizational Policies
+  policies:
+    - id: "change_management"
+      name: "Change Management Policy"
+      description: "Basic change management for SWIM system"
+      rules:
+        - id: "approval_required_for_removal"
+          condition: "action_type != 'REMOVE_SERVER' or action.get('approved_by') is not None"
+          severity: "medium"
+          description: "Server removal should have approval"
+          suggested_fix: "Add approval metadata to action"
+        
+        - id: "gradual_scaling"
+          condition: "action_type != 'ADD_SERVER' or params.get('count', 1) <= 2"
+          severity: "low"
+          description: "Scale gradually to avoid resource waste"
+          suggested_fix: "Add servers incrementally rather than in large batches"
+
+  # Verification Settings
+  settings:
+    default_timeout_sec: 30
+    max_concurrent: 3
+    enable_digital_twin: true
+    enable_formal_verification: false
+    
+    verification_levels:
+      basic:
+        enabled: true
+        timeout_sec: 5
+      policy:
+        enabled: true
+        timeout_sec: 15
+      formal:
+        enabled: false
+        timeout_sec: 30
+      comprehensive:
+        enabled: false
+        timeout_sec: 60
+
+  # External Integrations
+  integrations:
+    digital_twin:
+      grpc_endpoint: "localhost:50051"
+      simulation_horizon_minutes: 30
+      timeout_sec: 30
