@@ -444,6 +444,10 @@ class ConfigurationManager:
         """
         return self.plugin_config.get("execution", {})
     
+    def get_verification_config(self) -> Dict[str, Any]:
+        """Get verification configuration from plugin config."""
+        return self.plugin_config.get("verification", {})
+    
     def get_connection_config(self) -> Dict[str, Any]:
         """Get connection configuration from plugin.
         

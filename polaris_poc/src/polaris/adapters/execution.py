@@ -15,11 +15,11 @@ from typing import Any, Dict, Union, Optional
 
 from nats.aio.msg import Msg
 
-from polaris.adapters.base import BaseAdapter
+from polaris.adapters.core import ExternalAdapter
 from polaris.models.actions import ControlAction, ExecutionResult, ActionStatus
 
 
-class ExecutionAdapter(BaseAdapter):
+class ExecutionAdapter(ExternalAdapter):
     """Generic execution adapter that executes control actions on any managed system.
     
     This adapter provides a plugin-driven approach to action execution, supporting:

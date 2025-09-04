@@ -1,6 +1,6 @@
 # strategy/controller_strategy.py
-from controllers.fast_controller import FastController
-from controllers.slow_controller import SlowController
+from .fast_controller import FastController
+from .slow_controller import SlowController
 
 class ControllerStrategy:
     def __init__(self):

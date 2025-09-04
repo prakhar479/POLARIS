@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from polaris.adapters.monitor import MonitorAdapter
 from polaris.adapters.execution import ExecutionAdapter
+from polaris.adapters.verification import VerificationAdapter
 from polaris.agents.digital_twin_agent import DigitalTwinAgent
 from polaris.services.knowledge_base_service import KnowledgeBaseService
 from polaris.common.logging_setup import setup_logging
@@ -62,7 +63,7 @@ Examples:
     
     parser.add_argument(
         "component",
-        choices=["monitor", "execution", "digital-twin", "knowledge-base", "kernel"],
+        choices=["monitor", "execution", "verification", "digital-twin", "knowledge-base", "kernel"],
         help="Component to start"
     )
     
@@ -115,6 +116,10 @@ Examples:
     if args.component in ["monitor", "execution"] and not args.plugin_dir:
         parser.error(f"{args.component} component requires --plugin-dir")
     
+    # Verification can work with or without plugin-dir
+    if args.component == "verification" and not args.plugin_dir:
+        print("⚠️  Warning: Starting verification without plugin directory - using framework defaults only")
+    
     if args.component not in ["digital-twin", "knowledge-base"] and (args.world_model or args.health_check):
         parser.error("--world-model and --health-check are only valid for digital-twin component")
     
@@ -136,45 +141,71 @@ Examples:
     
     if args.component == "kernel":
         await start_kernel(args, config_path)
+        return
     
-    # Handle adapter components (monitor/execution)
+    # Handle adapter components (monitor/execution/verification)
     await start_adapter(args, config_path)
 
 
 
 
 async def start_adapter(args, config_path: Path):
-    """Start monitor or execution adapter."""
+    """Start monitor, execution, or verification adapter."""
     # Setup logging
     logger = setup_logging()
     logger.setLevel(getattr(logging, args.log_level))
     
-    # Resolve plugin directory
-    plugin_dir = Path(args.plugin_dir).resolve()
-    if not plugin_dir.exists():
-        logger.error(f"Plugin directory not found: {plugin_dir}")
-        sys.exit(1)
+    # Handle plugin directory requirements
+    plugin_dir = None
+    if args.plugin_dir:
+        plugin_dir = Path(args.plugin_dir).resolve()
+        if not plugin_dir.exists():
+            logger.error(f"Plugin directory not found: {plugin_dir}")
+            sys.exit(1)
     
     # Create adapter
     try:
         logger.info(f"Creating {args.component} adapter...")
         
         if args.component == "monitor":
+            if not plugin_dir:
+                logger.error("Monitor adapter requires --plugin-dir")
+                sys.exit(1)
             adapter = MonitorAdapter(
                 polaris_config_path=str(config_path),
                 plugin_dir=str(plugin_dir),
                 logger=logger
             )
-        else:  # execution
+        elif args.component == "execution":
+            if not plugin_dir:
+                logger.error("Execution adapter requires --plugin-dir")
+                sys.exit(1)
             adapter = ExecutionAdapter(
                 polaris_config_path=str(config_path),
                 plugin_dir=str(plugin_dir),
                 logger=logger
             )
+        else:  # verification
+            adapter = VerificationAdapter(
+                polaris_config_path=str(config_path),
+                plugin_dir=str(plugin_dir) if plugin_dir else None,
+                logger=logger
+            )
         
         logger.info(f"✅ {args.component.capitalize()} adapter created successfully")
-        logger.info(f"   System: {adapter.plugin_config.get('system_name')}")
-        logger.info(f"   Connector: {adapter.connector.__class__.__name__}")
+        
+        # Show different info based on adapter type
+        if args.component == "verification":
+            system_name = getattr(adapter, 'system_name', 'polaris_framework')
+            constraints_count = len(getattr(adapter, 'constraints', []))
+            policies_count = len(getattr(adapter, 'policies', []))
+            logger.info(f"   System: {system_name}")
+            logger.info(f"   Constraints: {constraints_count}")
+            logger.info(f"   Policies: {policies_count}")
+        else:
+            logger.info(f"{args.component}")
+            logger.info(f"   System: {adapter.plugin_config.get('system_name')}")
+            logger.info(f"   Connector: {adapter.connector.__class__.__name__}")
         
         # Validation-only mode
         if args.validate_only:

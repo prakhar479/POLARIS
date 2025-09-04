@@ -35,9 +35,11 @@ def safe_eval(expr: str, variables: dict) -> Any:
     """
     # Define allowed AST nodes
     allowed_nodes = {
-        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Load,
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Load,
         ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
-        ast.USub, ast.UAdd, ast.Name
+        ast.USub, ast.UAdd, ast.Name, ast.BoolOp, ast.Or, ast.And, 
+        ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+        ast.Call, ast.Attribute
     }
 
     tree = ast.parse(expr, mode="eval")

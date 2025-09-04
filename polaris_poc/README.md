@@ -88,9 +88,10 @@ polaris_poc/
 │   │   └── polaris_config.yaml
 │   ├── polaris/
 │   │   ├── adapters/            # Core adapters
-│   │   │   ├── base.py         # Base classes and interfaces
+│   │   │   ├── core.py         # Clean architecture base classes
 │   │   │   ├── monitor.py      # Generic monitor adapter
-│   │   │   └── execution.py    # Generic execution adapter
+│   │   │   ├── execution.py    # Generic execution adapter
+│   │   │   └── verification.py # Verification adapter
 │   │   ├── agents/              # Digital Twin agents
 │   │   │   └── digital_twin_agent.py  # Main Digital Twin agent
 │   │   ├── services/            # gRPC services
@@ -151,6 +152,16 @@ polaris_poc/
   - Concurrent execution control
   - Result publishing and metrics
   - Queue management with throttling
+
+### Verification Adapter
+- **Purpose**: Validates control actions before execution to ensure safety and policy compliance
+- **Architecture**: Internal adapter (no external connector required)
+- **Features**:
+  - Safety constraint checking (resource limits, operational bounds)
+  - Organizational policy enforcement
+  - Digital Twin integration for predictive verification
+  - Built-in framework defaults for standalone operation
+  - Comprehensive violation reporting and recommendations
 
 ### Digital Twin Component
 - **Purpose**: Provides intelligent system modeling and predictive capabilities
@@ -335,6 +346,18 @@ Component-specific:
 - Monitor/Execution: `--plugin-dir <dir>` points to managed system plugin (e.g., `extern/`)
 - Digital Twin: `--world-model <mock|gemini|...>`, `--health-check`
 
+### Starting the Verification Adapter
+```bash
+# Start verification adapter with SWIM plugin
+python src/scripts/start_component.py verification --plugin-dir extern
+
+# Start verification adapter in standalone mode (built-in defaults)
+python src/scripts/start_component.py verification
+
+# Validate configuration only
+python src/scripts/start_component.py verification --plugin-dir extern --validate-only
+```
+
 ### Starting the Digital Twin
 ```bash
 # Start with default configuration
@@ -399,14 +422,15 @@ python -m pytest tests/ -v
 ```bash
 # Start all components
 python src/scripts/start_component.py monitor --plugin-dir extern &
+python src/scripts/start_component.py verification --plugin-dir extern &  # Or just 'verification' for standalone
 python src/scripts/start_component.py execution --plugin-dir extern &
 python src/scripts/start_component.py digital-twin &
 
 # Monitor messages
 python src/scripts/nats_spy.py --preset all
 
-# Send test action (requires NATS client)
-nats pub polaris.execution.actions '{"action_type":"SET_DIMMER","params":{"value":0.8}}'
+# Send test action (will be verified before execution)
+nats pub polaris.verification.requests '{"request_id":"test-123","action":{"action_type":"SET_DIMMER","params":{"value":0.8}},"verification_level":"basic"}'
 
 # Test Digital Twin gRPC
 grpcurl -plaintext localhost:50051 polaris.digitaltwin.DigitalTwin/Query
