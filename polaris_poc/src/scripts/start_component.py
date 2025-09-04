@@ -44,6 +44,7 @@ from polaris.common.logging_setup import setup_logging
 from polaris.common.digital_twin_config import DigitalTwinConfigManager, DigitalTwinConfigError
 from polaris.common.digital_twin_logging import setup_digital_twin_logging
 from polaris.agents.reasoner_agent import create_reasoner_agent, SkeletonReasoningImplementation, ReasoningType 
+from polaris.agents.llm_reasoner import create_llm_reasoner_agent
 
 async def main():
     """Main entry point."""
@@ -626,8 +627,7 @@ async def start_reasoner(args, config_path: Path):
         return
 
     # Build Reasoner
-    reasoning_impls = {rtype: SkeletonReasoningImplementation() for rtype in ReasoningType}
-    agent = create_reasoner_agent("polaris_reasoner_001",config_path ,reasoning_impls, nats_url=None, logger=logger)
+    agent = create_llm_reasoner_agent("polaris_reasoner_001",config_path ,'', nats_url=None, logger=logger,)
 
     # Setup shutdown handling
     stop_event = asyncio.Event()

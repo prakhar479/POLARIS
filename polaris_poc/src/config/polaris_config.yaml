@@ -58,13 +58,13 @@ telemetry:
   # Development: 10-50 for faster feedback and easier debugging
   # Production: 100-500 for better throughput (balance with memory usage)
   # High-volume systems: 500-1000 (monitor memory consumption)
-  batch_size: 100
+  batch_size: 10000
   
   # Maximum wait time (seconds) before sending an incomplete batch
   # Lower values = more real-time but less efficient batching
   # Higher values = better batching but higher latency
   # Recommended: 0.5-2.0 seconds for most use cases
-  batch_max_wait: 1.0
+  batch_max_wait: 60
   
   # Maximum queue size for MonitorAdapter in-memory buffering
   # 0 = unbounded (risk of memory exhaustion under high load)

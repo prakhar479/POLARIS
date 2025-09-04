@@ -21,6 +21,12 @@ from enum import Enum
 import nats
 from nats.errors import TimeoutError
 import grpc
+from .reasoner_core import (
+    ReasoningType,
+    ReasoningContext,
+    ReasoningResult,
+    ReasoningInterface,
+)
 
 # Assuming these are your existing models
 from polaris.knowledge_base.models import KBEntry, KBQuery, KBResponse
@@ -656,6 +662,11 @@ class ReasonerAgent(NATSReasonerBase):
         reasoning_steps = []
         kb_queries = 0
         dt_queries = 0
+
+
+        ##short circuit for testing
+        self.dt_query = None 
+        self.kb_query = None 
         
         try:
             self.active_sessions[context.session_id] = context
@@ -688,16 +699,18 @@ class ReasonerAgent(NATSReasonerBase):
             knowledge_types = reasoning_impl.get_required_knowledge_types(context)
             
             reasoning_steps.append("Querying knowledge base for relevant information")
-            k_nl = await self.kb_query.query_natural_language(" ".join(search_terms))
-            k_struct = await self.kb_query.query_structured(knowledge_types)
-            relevant_knowledge = (k_nl or []) + (k_struct or [])
-            kb_queries += 2
+            if self.kb_query:
+                k_nl = await self.kb_query.query_natural_language(" ".join(search_terms))
+                k_struct = await self.kb_query.query_structured(knowledge_types)
+                relevant_knowledge = (k_nl or []) + (k_struct or [])
+                kb_queries += 2
             
             reasoning_steps.append(f"Executing {context.reasoning_type.value} reasoning logic")
             result = await reasoning_impl.reason(context, relevant_knowledge)
             
             reasoning_steps.append("Storing reasoning result")
-            await self.kb_query.store_reasoning_result(context, result.result, result.confidence)
+            if self.kb_query:
+                await self.kb_query.store_reasoning_result(context, result.result, result.confidence)
             
             result.execution_time = time.time() - start_time
             result.kb_queries_made = kb_queries
@@ -783,12 +796,42 @@ def create_reasoner_agent(agent_id: str,
                          reasoning_implementations: Optional[Dict[ReasoningType, ReasoningInterface]] = None,
                          nats_url: Optional[str] = None,
                          kb_timeout: float = 30.0,
-                         logger: Optional[logging.Logger] = None) -> ReasonerAgent:
+                         logger: Optional[logging.Logger] = None,
+                         gemini_api_key: Optional[str] = None) -> 'ReasonerAgent':
+    """
+    Create a reasoner agent with optional LLM-based reasoning implementations.
+    
+    Args:
+        agent_id: Unique identifier for the agent
+        config_path: Path to YAML configuration file
+        reasoning_implementations: Optional custom reasoning implementations
+        nats_url: Optional NATS server URL override
+        kb_timeout: Timeout for knowledge base queries
+        logger: Optional logger instance
+        gemini_api_key: Gemini API key for LLM reasoning (if None, uses skeleton implementation)
+    
+    Returns:
+        ReasonerAgent configured with reasoning implementations
+    """
+    from .reasoner_agent import ReasonerAgent, ReasoningType, SkeletonReasoningImplementation
+    from .llm_reasoner import LLMReasoningImplementation
+    
     if reasoning_implementations is None:
-        reasoning_implementations = {
-            reasoning_type: SkeletonReasoningImplementation()
-            for reasoning_type in ReasoningType
-        }
+        reasoning_implementations = {}
+        
+        # Use LLM reasoner only
+        if gemini_api_key:
+            for reasoning_type in ReasoningType:
+                llm_reasoner = LLMReasoningImplementation(
+                    api_key=gemini_api_key,
+                    reasoning_type=reasoning_type,
+                    logger=logger
+                )
+                llm_reasoner.configure_basic()
+                reasoning_implementations[reasoning_type] = llm_reasoner
+        else:
+            raise ValueError("Gemini API key must be provided to use LLM reasoning.")
+    
     return ReasonerAgent(
         agent_id,
         reasoning_implementations,
