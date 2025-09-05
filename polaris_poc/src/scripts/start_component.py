@@ -27,11 +27,15 @@ import asyncio
 import logging
 import os
 import signal
+import dotenv
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
+
+dotenv.load_dotenv()
+API_KEY = os.getenv("API_KEY")
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -627,7 +631,7 @@ async def start_reasoner(args, config_path: Path):
         return
 
     # Build Reasoner
-    agent = create_llm_reasoner_agent("polaris_reasoner_001",config_path ,'', nats_url=None, logger=logger,)
+    agent = create_llm_reasoner_agent("polaris_reasoner_001",config_path ,API_KEY, nats_url=None, logger=logger,)
 
     # Setup shutdown handling
     stop_event = asyncio.Event()

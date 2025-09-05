@@ -446,29 +446,27 @@ class NATSReasonerBase(ABC):
 
     async def _handle_kernel_request(self, data: Dict[str, Any], msg) -> None:
         """Handle telemetry reasoning requests from the kernel."""
-        self.logger.info(f"Received kernel telemetry request")
+        # self.logger.info(f"Received kernel telemetry request with data: {data}")
         try:
             context = ReasoningContext(
                 session_id=data.get("session_id", str(uuid.uuid4())),
                 timestamp=time.time(),
-                input_data=data.get("input_data", {}),
+                input_data=data,
                 reasoning_type=ReasoningType(data.get("reasoning_type", "inference")),
                 metadata=data.get("metadata", {})
             )
 
-            result = await self.perform_reasoning(context)
+            # self.logger.info(f"Starting reasoning session {context.session_id} with input: {context.input_data}")
 
+            result = await self.perform_reasoning(context)
+            result= result.to_dict()
+            self.logger.info(f"Reasoning session {context.session_id} completed with result: {result['result']}")
             # Placeholder for action generation logic
-            action_message = {
-                    "action_type": "SET_DIMMER",
-                    "source": "fast_controller",
-                    "action_id": str(uuid.uuid4()),
-                    "params": {"value": 0.5},
-                    "priority": "low",
-                }
+            action_message = result['result']
+            
             self.logger.info(f"Publishing reasoning action to execution layer", extra={"action": action_message})
             await self.publish(self.execution_action_subject, action_message)
-            await msg.respond(json.dumps({"success": True, "result": result.to_dict()}).encode())
+            await msg.respond(json.dumps({"success": True, "result": result}).encode())
 
         except Exception as e:
             self.logger.error(f"Kernel request failed: {e}", exc_info=True)

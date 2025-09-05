@@ -14,8 +14,9 @@ import logging
 import openai
 from openai import AsyncOpenAI
 from google import genai
+import google
 from pathlib import Path
-
+import random
 # Add these imports to the existing reasoner_agent.py file
 from .reasoner_core import (
     ReasoningInterface, 
@@ -34,8 +35,8 @@ class LLMReasoningImplementation(ReasoningInterface):
     def __init__(self, 
                  api_key: str,
                  reasoning_type: ReasoningType,
-                 model: str = "gemini-2.5-pro",
-                 max_tokens: int = 1000,
+                 model: str = "gemini-2.5-flash",
+                 max_tokens: int = 4096,
                  temperature: float = 0.7,
                  timeout: float = 30.0,
                  base_url: Optional[str] = None,
@@ -46,6 +47,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.max_retries= 5
         self.timeout = timeout
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
         self.logger.info(f"Initializing LLMReasoningImplementation with model {model}")
@@ -55,7 +57,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         # Prompt templates - easily customizable
         self.system_prompt_template = """You are an intelligent self adaptive system controller.
 Your task is to analyze telemetry data and generate appropriate control actions. You are a proactive reasoner, not handling sudden spikes but long term system goals. Dont take 
-actions too frequently, only when really needed.
+actions too frequently, only when really needed. Dont make large changes, prefer small reversible actions.
 
 Context: {context_description}
 Reasoning Type: {reasoning_type}
@@ -72,14 +74,16 @@ Available Action Types:
 - SET_DIMMER: Control lighting dimmer values (0.0 to 1.0)
 - ADD_SERVER: Add server instance
 - REMOVE_SERVER: Remove server instance
+- NO_OP: No operation needed 
 
 Output Format:
 {{
+    "action_id": "unique_action_id",
     "action_type": "ACTION_TYPE",
-    "target": "device_id_or_system",
+    "source": "llm_reasoner",
     "params": {{"key": "value"}},
-    "reasoning": "Clear explanation of why this action was chosen",
-    "confidence": 0.95
+    "priority": "low|normal|high"
+
 }}
 
 Examples:
@@ -242,7 +246,19 @@ Generate a control action based on this information. """
     
     def configure_basic(self):
         """Generic safe defaults."""
-        self.set_domain_context("Proactive adaptive control of SWIM exemplar")
+        self.set_domain_context('''Proactive adaptive control of SWIM exemplar.
+                                
+                                About SWIM: The system manages servers and content delivery.
+
+                                Actions: Add/remove servers, adjust a dimmer (0.0–1.0 for optional content), or take no action.
+
+                                Metrics: Track dimmer level, active/max servers, utilization, response times (overall, basic, optional), arrival rate, and throughput (basic/optional).
+
+                                Behavior: High utilization → exponential rise in response time; adding servers lowers per-server load but raises cost; lowering dimmer reduces load/response time.
+
+                                Thresholds: Critical utilization = 0.85, normal response time = 1.0, recommended servers ≈ arrival_rate/10.
+                                
+                                ''')
         self.set_safety_constraints([
             "Only use: ADD_SERVER, REMOVE_SERVER, SET_DIMMER",
             "Dimmer values must be between 0.0 and 1.0",
@@ -277,26 +293,36 @@ Generate a control action based on this information. """
     # ==== Private Methods ====
     
     def _extract_telemetry_data(self, context: ReasoningContext) -> Dict[str, Any]:
-        """Extract and format telemetry data from context."""
+        """
+        Extract and format telemetry data from context, with specific handling
+        for the SWIM 'events' list structure.
+        """
         telemetry = {}
-        
+
+        # --- NEW LOGIC TO PARSE THE 'events' LIST ---
+        # Check if 'events' key exists and is a list in the input data
+        if "events" in context.input_data and isinstance(context.input_data["events"], list):
+            # Iterate through each event dictionary in the list
+            for event in context.input_data["events"]:
+                # Check if the event has a 'name' and 'value'
+                if "name" in event and "value" in event:
+                    # Add the metric to our telemetry dictionary.
+                    # If a metric appears multiple times, this will keep the latest one.
+                    telemetry[event["name"]] = event["value"]
+
+        # --- Keep old logic as a fallback for other data formats ---
         # Direct telemetry data
         if "telemetry" in context.input_data:
             telemetry.update(context.input_data["telemetry"])
-        
-        # Sensor data
-        if "sensors" in context.input_data:
-            telemetry.update(context.input_data["sensors"])
-        
-        # Any numerical measurements
+            
+        # Any other top-level numerical measurements
         for key, value in context.input_data.items():
-            if isinstance(value, (int, float)):
+            if key not in telemetry and isinstance(value, (int, float)):
                 telemetry[key] = value
-            elif isinstance(value, dict):
-                telemetry[key] = value
-        
+
         return telemetry
     
+
     def _build_system_prompt(self, context: ReasoningContext) -> str:
         """Build the system prompt with context and customizations."""
         context_description = context.metadata.get("description", "IoT system control")
@@ -333,59 +359,67 @@ Generate a control action based on this information. """
  
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Make the actual Gemini API call and log prompts/responses to JSONL."""
-        try:
-            # Combine system and user prompts for Gemini
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        """
+        Make a direct Gemini API call with retry logic, without using any tools.
+        """
+        
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
-            contents = [
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(text=full_prompt),
-                    ],
-                ),
-            ]
 
-            # Simplified generation config for a more reliable non-streaming call
-            generate_content_config = types.GenerateContentConfig(
-                temperature=self.temperature,
-                max_output_tokens=self.max_tokens,
-                # The 'thinking_config' is removed as it's not needed for this use case
-            )
+        # self.logger.info(f"Making LLM call with prompt: {full_prompt}")
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=full_prompt)])]
 
-            # --- MODIFICATION START ---
-            # Use the non-streaming generate_content method for robustness.
-            # This waits for the full response and is less prone to truncation.
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=generate_content_config,
-            )
+        # Simplified generation config without tool-related settings
+        generate_content_config = types.GenerateContentConfig(
+            temperature=self.temperature,
+            max_output_tokens=self.max_tokens
+        )
 
-            response_text = response.text.strip()
-            # --- MODIFICATION END ---
+        for attempt in range(self.max_retries):
+            try:
+                # Direct API call without the 'tools' parameter
+                response = self.client.models.generate_content(
+                    model=self.model,  # Ensure self.model is set to "gemini-1.5-flash"
+                    contents=contents,
+                    config=generate_content_config,
+                )
 
-            # === Log prompts & responses to JSONL ===
-            log_entry = {
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-                "model": self.model,
-                "system_prompt": str(system_prompt),
-                "user_prompt": str(user_prompt),
-                "response": str(response_text),
-                "reasoning_type": getattr(getattr(self, "reasoning_type", None), "value", None),
-            }
+                response_text = response.text.strip()
+                self.logger.info(f"LLM response: {response_text}")
 
-            log_file = Path("llm_calls.jsonl")
-            with log_file.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                # --- Success Case: Log and return ---
+                log_entry = {
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                    "model": self.model,
+                    "system_prompt": str(system_prompt),
+                    "user_prompt": str(user_prompt),
+                    "response": str(response_text),
+                    "reasoning_type": getattr(self.reasoning_type, "value", None),
+                    "status": "success",
+                    "attempt": attempt + 1
+                }
+                log_file = Path("llm_calls.jsonl")
+                with log_file.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                
+                return response_text
 
-            return response_text
+            except google.genai.errors.ServerError as e:
+                # --- Failure Case (retry logic remains unchanged) ---
+                self.logger.warning(f"Gemini API call failed with ServerError: {e}. This is attempt {attempt + 1}/{self.max_retries}.")
+                if attempt + 1 == self.max_retries:
+                    self.logger.error("Max retries reached. Failing the operation.")
+                    # ... (logging code for final failure) ...
+                    raise
+                
+                backoff_time = self.initial_backoff * (2 ** attempt)
+                jitter = random.uniform(0, backoff_time * 0.1)
+                delay = backoff_time + jitter
+                self.logger.info(f"Model is overloaded. Retrying in {delay:.2f} seconds...")
+                await asyncio.sleep(delay)
 
-        except Exception as e:
-            self.logger.error(f"Gemini API call failed: {e}")
-            raise
-
+        raise Exception("LLM call failed after all retries.")
+    
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Parse and validate the LLM response."""
         try:
@@ -404,14 +438,14 @@ Generate a control action based on this information. """
             action = json.loads(json_str)
             
             # Validate required fields
-            required_fields = ["action_type", "target", "params"]
+            required_fields = ["action_type", "source", "params","action_id"]
             for field in required_fields:
                 if field not in action:
                     raise ValueError(f"Missing required field: {field}")
             
             # Add default values
-            action.setdefault("reasoning", "LLM-generated action")
-            action.setdefault("confidence", 0.8)
+            # action.setdefault("reasoning", "LLM-generated action")
+            # action.setdefault("confidence", 0.8)
             action.setdefault("source", "llm_reasoner")
             action.setdefault("action_id", f"llm_{int(time.time())}")
             
@@ -424,8 +458,6 @@ Generate a control action based on this information. """
                 "action_type": "ALERT",
                 "target": "system",
                 "params": {"message": f"Failed to parse LLM response: {e}"},
-                "reasoning": "Fallback due to parsing error",
-                "confidence": 0.1,
                 "source": "llm_reasoner",
                 "action_id": f"fallback_{int(time.time())}"
             }
