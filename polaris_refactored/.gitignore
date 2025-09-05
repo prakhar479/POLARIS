@@ -1,0 +1,12 @@
+# Python virtual environment
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+# Ignore first-level directory named 'directory_name'
+
+# Secrets
+.env
+
+# Infrastructure binaries
+bin/

@@ -1,0 +1,14 @@
+name: swim
+version: 1.0.0
+connector_class: SwimTCPConnector
+module: connector
+description: SWIM (Simulated Web Infrastructure Manager) connector for POLARIS
+author: CMU ABLE Team
+documentation: https://github.com/cps-sei/swim
+tags:
+  - web-service
+  - self-adaptive
+  - exemplar
+  - simulation
+  - research
+  - cmu
