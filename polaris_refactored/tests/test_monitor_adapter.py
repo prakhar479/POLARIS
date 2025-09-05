@@ -14,7 +14,7 @@ from typing import Dict, Any
 from ..src.adapters.monitor_adapter import (
     MonitorAdapter, MetricCollectionStrategy, DirectConnectorStrategy,
     PollingStrategy, BatchCollectionStrategy, MonitoringTarget,
-    CollectionResult, MetricCollectionMode
+    CollectionResult, MetricCollectionMode, RetryingStrategyDecorator
 )
 from ..src.adapters.base_adapter import (
     AdapterConfiguration, AdapterHealthStatus, AdapterState
@@ -627,6 +627,193 @@ class TestMonitorAdapter:
         
         selected = monitor_adapter._select_strategy(target_with_invalid_preference)
         assert selected is not None  # Should fall back to a supported strategy
+
+
+class TestRetryingStrategyAndAdaptiveInterval:
+    """Tests for retrying decorator and adaptive interval behavior."""
+    @pytest.fixture
+    async def event_bus(self):
+        """Create an event bus for testing."""
+        bus = PolarisEventBus(worker_count=1)
+        await bus.start()
+        yield bus
+        await bus.stop()
+    
+    @pytest.fixture
+    def mock_plugin_registry(self):
+        """Create a mock plugin registry."""
+        registry = Mock(spec=PolarisPluginRegistry)
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_retrying_strategy_succeeds_after_failures(self):
+        """Verify RetryingStrategyDecorator retries and eventually succeeds."""
+        class FlakyStrategy(MetricCollectionStrategy):
+            def __init__(self, name: str = "flaky", fail_times: int = 2):
+                self.name = name
+                self.remaining = fail_times
+            def get_strategy_name(self) -> str:
+                return self.name
+            def supports_target(self, target) -> bool:
+                return True
+            async def collect_metrics(self, target, connector_factory) -> CollectionResult:
+                if self.remaining > 0:
+                    self.remaining -= 1
+                    return CollectionResult(
+                        system_id=target.system_id,
+                        metrics={},
+                        timestamp=datetime.utcnow(),
+                        success=False,
+                        error="transient"
+                    )
+                return CollectionResult(
+                    system_id=target.system_id,
+                    metrics={"ok": MetricValue("ok", 1, "u")},
+                    timestamp=datetime.utcnow(),
+                    success=True
+                )
+
+        base = FlakyStrategy(fail_times=2)
+        retrying = RetryingStrategyDecorator(base, max_retries=3, backoff_base=0.0, backoff_factor=1.0, max_backoff=0.0, jitter=0.0)
+        target = MonitoringTarget(system_id="s1", connector_type="x")
+        factory = Mock(spec=ManagedSystemConnectorFactory)
+        result = await retrying.collect_metrics(target, factory)
+        assert result.success is True
+        assert result.strategy_name.startswith("retrying_")
+
+    @pytest.mark.asyncio
+    async def test_retrying_strategy_fails_after_max_retries(self):
+        """Verify RetryingStrategyDecorator returns failure when retries exhausted."""
+        class AlwaysFailStrategy(MetricCollectionStrategy):
+            def get_strategy_name(self) -> str:
+                return "always_fail"
+            def supports_target(self, target) -> bool:
+                return True
+            async def collect_metrics(self, target, connector_factory) -> CollectionResult:
+                return CollectionResult(
+                    system_id=target.system_id,
+                    metrics={},
+                    timestamp=datetime.utcnow(),
+                    success=False,
+                    error="always"
+                )
+
+        retrying = RetryingStrategyDecorator(AlwaysFailStrategy(), max_retries=2, backoff_base=0.0, backoff_factor=1.0, max_backoff=0.0, jitter=0.0)
+        target = MonitoringTarget(system_id="s2", connector_type="x")
+        factory = Mock(spec=ManagedSystemConnectorFactory)
+        result = await retrying.collect_metrics(target, factory)
+        assert result.success is False
+        assert result.strategy_name == "retrying_always_fail"
+        assert result.collection_duration is not None
+
+    @pytest.mark.asyncio
+    async def test_adaptive_interval_success_path(event_bus):
+        """Ensure adaptive interval computes expected next_interval on success."""
+        cfg = AdapterConfiguration(
+            adapter_id="m1",
+            adapter_type="monitor",
+            enabled=True,
+            config={
+                "collection_mode": "pull",
+                "monitoring_targets": [
+                    {
+                        "system_id": "sysA",
+                        "connector_type": "c",
+                        "collection_interval": 10.0,
+                        "enabled": True,
+                        "config": {"success_adjustment": 0.9, "min_interval": 3.0},
+                    }
+                ]
+            },
+        )
+        registry = Mock(spec=PolarisPluginRegistry)
+        adapter = MonitorAdapter(cfg, event_bus=event_bus, plugin_registry=registry)
+        await adapter._validate_configuration()
+        await adapter._initialize_resources()
+
+        # Patch collection to return success once
+        async def mock_collect(target):
+            return CollectionResult(
+                system_id=target.system_id,
+                metrics={},
+                timestamp=datetime.utcnow(),
+                success=True,
+            )
+
+        adapter._collect_target_metrics = mock_collect  # type: ignore
+
+        # Monkeypatch asyncio.sleep to capture interval and cancel loop
+        sleep_calls = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            raise asyncio.CancelledError()
+
+        target = adapter.get_monitoring_targets()["sysA"]
+        adapter._state = AdapterState.RUNNING
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            # Run one iteration
+            task = asyncio.create_task(adapter._collection_loop(target))
+            await task
+        # Expected next_interval = max(min_interval, base * success_adjustment) = max(3, 10*0.9) = 9
+        assert len(sleep_calls) == 1
+        assert abs(sleep_calls[0] - 9.0) < 1e-6
+
+
+
+    @pytest.mark.asyncio
+    async def test_adaptive_interval_failure_path(event_bus, mock_plugin_registry):
+        """Ensure adaptive interval computes expected next_interval on failure."""
+        cfg = AdapterConfiguration(
+            adapter_id="m2",
+            adapter_type="monitor",
+            enabled=True,
+            config={
+                "collection_mode": "pull",
+                "monitoring_targets": [
+                    {
+                        "system_id": "sysB",
+                        "connector_type": "c",
+                        "collection_interval": 5.0,
+                        "enabled": True,
+                        "config": {"failure_backoff": 2.5, "max_interval": 11.0},
+                    }
+                ]
+            },
+        )
+
+        adapter = MonitorAdapter(cfg, event_bus=event_bus, plugin_registry=mock_plugin_registry)
+        await adapter._validate_configuration()
+        await adapter._initialize_resources()
+
+        # Patch collection to return failure once
+        async def mock_collect(target):
+            return CollectionResult(
+                system_id=target.system_id,
+                metrics={},
+                timestamp=datetime.utcnow(),
+                success=False,
+            )
+
+        adapter._collect_target_metrics = mock_collect  # type: ignore
+
+        sleep_calls = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            raise asyncio.CancelledError()
+
+        target = adapter.get_monitoring_targets()["sysB"]
+        adapter._state = AdapterState.RUNNING
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            task = asyncio.create_task(adapter._collection_loop(target))
+            await task
+
+        # Expected next_interval = min(max_interval, base * failure_backoff) = min(11, 5*2.5) = 11
+        assert len(sleep_calls) == 1
+        assert abs(sleep_calls[0] - 11.0) < 1e-6
+
+
 
 
 if __name__ == "__main__":

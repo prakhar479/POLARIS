@@ -15,7 +15,7 @@ from enum import Enum
 
 from ..infrastructure.di import Injectable
 from ..infrastructure.exceptions import AdaptationError, PolarisException
-from ..framework.events import PolarisEventBus, EventMetadata
+from ..framework.events import PolarisEventBus
 
 logger = logging.getLogger(__name__)
 
