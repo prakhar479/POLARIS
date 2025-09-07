@@ -519,8 +519,6 @@ class PolarisAdapter(Injectable, ABC):
             if data:
                 event_data.update(data)
             
-            # For now, we'll log the event
-            # In task 5.2 and 5.3, we'll create specific event types
             logger.info(f"Adapter lifecycle event: {event_data}")
             
         except Exception as e:

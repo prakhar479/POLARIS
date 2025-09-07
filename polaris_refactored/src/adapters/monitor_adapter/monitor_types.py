@@ -1,8 +1,23 @@
 """
-Monitor Adapter Types
+This module defines dataclasses and enums that are used to configure monitoring
+targets and to represent the results of metric collection.
 
-This module provides dataclasses and enums for monitoring target configuration
-and collection results.
+The `MonitoringTarget` class is used to configure the monitoring of a specific
+managed system. It contains information about the system, such as its ID, the
+type of connector to use, the interval at which to collect metrics, and any
+additional configuration options.
+
+The `CollectionResult` class is used to represent the result of metric collection.
+It contains a timestamp indicating when the collection occurred, a list of
+`MetricValue` objects representing the metrics that were collected, and a reference
+to the target system being monitored.
+
+The `MetricCollectionMode` enum defines the different modes in which metrics can
+be collected, including "pull" (where the monitor actively collects metrics) and
+"push" (where metrics are received from the managed system).
+
+The `MetricValue` class represents a single metric value. It contains the name of
+the metric, its value, and a timestamp indicating when the value was collected.
 """
 import logging
 from typing import Dict, Any, List, Optional

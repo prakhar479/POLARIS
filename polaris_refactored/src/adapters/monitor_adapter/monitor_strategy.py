@@ -1,7 +1,10 @@
 """
 Monitor Adapter Strategy Implementation
 
-This module provides different strategies for collecting metrics from managed systems.
+Provides different strategies for collecting metrics from managed systems. This module
+defines the abstract base class `MetricCollectionStrategy` and implements several concrete
+strategies for metric collection. Strategies are implemented using the Strategy pattern
+and encapsulate the logic for collecting metrics.
 """
 
 import asyncio

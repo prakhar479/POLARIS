@@ -1,8 +1,10 @@
 """
 Monitor Adapter Implementation
 
-Comprehensive monitor adapter using Strategy pattern for metric collection
-with integration to the event system for telemetry publishing.
+This module implements the comprehensive monitor adapter, which utilizes the
+Strategy pattern for metric collection and integrates with the event system for
+telemetry publishing. The adapter provides a flexible and extensible system for
+collecting metrics from managed systems and publishing them to the event bus.
 """
 
 import asyncio

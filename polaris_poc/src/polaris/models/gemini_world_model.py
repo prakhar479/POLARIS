@@ -889,7 +889,6 @@ class GeminiWorldModel(WorldModel):
         else:
             return f"{base_summary} | System healthy"
     
-    # Enhanced state tracking methods for task 5.2
     
     def _normalize_metric_name(self, metric_name: str) -> str:
         """Normalize metric name to canonical form for consistent storage."""
@@ -1470,7 +1469,6 @@ class GeminiWorldModel(WorldModel):
             self.logger.warning(f"Failed to get temporal history: {str(e)}")
             return []
 
-    # Predictive Simulation Engine Implementation (Task 5.3)
     
     async def _simulate_forecast(self, request: SimulationRequest) -> tuple[list, float, tuple, str]:
         """Simulate forecast predictions using Gemini LLM reasoning.
