@@ -10,9 +10,11 @@ from .example_meta_learner import ExampleMetaLearnerAgent
 from .reasoner_agent import *
 from .llm_reasoner import *
 from .reasoner_core import *
+from .multi_agent_reasoner import *
 
 __all__ = ["BaseMetaLearnerAgent", "ExampleMetaLearnerAgent", "ReasonerAgent","ReasoningInterface", 
     "ReasoningContext", 
     "ReasoningResult", 
     "ReasoningType",
-    "LLMReasonerImplementation"]
+    "LLMReasonerImplementation",
+    "MultiAgentReasoner",]

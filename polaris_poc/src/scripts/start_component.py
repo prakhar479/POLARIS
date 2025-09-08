@@ -631,7 +631,7 @@ async def start_reasoner(args, config_path: Path):
         return
 
     # Build Reasoner
-    agent = create_llm_reasoner_agent("polaris_reasoner_001",config_path ,API_KEY, nats_url=None, logger=logger,)
+    agent = create_llm_reasoner_agent("polaris_reasoner_001",config_path ,API_KEY, nats_url=None, logger=logger,mode='llm')
 
     # Setup shutdown handling
     stop_event = asyncio.Event()
