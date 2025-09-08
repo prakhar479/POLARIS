@@ -664,7 +664,7 @@ class ReasonerAgent(NATSReasonerBase):
 
         ##short circuit for testing
         self.dt_query = None 
-        self.kb_query = None 
+        # self.kb_query = None 
         
         try:
             self.active_sessions[context.session_id] = context
@@ -693,19 +693,9 @@ class ReasonerAgent(NATSReasonerBase):
                 else:
                     reasoning_steps.append("Failed to get response from Digital Twin.")
             
-            search_terms = reasoning_impl.extract_search_terms(context)
-            knowledge_types = reasoning_impl.get_required_knowledge_types(context)
-            
-            reasoning_steps.append("Querying knowledge base for relevant information")
-            relevant_knowledge = []
-            if self.kb_query:
-                k_nl = await self.kb_query.query_natural_language(" ".join(search_terms))
-                k_struct = await self.kb_query.query_structured(knowledge_types)
-                relevant_knowledge = (k_nl or []) + (k_struct or [])
-                kb_queries += 2
             
             reasoning_steps.append(f"Executing {context.reasoning_type.value} reasoning logic")
-            result = await reasoning_impl.reason(context, relevant_knowledge)
+            result = await reasoning_impl.reason(context, None)
             
             reasoning_steps.append("Storing reasoning result")
             if self.kb_query:

@@ -10,6 +10,7 @@ import logging
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 from polaris.adapters.core import ExternalAdapter
 from polaris.models.telemetry import TelemetryEvent, TelemetryBatch
@@ -74,6 +75,8 @@ class MonitorAdapter(ExternalAdapter):
         self.telemetry_stream_subject = telemetry_config.get(
             "stream_subject", "polaris.telemetry.events.stream"
         )
+
+        self.telemetry_snapshot_subject = "polaris.telemetry.events.snapshot"
         self.telemetry_batch_subject = telemetry_config.get(
             "batch_subject", "polaris.telemetry.events.batch"
         )
@@ -392,6 +395,23 @@ class MonitorAdapter(ExternalAdapter):
                 )
                 break
         
+
+        current_state_metrics = {**base_metrics, **derived_metrics}
+        
+        # 2. Assemble the snapshot payload.
+        monitor_snapshot = {
+            "current_state": current_state_metrics,
+            # Note: The MonitorAdapter itself does not have the context for these fields.
+            # A higher-level reasoning component would calculate and add these.
+            "historical_trends": {},
+            "controller_state": {},
+            "snapshot_source": "MonitorAdapter",
+            "cycle_id": cycle_id
+        }
+        
+        # 3. Call the function to store this snapshot in the Knowledge Base.
+        await self.store_system_snapshot(monitor_snapshot)
+
         elapsed = time.perf_counter() - start_time
         self.logger.info(
             "Collection cycle completed",
@@ -603,3 +623,92 @@ class MonitorAdapter(ExternalAdapter):
             self._immediate_publish_tasks.clear()
         
         self.logger.info("Monitor processing stopped")
+
+    # Add this new method inside your MonitorAdapter class
+
+    # Add this import at the top of your file
+
+
+# ... (inside your LLMReasoningImplementation class or wherever you placed this logic) ...
+
+    async def store_system_snapshot(self, snapshot_payload: dict):
+
+        """
+        Stores a permanent, indexed system state snapshot in the KB, ensuring a unique entry_id.
+        """
+        if not self.knowledge_base:
+            return
+
+        try:
+            current_util = 0
+            
+            # --- THE KEY CHANGE IS HERE ---
+            # 1. Generate a new, unique ID for every snapshot.
+            snapshot_id = f"snapshot_{uuid.uuid4()}"
+            
+            summary = f"System Snapshot [{snapshot_id}]: Util={current_util}"
+
+            # 2. Create the KBEntry object, now including the unique entry_id.
+            #    (Assuming your KBEntry model accepts an 'entry_id' argument)
+            kb_entry = KBEntry(
+                entry_id=snapshot_id, # <--- Pass the unique ID here
+                data_type=KBDataType.OBSERVATION, # Using the workaround type
+                content=snapshot_payload,
+                source=f"{self.plugin_config['system_name']}_snapshotter",
+                tags=["snapshot", "llm_context", "permanent"],
+                metric_name="monitor.state.snapshot",
+                metric_value=current_util,
+                summary=summary
+            )
+            
+            ##publish to knowledge base
+            await self.nats_client.publish_json(
+                        "polaris.telemetry.events.snapshots",
+                        kb_entry.model_dump()
+                    )
+
+            self.logger.info(f"Fetching {self.knowledge_base.get(kb_entry.entry_id)}")
+            self.logger.info(f"Stored permanent snapshot entry {kb_entry} with utilization {current_util}.")
+            # The logger message from your example will now be triggered correctly.
+            # self.logger.info(f"Stored permanent entry {kb_entry.entry_id} of type {kb_entry.data_type}.")
+
+        except Exception as e:
+            self.logger.error(f"Failed to store snapshot entry: {e}", exc_info=True)
+
+
+    async def store_control_action(self, action_payload: dict):
+        """
+        Stores the last control action in the KB as a permanent observation.
+        """
+        if not self.knowledge_base:
+            return
+
+        try:
+            action_id = f"action_{uuid.uuid4()}"
+
+            summary = (
+                f"Control Action [{action_id}]: "
+                f"{action_payload.get('action_type')} at {action_payload.get('timestamp')}"
+            )
+
+            kb_entry = KBEntry(
+                entry_id=action_id,
+                data_type=KBDataType.OBSERVATION,
+                content=action_payload,
+                source="polaris.reasoning_engine",   # <- matches your query filter
+                tags=["control_action", "permanent"],
+                metric_name="control.action",
+                metric_value=1,  # or something meaningful like a cost/score
+                summary=summary,
+            )
+
+            # publish to KB via NATS (same way as snapshot)
+            await self.nats_client.publish_json(
+                "polaris.telemetry.events.actions",
+                kb_entry.model_dump()
+            )
+
+            self.logger.info(f"Stored control action entry {kb_entry.entry_id}: {kb_entry.summary}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to store control action entry: {e}", exc_info=True)

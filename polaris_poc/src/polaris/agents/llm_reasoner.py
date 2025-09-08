@@ -11,8 +11,6 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional, Union
 import logging
-import openai
-from openai import AsyncOpenAI
 from google import genai
 import google
 from pathlib import Path
@@ -25,6 +23,7 @@ from .reasoner_core import (
     ReasoningType,
 )
 
+from .reasoner_agent import KnowledgeQueryInterface
 from .reasoner_agent import ReasonerAgent
 from google.genai import types
 
@@ -35,9 +34,10 @@ class LLMReasoningImplementation(ReasoningInterface):
     def __init__(self, 
                  api_key: str,
                  reasoning_type: ReasoningType,
+                 kb_query_interface: Optional[KnowledgeQueryInterface] = None,
                  model: str = "gemini-2.5-flash",
                  max_tokens: int = 4096,
-                 temperature: float = 0.7,
+                 temperature: float = 0.5,
                  timeout: float = 30.0,
                  base_url: Optional[str] = None,
                  logger: Optional[logging.Logger] = None):
@@ -49,45 +49,47 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.temperature = temperature
         self.max_retries= 5
         self.timeout = timeout
+        self.initial_backoff = 2.0  # seconds
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
         self.logger.info(f"Initializing LLMReasoningImplementation with model {model}")
         # Initialize OpenAI client
         self.client = genai.Client(api_key=api_key)
-        
-        # Prompt templates - easily customizable
-        self.system_prompt_template = """You are an intelligent self adaptive system controller.
-Your task is to analyze telemetry data and generate appropriate control actions. You are a proactive reasoner, not handling sudden spikes but long term system goals. Dont take 
-actions too frequently, only when really needed. Dont make large changes, prefer small reversible actions.
 
-Context: {context_description}
-Reasoning Type: {reasoning_type}
-Current Timestamp: {timestamp}
+        # NEW: In-memory storage for the last action
+        self.last_action_memory: Optional[Dict[str, Any]] = None
 
-Guidelines:
-1. Analyze the provided telemetry data carefully
-2. Consider system state and trends
-3. Generate specific, actionable control decisions
-4. Provide clear reasoning for your decisions
-5. Output must be a valid JSON action format
+        self.kb_query = kb_query_interface
+        self.context_builder = ContextBuilder(self.logger)
+        self.system_prompt_template = """You are an intelligent self-adaptive system controller. Your task is to analyze telemetry data, evaluate the outcome of your last action, and generate the next control action. You are a proactive reasoner, aiming for long-term system stability and performance.
 
-Available Action Types:
-- SET_DIMMER: Control lighting dimmer values (0.0 to 1.0)
-- ADD_SERVER: Add server instance
-- REMOVE_SERVER: Remove server instance
-- NO_OP: No operation needed 
+System Goals & Constraints:
+- **Primary Goal:** Keep `response_time_ms_weighted` below the target.
+- **Secondary Goal:** Maximize user experience by keeping the `dimmer` as high as possible without violating the primary goal.
+- **Efficiency Goal:** Avoid using more servers than necessary. Remove servers if utilization is low and performance is healthy.
+- **Constraint:** Always respect `max_servers` and `min_servers`.
+- **Constraint:** Actions should be conservative. Avoid oscillating (e.g., adding then immediately removing a server).
 
-Output Format:
-{{
-    "action_id": "unique_action_id",
-    "action_type": "ACTION_TYPE",
-    "source": "llm_reasoner",
-    "params": {{"key": "value"}},
-    "priority": "low|normal|high"
+**REASONING PROCESS (Chain-of-Thought):**
 
-}}
+You MUST follow these steps in your reasoning process:
+1.  **Analysis:** Briefly summarize the current system state, focusing on key metrics compared to their targets (e.g., "Response time is 150ms, which is 50ms above the 100ms target.").
+2.  **Critique of Last Action:** Review the `feedback_on_last_action`. Was it successful, failed, or neutral? Explain why. This is the most important step for learning.
+3.  **Strategy Formulation:** Based on your analysis and critique, decide on a high-level strategy. Examples: "Aggressively reduce response time," "Slightly increase user experience," "Optimize costs," "Maintain current state."
+4.  **Action Selection:** Choose the single best action to implement your strategy, explaining your choice. (e.g., "The system is overloaded and the last dimmer change failed. The best action is to add a server.").
+5.  **Final JSON Output:** Generate the final JSON action. Follow the exact format. Don't deviate. Format involves following keys - action_type, source, action_id, params, priority. 
 
-Examples:
+**OUTPUT FORMAT:**
+You MUST provide your reasoning within a `<thinking>` block. After the block, provide the final JSON action in a `<json_output>` block.
 
+**EXAMPLE:**
+<thinking>
+* **Analysis:** Current response time is 250ms, far above the 100ms target. Utilization is critical at 98%. The trends show both metrics are worsening.
+* **Critique of Last Action:** The last action was `SET_DIMMER` to 0.6. The feedback indicates this action `FAILED` as response time continued to climb. This means load shedding is not enough.
+* **Strategy Formulation:** The system is critically overloaded. The strategy must be to `Aggressively increase capacity`.
+* **Action Selection:** The only action that increases capacity is `ADD_SERVER`. This will immediately address the high utilization and begin to lower the response time.
+* **Final JSON Output:** I will now generate the JSON for the ADD_SERVER action.
+</thinking>
+<json_output>
 {{
                     "action_type": "SET_DIMMER",
                     "source": "fast_controller",
@@ -111,25 +113,20 @@ Examples:
                     "params": {{"server_type": "compute", "count": 1}},
                     "priority": "low",
 }}
-
-
-
-
+</json_output>
 """
+        # Prompt templates - easily customizable
+        
+        self.user_prompt_template =  """Please analyze the following system state and generate an appropriate control action.
 
-        self.user_prompt_template = """Please analyze the following telemetry data and generate an appropriate control action:
-
-Telemetry Data:
+System State & Goals:
 {telemetry_data}
 
-Input Context:
-{input_data}
+Feedback on Your Last Action:
+{feedback}
 
-Additional Metadata:
-{metadata}
-
-Generate a control action based on this information. """
-        
+Follow the reasoning process and output format defined in your instructions.
+"""
         # Customizable fields
         self.custom_instructions = ""
         self.domain_context = ""
@@ -149,34 +146,64 @@ Generate a control action based on this information. """
         reasoning_steps = ["Starting LLM-based reasoning"]
         
         try:
-            # Prepare telemetry data from context
-            telemetry_data = self._extract_telemetry_data(context)
-            reasoning_steps.append(f"Extracted {len(telemetry_data)} telemetry points")
+            # 1. Perform KB queries needed for this specific reasoner
+            reasoning_steps.append("Querying KB for recent monitor snapshots.")
+            snapshots = await self.kb_query.query_structured(
+                data_types=["observation"],
+                filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
+                limit=120
+            )
             
-            # Build prompts
+
+            # self.logger.info(f"Retrieved {snapshots} snapshots from KB.")  
+            reasoning_steps.append("Querying KB for the last control action.")
+            # last_action_list = await self.kb_query.query_structured(
+            #     data_types=["observation"],
+            #     filters={"source": "polaris.reasoning_engine", "tags": ["control_action"]},
+            #     limit=1
+            # )
+            reasoning_steps.append("Retrieving last action from internal memory to critique.")
+            last_action = self.last_action_memory
+            
+            # 2. Build the rich context using its internal builder
+            reasoning_steps.append("Processing KB results with internal ContextBuilder.")
+            enriched_context_data = self.context_builder.build_context_from_kb_results(snapshots or [], last_action)
+            
+            # 3. Prepare prompts using the enriched context
+            telemetry_data = enriched_context_data # The payload is the telemetry
             system_prompt = self._build_system_prompt(context)
             user_prompt = self._build_user_prompt(context, telemetry_data)
-            reasoning_steps.append("Built LLM prompts")
+            reasoning_steps.append("Built LLM prompts with enriched context")
             
-            # Make LLM call
+            # 4. Call the LLM
             llm_response = await self._call_llm(system_prompt, user_prompt)
             reasoning_steps.append("Received LLM response")
             
-            # Parse and validate response
+            # 5. Parse and return the result
             action_result = self._parse_llm_response(llm_response)
             reasoning_steps.append("Parsed and validated LLM output")
+
+            if "error" not in action_result and action_result.get("action_type") != "ALERT":
+                reasoning_steps.append("Storing generated action in internal memory for future reflection.")
+                # The content must contain a timestamp, just like the KB version did
+                action_to_store = {
+                    'content': action_result.copy()
+                }
+                action_to_store['content']['timestamp'] = datetime.now(timezone.utc).isoformat()
+                self.last_action_memory = action_to_store
+                self.logger.info(f"Successfully stored action '{action_result['action_type']}' in internal memory.")
+
             
-            # Store call history for debugging
             self._store_call_history(context, system_prompt, user_prompt, llm_response, action_result)
             
             execution_time = time.time() - start_time
-            
             return ReasoningResult(
                 result=action_result,
                 confidence=action_result.get("confidence", 0.8),
                 reasoning_steps=reasoning_steps,
                 context=context,
-                execution_time=execution_time
+                execution_time=execution_time,
+                kb_queries_made=2 # We made 2 queries
             )
             
         except Exception as e:
@@ -256,7 +283,7 @@ Generate a control action based on this information. """
 
                                 Behavior: High utilization → exponential rise in response time; adding servers lowers per-server load but raises cost; lowering dimmer reduces load/response time.
 
-                                Thresholds: Critical utilization = 0.85, normal response time = 1.0, recommended servers ≈ arrival_rate/10.
+                                Thresholds:  normal response time = 1.0, recommended servers ≈ arrival_rate/10.
                                 
                                 ''')
         self.set_safety_constraints([
@@ -297,30 +324,31 @@ Generate a control action based on this information. """
         Extract and format telemetry data from context, with specific handling
         for the SWIM 'events' list structure.
         """
-        telemetry = {}
+        # telemetry = {}
 
-        # --- NEW LOGIC TO PARSE THE 'events' LIST ---
-        # Check if 'events' key exists and is a list in the input data
-        if "events" in context.input_data and isinstance(context.input_data["events"], list):
-            # Iterate through each event dictionary in the list
-            for event in context.input_data["events"]:
-                # Check if the event has a 'name' and 'value'
-                if "name" in event and "value" in event:
-                    # Add the metric to our telemetry dictionary.
-                    # If a metric appears multiple times, this will keep the latest one.
-                    telemetry[event["name"]] = event["value"]
+        # # --- NEW LOGIC TO PARSE THE 'events' LIST ---
+        # # Check if 'events' key exists and is a list in the input data
+        # if "events" in context.input_data and isinstance(context.input_data["events"], list):
+        #     # Iterate through each event dictionary in the list
+        #     for event in context.input_data["events"]:
+        #         # Check if the event has a 'name' and 'value'
+        #         if "name" in event and "value" in event:
+        #             # Add the metric to our telemetry dictionary.
+        #             # If a metric appears multiple times, this will keep the latest one.
+        #             telemetry[event["name"]] = event["value"]
 
-        # --- Keep old logic as a fallback for other data formats ---
-        # Direct telemetry data
-        if "telemetry" in context.input_data:
-            telemetry.update(context.input_data["telemetry"])
+        # # --- Keep old logic as a fallback for other data formats ---
+        # # Direct telemetry data
+        # if "telemetry" in context.input_data:
+        #     telemetry.update(context.input_data["telemetry"])
             
-        # Any other top-level numerical measurements
-        for key, value in context.input_data.items():
-            if key not in telemetry and isinstance(value, (int, float)):
-                telemetry[key] = value
+        # # Any other top-level numerical measurements
+        # for key, value in context.input_data.items():
+        #     if key not in telemetry and isinstance(value, (int, float)):
+        #         telemetry[key] = value
 
-        return telemetry
+        # return telemetry
+        return context.input_data
     
 
     def _build_system_prompt(self, context: ReasoningContext) -> str:
@@ -349,13 +377,13 @@ Generate a control action based on this information. """
         return base_prompt
     
     def _build_user_prompt(self, context: ReasoningContext, telemetry_data: Dict[str, Any]) -> str:
-        """Build the user prompt with telemetry data."""
+
+        feedback = telemetry_data.pop("feedback_on_last_action", {})
         return self.user_prompt_template.format(
             telemetry_data=json.dumps(telemetry_data, indent=2),
-            input_data=json.dumps(context.input_data, indent=2),
-            metadata=json.dumps(context.metadata or {}, indent=2)
+            feedback=json.dumps(feedback, indent=2)
         )
-    
+
  
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
@@ -365,6 +393,8 @@ Generate a control action based on this information. """
         
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
+
+        # self.logger.info(f"Making LLM call with prompt {full_prompt}")
 
         # self.logger.info(f"Making LLM call with prompt: {full_prompt}")
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=full_prompt)])]
@@ -421,47 +451,45 @@ Generate a control action based on this information. """
         raise Exception("LLM call failed after all retries.")
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """Parse and validate the LLM response."""
+        """Parse and validate the LLM response, expecting a <json_output> block."""
         try:
-            # Try to extract JSON from response
-            if "```json" in response:
-                json_start = response.find("```json") + 7
-                json_end = response.find("```", json_start)
+            # Look for the <json_output> block
+            if "<json_output>" in response:
+                json_start = response.find("<json_output>") + len("<json_output>")
+                json_end = response.find("</json_output>", json_start)
+                if json_end == -1:
+                    raise ValueError("Found <json_output> but no closing </json_output> tag.")
                 json_str = response[json_start:json_end].strip()
-            elif "{" in response and "}" in response:
-                json_start = response.find("{")
-                json_end = response.rfind("}") + 1
-                json_str = response[json_start:json_end]
             else:
-                raise ValueError("No JSON found in response")
-            
+                # Fallback for cases where the model might forget the tags
+                self.logger.warning("LLM response did not contain <json_output> tags. Falling back to extracting first JSON object.")
+                if "{" in response and "}" in response:
+                    json_start = response.find("{")
+                    json_end = response.rfind("}") + 1
+                    json_str = response[json_start:json_end]
+                else:
+                    raise ValueError("No JSON object found in response")
+
             action = json.loads(json_str)
             
             # Validate required fields
             required_fields = ["action_type", "source", "params","action_id"]
             for field in required_fields:
                 if field not in action:
-                    raise ValueError(f"Missing required field: {field}")
+                    raise ValueError(f"Missing required field in parsed JSON: {field}")
             
-            # Add default values
-            # action.setdefault("reasoning", "LLM-generated action")
-            # action.setdefault("confidence", 0.8)
             action.setdefault("source", "llm_reasoner")
-            action.setdefault("action_id", f"llm_{int(time.time())}")
             
             return action
             
         except Exception as e:
-            self.logger.error(f"Failed to parse LLM response: {e}")
-            # Return a safe fallback action
+            self.logger.error(f"Failed to parse LLM response: {e}. Response was: {response}")
             return {
                 "action_type": "ALERT",
-                "target": "system",
+                "source": "llm_reasoner_parser",
                 "params": {"message": f"Failed to parse LLM response: {e}"},
-                "source": "llm_reasoner",
                 "action_id": f"fallback_{int(time.time())}"
             }
-    
     def _store_call_history(self, context: ReasoningContext, system_prompt: str, 
                            user_prompt: str, llm_response: str, parsed_result: Dict[str, Any]):
         """Store call history for debugging and improvement."""
@@ -486,16 +514,20 @@ Generate a control action based on this information. """
 def create_llm_reasoner_agent(agent_id: str,
                              config_path: str,
                              llm_api_key: str,
+
                              nats_url: Optional[str] = None,
-                             logger: Optional[logging.Logger] = None) -> 'ReasonerAgent':
+                             logger: Optional[logging.Logger] = None,
+                             mode='llm') -> 'ReasonerAgent':
     """
     Create a reasoner agent with LLM-based reasoning implementations.
+    This factory correctly injects the agent's knowledge base query interface
+    into the LLM reasoner for its own specialized data processing.
     
     Usage:
         agent = create_llm_reasoner_agent(
             agent_id="smart_reasoner",
             config_path="config.yaml", 
-            llm_api_key="your-openai-key"
+            llm_api_key="your-gemini-key"
         )
         
         # Customize prompts
@@ -504,26 +536,220 @@ def create_llm_reasoner_agent(agent_id: str,
         llm_reasoner.add_safety_constraint("Never exceed 80% server capacity")
     """
     from .reasoner_agent import ReasonerAgent, ReasoningType
-    
-    reasoning_implementations = {}
-    
-    # Create LLM reasoners for all reasoning types
-    for reasoning_type in ReasoningType:
-        llm_reasoner = LLMReasoningImplementation(
-            api_key=llm_api_key,
-            reasoning_type=reasoning_type,
-            logger=logger
-        )
-        
-        # Configure with basic settings
-        llm_reasoner.configure_basic()
-        
-        reasoning_implementations[reasoning_type] = llm_reasoner
-    
-    return ReasonerAgent(
+    # This import is now needed here
+    from .llm_reasoner import LLMReasoningImplementation
+    from .multi_agent_reasoner import MultiAgentReasoner
+
+    # Step 1: Create the agent instance first, with an empty set of implementations.
+    # Its __init__ method will create and own the self.kb_query interface.
+    agent = ReasonerAgent(
         agent_id=agent_id,
-        reasoning_implementations=reasoning_implementations,
+        reasoning_implementations={}, # Start with an empty dictionary
         config_path=config_path,
         nats_url=nats_url,
         logger=logger
     )
+    
+    # Step 2: Create the LLM reasoners for all reasoning types and inject the dependency.
+    for reasoning_type in ReasoningType:
+
+
+        if mode == 'multi':
+            llm_reasoner = MultiAgentReasoner(
+                api_key=llm_api_key,
+                reasoning_type=reasoning_type,
+                # This is the crucial dependency injection step:
+                kb_query_interface=agent.kb_query,
+                logger=logger
+            )
+            agent.add_reasoning_implementation(reasoning_type, llm_reasoner)
+        else:
+            llm_reasoner = LLMReasoningImplementation(
+                api_key=llm_api_key,
+                reasoning_type=reasoning_type,
+                # This is the crucial dependency injection step:
+                kb_query_interface=agent.kb_query,
+                logger=logger
+            )
+        
+        # Configure with basic settings
+        llm_reasoner.configure_basic()
+        
+        # Step 3: Add the fully configured implementation back into the agent.
+        agent.add_reasoning_implementation(reasoning_type, llm_reasoner)
+    
+    # Return the fully assembled and configured agent
+    return agent
+
+
+from datetime import datetime, timezone
+
+class ContextBuilder:
+    """
+    Processes lists of KB entries (snapshots, actions) to build the
+    rich context payload required by the LLM.
+    """
+
+    def __init__(self,logger) -> None:
+        self.logger = logger or logging.getLogger("ContextBuilder")
+
+    def calculate_ewma(self, data: List[float], alpha: float = 0.5) -> Optional[float]:
+        if not data: return None
+        ewma = data[0]
+        for value in data[1:]:
+            ewma = alpha * value + (1 - alpha) * ewma
+        return ewma
+
+    def calculate_rate_of_change(self, sorted_snapshots: List[Dict[str, Any]], metric: str, time_window_seconds: int = 300) -> Optional[str]:
+        if len(sorted_snapshots) < 2: return None
+        
+        # We need to extract the value and timestamp for the given metric
+        # from each snapshot's 'content' field.
+        time_series = []
+        for s in sorted_snapshots:
+            if metric in s['content']['content']['current_state']:
+                time_series.append({
+                    "timestamp": s['timestamp'],
+                    "value": s['content']['content']['current_state'][metric]
+                })
+        
+        if len(time_series) < 2: return None
+
+        latest_point = time_series[-1]
+        # self.logger.info(f"Calculating rate of change for {metric} using latest point: {latest_point}")
+        past_timestamp_limit = datetime.fromisoformat(latest_point["timestamp"]).timestamp() - time_window_seconds
+
+
+        
+        reference_point = time_series[0]
+        for point in time_series:
+            if datetime.fromisoformat(point["timestamp"]).timestamp() >= past_timestamp_limit:
+                reference_point = point
+                break
+        
+        time_diff_seconds = datetime.fromisoformat(latest_point["timestamp"]).timestamp() - datetime.fromisoformat(reference_point["timestamp"]).timestamp()
+        if time_diff_seconds < 1: return "+0.00/min"
+        
+        value_diff = latest_point["value"] - reference_point["value"]
+        rate_per_minute = (value_diff / time_diff_seconds) * 60
+        return f"{rate_per_minute:+.2f}/min"
+
+    def build_context_from_kb_results(self, snapshots: List[Dict[str, Any]], last_action: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        The main method to transform raw KB results into the final context payload.
+        """
+        if not snapshots:
+            return {"error": "No recent snapshots found in the Knowledge Base."}
+
+        # Sort snapshots by timestamp just in case they are out of order
+        sorted_snapshots = sorted(snapshots, key=lambda s: s['timestamp'])
+        latest_snapshot = sorted_snapshots[-1]['content']['content']
+
+        # 1. Get the Current State from the latest snapshot
+        current_state = latest_snapshot.get('current_state', {})
+        
+        # 2. Calculate Historical Trends across all snapshots
+        historical_trends = {}
+
+        # Identify all unique metrics across the snapshots to calculate trends for
+        
+        
+        all_metrics = set(
+            k
+            for s in sorted_snapshots
+            for k in s.get("content", {}).get("content", {}).get("current_state", {}).keys()
+        )
+
+        
+        for metric in all_metrics:
+            # Create a time series of values for the current metric
+            values = [
+                        s["content"]["content"]["current_state"][metric]
+                        for s in sorted_snapshots
+                        if "content" in s and "content" in s["content"] and metric in s["content"]["content"].get("current_state", {})
+                    ]
+
+            
+            ewma = self.calculate_ewma(values)
+            roc = self.calculate_rate_of_change(sorted_snapshots, metric)
+            
+            historical_trends[metric] = {
+                "5min_avg_ewma": round(ewma, 4) if ewma is not None else None,
+                "5min_rate_of_change": roc
+            }
+
+        # 3. Process the Controller State from the last action
+        controller_state = {}
+        if last_action:
+            action_content = last_action['content']
+            action_time = datetime.fromisoformat(action_content["timestamp"])
+            minutes_since = (datetime.now(timezone.utc) - action_time).total_seconds() / 60
+            controller_state = {
+                "last_action": {
+                    "timestamp": action_content["timestamp"],
+                    "action_type": action_content["action_type"]
+                },
+                "minutes_since_last_action": round(minutes_since, 2)
+            }
+        else:
+            controller_state = {"last_action": None, "minutes_since_last_action": 9999}
+            
+
+        # NEW: Feedback loop logic
+        feedback_on_last_action = {"evaluation": "No recent action to evaluate."}
+        if last_action and len(sorted_snapshots) > 1:
+            action_time_ts = datetime.fromisoformat(last_action['content']['timestamp']).timestamp()
+            pre_action_snapshot = next((s for s in reversed(sorted_snapshots) if datetime.fromisoformat(s['timestamp']).timestamp() < action_time_ts), None)
+
+            if pre_action_snapshot:
+                pre_state = pre_action_snapshot['content']['content']['current_state']
+                
+                rt_before = pre_state.get('response_time_ms_weighted', 0)
+                rt_after = current_state.get('response_time_ms_weighted', 0)
+                rt_change = rt_after - rt_before
+
+                util_before = pre_state.get('utilization', 0)
+                util_after = current_state.get('utilization', 0)
+                util_change = util_after - util_before
+
+                # Define simple evaluation criteria
+                evaluation = "NEUTRAL"
+                rt_improvement_threshold = -10.0 # Must decrease by at least 10ms
+                if rt_change < rt_improvement_threshold:
+                    evaluation = "SUCCESSFUL"
+                elif rt_change > abs(rt_improvement_threshold):
+                    evaluation = "FAILED"
+
+                feedback_on_last_action = {
+                    "action_taken": last_action['content']['action_type'],
+                    "params": last_action['content'].get('params', {}),
+                    "evaluation": evaluation,
+                    "outcome_details": f"Response time changed by {rt_change:+.2f}ms (from {rt_before:.2f} to {rt_after:.2f}). Utilization changed by {util_change*100:+.1f}%."
+                }
+                self.logger.info(f"Generated feedback for last action: {feedback_on_last_action}")
+
+        # MODIFIED: Goals are now more specific and quantitative
+        system_goals_and_constraints = {
+            "goals": {
+                "target_response_time_ms_weighted": 100.0,
+                "target_utilization_min_for_scale_down": 0.40,
+            },
+            "constraints": {
+                "max_servers": 3, 
+                "min_servers": 1,
+                "cooldown_period_minutes": 5,
+            }
+        }
+        
+        # 4. Define Goals and Constraints (can be loaded from config)
+        system_goals_and_constraints = {
+            "goals": {"target_utilization": 0.85},
+            "constraints": {"max_servers": 3, "cooldown_period_minutes": 5}
+        }
+            
+        return {
+            "current_state": current_state,
+            "historical_trends": historical_trends,
+            "controller_state": controller_state,
+            "system_goals_and_constraints": system_goals_and_constraints
+        }

@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import signal
+import uuid
 import time
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -54,7 +55,7 @@ class KnowledgeBaseService:
         self.logger = logger or logging.getLogger(__name__)
 
         # Knowledge base instance
-        self.kb = InMemoryKnowledgeBase(telemetry_buffer_size=telemetry_buffer_size)
+        self.kb = InMemoryKnowledgeBase(logger=self.logger,telemetry_buffer_size=telemetry_buffer_size)
 
         # NATS client
         self.nats_client: Optional[NATS] = None
@@ -83,6 +84,8 @@ class KnowledgeBaseService:
             # Subscribe to query requests
             await self._subscribe_queries()
 
+
+
             self.running = True
             self.logger.info("✅ Knowledge Base Service started successfully")
 
@@ -106,6 +109,10 @@ class KnowledgeBaseService:
         # Subscribe to individual telemetry events
         await self.nats_client.subscribe(
             "polaris.telemetry.events.stream", cb=self._handle_telemetry_event
+        )
+
+        await self.nats_client.subscribe(
+            "polaris.telemetry.events.snapshots", cb=self._handle_telemetry_snapshots
         )
 
         # Subscribe to batch telemetry events
@@ -155,6 +162,44 @@ class KnowledgeBaseService:
         except Exception as e:
             self.logger.error(f"❌ Error processing telemetry event: {e}")
 
+    async def _handle_telemetry_snapshots(self, msg):
+        """Handle telemetry snapshot events from NATS."""
+        try:
+            snapshot_payload = json.loads(msg.data.decode())
+
+            # Extract utilization (fallback to 0.0)
+            current_util = snapshot_payload.get("current_state", {}).get("server_utilization", 0.0)
+
+            # Generate a unique snapshot ID
+            snapshot_id = f"snapshot_{uuid.uuid4()}"
+
+            # Create a summary string
+            summary = f"System Snapshot [{snapshot_id}]: Util={current_util}"
+
+            # Build KBEntry from snapshot
+            kb_entry = KBEntry(
+                entry_id=snapshot_id,
+                data_type=KBDataType.OBSERVATION,
+                content=snapshot_payload,
+                source=snapshot_payload.get("snapshot_source", "unknown_snapshotter"),
+                tags=["snapshot", "llm_context", "permanent"],
+                metric_name="monitor.state.snapshot",
+                metric_value=current_util,
+                summary=summary,
+            )
+
+            # Store in knowledge base
+            self.kb.store(kb_entry)
+            self.stats["events_processed"] += 1
+            self.stats["last_event_time"] = time.time()
+
+            self.logger.debug(f"📸 Processed snapshot {snapshot_id} with utilization {current_util}")
+
+        except Exception as e:
+            self.logger.error(f"❌ Error processing telemetry snapshot: {e}")
+
+
+
     async def _handle_telemetry_batch(self, msg):
         """Handle batch telemetry events from NATS."""
         try:
@@ -189,7 +234,7 @@ class KnowledgeBaseService:
             # Parse query from message
             query_data = json.loads(msg.data.decode())
             query = KBQuery(**query_data)
-
+            self.logger.debug(f"🔍 Received query: {query}")
             # Execute query
             response = self.kb.query(query)
 

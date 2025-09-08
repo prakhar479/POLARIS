@@ -208,18 +208,26 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         Stores an entry. If it's a RAW_TELEMETRY_EVENT, it's buffered for later
         aggregation. Otherwise, it's stored permanently and indexed.
         """
+
+        # self.logger.info("Storing entry: %s", entry)
+
         if entry.data_type == KBDataType.RAW_TELEMETRY_EVENT:
             return self._handle_raw_telemetry(entry)
 
         # Original logic for all other permanent data types
         try:
             if entry.entry_id in self._entries:
+                self.logger.info("Found existing entry, updating: %s", entry.entry_id)
                 old_entry = self._entries[entry.entry_id]
+                self.logger.info("Old entry: %s", old_entry)
                 self._remove_from_indexes(old_entry)
+                self.logger.info("Removed old entry from indexes.")
 
             self._entries[entry.entry_id] = entry
+            self.logger.info("Added/Updated entry in main storage.")
             self._add_to_indexes(entry)
-            self.logger.debug(
+            self.logger.info("Added/Updated entry in indexes.")
+            self.logger.info(
                 f"Stored permanent entry {entry.entry_id} of type {entry.data_type}."
             )
             return True
@@ -262,7 +270,9 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
             total_results = len(results)
             paginated_results = results[query.offset : query.offset + query.limit]
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
-
+            self.logger.info(
+                f"Query {query} returned {len(paginated_results)} of {total_results} total results in {processing_time:.2f} ms."
+            )
             return KBResponse(
                 query_id=query.query_id,
                 success=True,
