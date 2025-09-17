@@ -26,9 +26,7 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
     it into a permanent OBSERVATION entry when the buffer is full.
     """
 
-    def __init__(
-        self, logger: Optional[logging.Logger] = None, telemetry_buffer_size: int = 50
-    ):
+    def __init__(self, logger: Optional[logging.Logger] = None, telemetry_buffer_size: int = 50):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         # Permanent storage for processed/explicit knowledge
         self._entries: Dict[str, KBEntry] = {}
@@ -91,14 +89,10 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         for keyword in keywords_to_check:
             self._keyword_index[keyword].remove(entry_id)
 
-    def _aggregate_and_store_buffer(
-        self, buffer_key: Tuple[str, str], events: List[KBEntry]
-    ):
+    def _aggregate_and_store_buffer(self, buffer_key: Tuple[str, str], events: List[KBEntry]):
         """Calculates stats from a buffer and updates or creates an OBSERVATION entry with trend info."""
         metric_name, source = buffer_key
-        values = [
-            e.metric_value for e in events if isinstance(e.metric_value, (int, float))
-        ]
+        values = [e.metric_value for e in events if isinstance(e.metric_value, (int, float))]
         if not values:
             return
 
@@ -109,9 +103,7 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         max_val = max(values)
 
         # Look for existing observation entry
-        observation_id = f"obs_{metric_name}_{source}".replace(".", "_").replace(
-            " ", "_"
-        )
+        observation_id = f"obs_{metric_name}_{source}".replace(".", "_").replace(" ", "_")
         existing_entry = self._entries.get(observation_id)
 
         if existing_entry:
@@ -143,6 +135,8 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
                     "time_window_end": events[-1].timestamp,
                 }
             )
+            # Keep a simple numeric value for quick views
+            existing_entry.metric_value = current_avg
 
             existing_entry.summary = (
                 f"Updated metric '{metric_name}' from '{source}' (#{total_updates}). "
@@ -164,6 +158,7 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
                 summary=summary,
                 metric_name=metric_name,
                 source=source,
+                metric_value=current_avg,
                 content={
                     "statistic": "aggregation",
                     "count": count,
@@ -227,14 +222,10 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
             self.logger.info("Added/Updated entry in main storage.")
             self._add_to_indexes(entry)
             self.logger.info("Added/Updated entry in indexes.")
-            self.logger.info(
-                f"Stored permanent entry {entry.entry_id} of type {entry.data_type}."
-            )
+            self.logger.info(f"Stored permanent entry {entry.entry_id} of type {entry.data_type}.")
             return True
         except Exception as e:
-            self.logger.error(
-                f"Failed to store entry {entry.entry_id}: {e}", exc_info=True
-            )
+            self.logger.error(f"Failed to store entry {entry.entry_id}: {e}", exc_info=True)
             return False
 
     def get(self, entry_id: str) -> Optional[KBEntry]:
@@ -354,14 +345,10 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
 
     def get_stats(self) -> Dict[str, Any]:
         """Retrieves statistics about the knowledge base store and buffers."""
-        total_buffered_events = sum(
-            len(buf) for buf in self._raw_telemetry_buffers.values()
-        )
+        total_buffered_events = sum(len(buf) for buf in self._raw_telemetry_buffers.values())
         return {
             "total_permanent_entries": len(self._entries),
-            "data_type_counts": {
-                k.value: len(v) for k, v in self._data_type_index.items() if v
-            },
+            "data_type_counts": {k.value: len(v) for k, v in self._data_type_index.items() if v},
             "unique_tags": len(self._tag_index),
             "indexed_keywords": len(self._keyword_index),
             "active_telemetry_buffers": len(self._raw_telemetry_buffers),

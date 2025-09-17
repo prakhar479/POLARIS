@@ -34,6 +34,7 @@ class ActionPriority(str, Enum):
     """Priority levels for control actions."""
     LOW = "low"
     NORMAL = "normal"
+    MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
