@@ -2,19 +2,20 @@
 Adaptive Controller Implementation
 
 Implements the Adaptive Controller with a MAPE-K (Monitor-Analyze-Plan-Execute with Knowledge) loop
-and pluggable control strategies. This component is responsible for:
+and pluggable control strategies with comprehensive observability. This component is responsible for:
 - Monitoring system telemetry
 - Analyzing the need for adaptation
 - Planning appropriate adaptation actions
 - Executing the adaptation process
 - Maintaining knowledge for future decisions
+- Full observability integration (logging, metrics, tracing)
 
 Key Components:
-- MAPE-K loop implementation
+- MAPE-K loop implementation with tracing
 - Pluggable control strategies (Reactive, Predictive, Learning)
-- Telemetry processing pipeline
-- Adaptation need assessment
-- Strategy selection and execution
+- Telemetry processing pipeline with metrics
+- Adaptation need assessment with logging
+- Strategy selection and execution with observability
 """
 
 
@@ -24,6 +25,10 @@ from typing import List, Dict, Any, Optional
 from ..domain.models import AdaptationAction, SystemState, HealthStatus
 from ..framework.events import TelemetryEvent, AdaptationEvent
 from ..infrastructure.di import Injectable
+from ..infrastructure.observability import (
+    observe_polaris_component, trace_adaptation_flow, get_logger,
+    get_metrics_collector, get_tracer
+)
 from ..digital_twin.world_model import PolarisWorldModel
 from ..digital_twin.world_model import PredictionResult, SimulationResult
 from ..digital_twin.knowledge_base import PolarisKnowledgeBase
@@ -230,6 +235,7 @@ class LearningControlStrategy(ControlStrategy):
         return actions
 
 
+@observe_polaris_component("adaptive_controller", auto_trace=True, auto_metrics=True, log_method_calls=True)
 class PolarisAdaptiveController:
     """POLARIS Adaptive Controller implementing the MAPE-K (Monitor-Analyze-Plan-Execute with Knowledge) loop.
     
@@ -251,6 +257,7 @@ class PolarisAdaptiveController:
     - Asynchronous processing
     - Comprehensive telemetry handling
     - Extensible design for custom strategies
+    - Full observability integration (logging, metrics, tracing)
     """
     
     def __init__(
@@ -260,6 +267,11 @@ class PolarisAdaptiveController:
         knowledge_base: Optional[PolarisKnowledgeBase] = None,
         event_bus: Optional[PolarisEventBus] = None,
     ):
+        # Observability integration
+        self.logger = get_logger("polaris.adaptive_controller")
+        self.metrics = get_metrics_collector()
+        self.tracer = get_tracer()
+        
         # Dependencies
         self._world_model: Optional[PolarisWorldModel] = world_model
         self._kb: Optional[PolarisKnowledgeBase] = knowledge_base
@@ -272,26 +284,71 @@ class PolarisAdaptiveController:
             LearningControlStrategy(knowledge_base=knowledge_base),
         ]
         self._control_strategies = control_strategies or default_strategies
+        
+        self.logger.info("Adaptive controller initialized", extra={
+            "strategies_count": len(self._control_strategies),
+            "world_model_available": self._world_model is not None,
+            "knowledge_base_available": self._kb is not None,
+            "event_bus_available": self._event_bus is not None
+        })
     
+    @trace_adaptation_flow("telemetry_processing")
     async def process_telemetry(self, telemetry: TelemetryEvent) -> None:
         """Process incoming telemetry and trigger adaptations if needed."""
+        system_id = telemetry.system_state.system_id
+        
+        self.logger.debug("Processing telemetry", extra={
+            "system_id": system_id,
+            "health_status": telemetry.system_state.health_status.value,
+            "metrics_count": len(telemetry.system_state.metrics)
+        })
+        
         # Monitor: update world model and optionally store in KB
         if self._world_model:
             try:
-                await self._world_model.update_system_state(telemetry)
-            except Exception:
-                # Best-effort update; do not fail the controller
-                pass
+                with self.tracer.trace_operation("world_model_update"):
+                    await self._world_model.update_system_state(telemetry)
+                self.logger.debug("World model updated", extra={"system_id": system_id})
+            except Exception as e:
+                self.logger.warning("Failed to update world model", extra={
+                    "system_id": system_id,
+                    "error": str(e)
+                }, exc_info=e)
+        
         if self._kb:
             try:
-                await self._kb.store_telemetry(telemetry)
-            except Exception:
-                pass
+                with self.tracer.trace_operation("knowledge_base_store"):
+                    await self._kb.store_telemetry(telemetry)
+                self.logger.debug("Telemetry stored in knowledge base", extra={"system_id": system_id})
+            except Exception as e:
+                self.logger.warning("Failed to store telemetry in knowledge base", extra={
+                    "system_id": system_id,
+                    "error": str(e)
+                }, exc_info=e)
 
         # Analyze: assess need
-        adaptation_need = await self.assess_adaptation_need(telemetry)
+        with self.tracer.trace_operation("adaptation_need_assessment"):
+            adaptation_need = await self.assess_adaptation_need(telemetry)
+        
         if not adaptation_need.is_needed:
+            self.logger.debug("No adaptation needed", extra={
+                "system_id": system_id,
+                "reason": adaptation_need.reason
+            })
             return
+        
+        self.logger.info("Adaptation needed", extra={
+            "system_id": system_id,
+            "reason": adaptation_need.reason,
+            "urgency": adaptation_need.urgency
+        })
+        
+        # Update metrics
+        self.metrics.increment_adaptations_triggered(
+            system_id, 
+            "telemetry_driven", 
+            adaptation_need.reason
+        )
 
         # Plan & Execute trigger
         await self.trigger_adaptation_process(adaptation_need, telemetry.system_state)

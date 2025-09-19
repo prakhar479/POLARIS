@@ -9,7 +9,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, List, Optional, Dict
 import asyncio
 import json
+import gzip
+import logging
 from datetime import datetime, timezone
+
+import nats
+from nats.aio.client import Client as NATS
 
 from ..domain.interfaces import EventHandler
 from .exceptions import EventBusError
@@ -97,6 +102,44 @@ class MetricsMiddleware(Middleware):
         return message
 
 
+class CompressionMiddleware(Middleware):
+    """Middleware for compressing/decompressing messages."""
+    
+    def __init__(self, compression_threshold: int = 1024):
+        """
+        Initialize compression middleware.
+        
+        Args:
+            compression_threshold: Minimum message size in bytes to trigger compression
+        """
+        self.compression_threshold = compression_threshold
+    
+    async def process_outbound(self, topic: str, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Compress message if it exceeds threshold."""
+        message_str = json.dumps(message)
+        message_bytes = message_str.encode('utf-8')
+        
+        if len(message_bytes) >= self.compression_threshold:
+            compressed_data = gzip.compress(message_bytes)
+            return {
+                "_compressed": True,
+                "_original_size": len(message_bytes),
+                "_compressed_size": len(compressed_data),
+                "data": compressed_data.hex()  # Convert to hex for JSON serialization
+            }
+        
+        return message
+    
+    async def process_inbound(self, topic: str, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Decompress message if it was compressed."""
+        if message.get("_compressed"):
+            compressed_data = bytes.fromhex(message["data"])
+            decompressed_bytes = gzip.decompress(compressed_data)
+            return json.loads(decompressed_bytes.decode('utf-8'))
+        
+        return message
+
+
 class MiddlewareChain:
     """Chain of middleware for processing messages."""
     
@@ -114,6 +157,121 @@ class MiddlewareChain:
         for middleware in reversed(self.middleware_list):
             message = await middleware.process_inbound(topic, message)
         return message
+
+
+class NATSMessageBroker(MessageBroker):
+    """NATS message broker implementation."""
+    
+    def __init__(
+        self,
+        servers: List[str] = None,
+        name: str = "polaris-message-bus",
+        max_reconnect_attempts: int = 10,
+        reconnect_time_wait: int = 2
+    ):
+        """
+        Initialize NATS message broker.
+        
+        Args:
+            servers: List of NATS server URLs
+            name: Client name for identification
+            max_reconnect_attempts: Maximum reconnection attempts
+            reconnect_time_wait: Time to wait between reconnection attempts
+        """
+        self.servers = servers or ["nats://localhost:4222"]
+        self.name = name
+        self.max_reconnect_attempts = max_reconnect_attempts
+        self.reconnect_time_wait = reconnect_time_wait
+        self.nc: Optional[NATS] = None
+        self._subscriptions: Dict[str, Any] = {}
+        self.logger = logging.getLogger(__name__)
+    
+    async def connect(self) -> None:
+        """Connect to NATS server."""
+        try:
+            self.nc = await nats.connect(
+                servers=self.servers,
+                name=self.name,
+                max_reconnect_attempts=self.max_reconnect_attempts,
+                reconnect_time_wait=self.reconnect_time_wait,
+                error_cb=self._error_callback,
+                disconnected_cb=self._disconnected_callback,
+                reconnected_cb=self._reconnected_callback
+            )
+            self.logger.info(f"Connected to NATS servers: {self.servers}")
+        except Exception as e:
+            raise EventBusError(f"Failed to connect to NATS: {e}", cause=e)
+    
+    async def disconnect(self) -> None:
+        """Disconnect from NATS server."""
+        if self.nc:
+            try:
+                # Unsubscribe from all subscriptions
+                for sub in self._subscriptions.values():
+                    await sub.unsubscribe()
+                self._subscriptions.clear()
+                
+                await self.nc.close()
+                self.logger.info("Disconnected from NATS")
+            except Exception as e:
+                raise EventBusError(f"Failed to disconnect from NATS: {e}", cause=e)
+            finally:
+                self.nc = None
+    
+    async def publish(self, topic: str, message: bytes) -> None:
+        """Publish a message to a topic."""
+        if not self.nc:
+            raise EventBusError("NATS client is not connected")
+        
+        try:
+            await self.nc.publish(topic, message)
+        except Exception as e:
+            raise EventBusError(f"Failed to publish to topic '{topic}': {e}", cause=e)
+    
+    async def subscribe(self, topic: str, handler: Callable[[bytes], None]) -> str:
+        """Subscribe to a topic and return subscription ID."""
+        if not self.nc:
+            raise EventBusError("NATS client is not connected")
+        
+        try:
+            async def message_handler(msg):
+                try:
+                    await handler(msg.data)
+                except Exception as e:
+                    self.logger.error(f"Error handling message on topic '{topic}': {e}")
+            
+            sub = await self.nc.subscribe(topic, cb=message_handler)
+            subscription_id = f"{topic}_{id(sub)}"
+            self._subscriptions[subscription_id] = sub
+            
+            self.logger.debug(f"Subscribed to topic '{topic}' with ID '{subscription_id}'")
+            return subscription_id
+            
+        except Exception as e:
+            raise EventBusError(f"Failed to subscribe to topic '{topic}': {e}", cause=e)
+    
+    async def unsubscribe(self, subscription_id: str) -> None:
+        """Unsubscribe from a topic."""
+        if subscription_id in self._subscriptions:
+            try:
+                sub = self._subscriptions[subscription_id]
+                await sub.unsubscribe()
+                del self._subscriptions[subscription_id]
+                self.logger.debug(f"Unsubscribed from subscription '{subscription_id}'")
+            except Exception as e:
+                raise EventBusError(f"Failed to unsubscribe '{subscription_id}': {e}", cause=e)
+    
+    async def _error_callback(self, e):
+        """Handle NATS connection errors."""
+        self.logger.error(f"NATS connection error: {e}")
+    
+    async def _disconnected_callback(self):
+        """Handle NATS disconnection."""
+        self.logger.warning("Disconnected from NATS server")
+    
+    async def _reconnected_callback(self):
+        """Handle NATS reconnection."""
+        self.logger.info("Reconnected to NATS server")
 
 
 class PolarisMessageBus(Injectable):
@@ -190,6 +348,18 @@ class PolarisMessageBus(Injectable):
                 cause=e
             )
     
+    async def publish_telemetry(self, telemetry_event: Any) -> None:
+        """Publish a telemetry event to the telemetry topic."""
+        await self.publish("polaris.telemetry", telemetry_event)
+    
+    async def publish_adaptation_needed(self, adaptation_event: Any) -> None:
+        """Publish an adaptation needed event to the adaptation topic."""
+        await self.publish("polaris.adaptation", adaptation_event)
+    
+    async def publish_execution_result(self, result_event: Any) -> None:
+        """Publish an execution result event to the execution topic."""
+        await self.publish("polaris.execution", result_event)
+    
     async def subscribe(self, topic: str, handler: EventHandler) -> None:
         """Subscribe to a topic with an event handler."""
         if not self._connected:
@@ -252,6 +422,11 @@ class PolarisMessageBus(Injectable):
     
     def _event_to_message(self, event: Any) -> Dict[str, Any]:
         """Convert an event object to a message dictionary."""
+        # Check if it's a POLARIS event with to_dict method
+        if hasattr(event, 'to_dict') and callable(getattr(event, 'to_dict')):
+            return event.to_dict()
+        
+        # Fallback to generic serialization
         message = {
             "type": type(event).__name__,
             "timestamp": datetime.now(timezone.utc).isoformat(),

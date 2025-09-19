@@ -2,11 +2,11 @@
 Base Adapter Implementation
 
 Comprehensive base adapter using Template Method pattern with lifecycle management,
-validation hooks, error handling, and integration with POLARIS framework components.
+validation hooks, error handling, and integration with POLARIS framework components
+including full observability support.
 """
 
 import asyncio
-import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timedelta, timezone
@@ -15,9 +15,11 @@ from enum import Enum
 
 from ..infrastructure.di import Injectable
 from ..infrastructure.exceptions import AdaptationError, PolarisException
+from ..infrastructure.observability import (
+    observe_polaris_component, get_logger, get_metrics_collector, get_tracer,
+    trace_connector_operation
+)
 from ..framework.events import PolarisEventBus
-
-logger = logging.getLogger(__name__)
 
 
 class AdapterState(Enum):
@@ -117,7 +119,7 @@ class AdapterValidationError(PolarisException):
 class AdapterLifecycleError(AdaptationError):
     """Exception raised during adapter lifecycle operations."""
     
-    def __init__(self, message: str, adapter_id: str, state: AdapterState, cause: Exception = None):
+    def __init__(self, message: str, adapter_id: str, state: AdapterState, cause: Optional[Exception] = None):
         context = {
             "adapter_id": adapter_id,
             "state": state.value
@@ -131,6 +133,7 @@ class AdapterLifecycleError(AdaptationError):
         self.state = state
 
 
+@observe_polaris_component("adapter", auto_trace=True, auto_metrics=True, log_method_calls=True)
 class PolarisAdapter(Injectable, ABC):
     """
     Base class for all POLARIS adapters using Template Method pattern.
@@ -138,11 +141,12 @@ class PolarisAdapter(Injectable, ABC):
     Features:
     - Comprehensive lifecycle management with state tracking
     - Configuration validation with detailed error reporting
-    - Health monitoring and metrics collection
+    - Health monitoring and metrics collection with observability integration
     - Error handling with retry mechanisms
     - Integration with event system for monitoring
     - Graceful shutdown with resource cleanup
     - Extensible hook system for customization
+    - Full observability support (logging, metrics, tracing)
     """
     
     def __init__(
@@ -152,6 +156,11 @@ class PolarisAdapter(Injectable, ABC):
     ):
         self.configuration = configuration
         self.event_bus = event_bus
+        
+        # Observability integration
+        self.logger = get_logger(f"polaris.adapter.{configuration.adapter_id}")
+        self.metrics_collector = get_metrics_collector()
+        self.tracer = get_tracer()
         
         # State management
         self._state = AdapterState.STOPPED
@@ -173,7 +182,11 @@ class PolarisAdapter(Injectable, ABC):
         self._pre_stop_hooks: List[Callable] = []
         self._post_stop_hooks: List[Callable] = []
         
-        logger.info(f"Created adapter {self.adapter_id} of type {self.configuration.adapter_type}")
+        self.logger.info("Created adapter", extra={
+            "adapter_id": self.adapter_id,
+            "adapter_type": self.configuration.adapter_type,
+            "enabled": self.configuration.enabled
+        })
     
     @property
     def adapter_id(self) -> str:

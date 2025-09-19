@@ -2,7 +2,8 @@
 POLARIS Framework - Main orchestration class
 
 This is the main entry point for the POLARIS framework, responsible for
-initializing and coordinating all layers of the system.
+initializing and coordinating all layers of the system with comprehensive
+observability integration.
 """
 
 import asyncio
@@ -13,17 +14,23 @@ from ..infrastructure.di import DIContainer, Injectable
 from ..infrastructure.exceptions import PolarisException, ConfigurationError
 from ..infrastructure.message_bus import PolarisMessageBus
 from ..infrastructure.data_storage import PolarisDataStore
+from ..infrastructure.observability import (
+    ObservabilityConfig, ObservabilityManager, get_logger, 
+    initialize_observability, shutdown_observability, observe_polaris_component
+)
 from .configuration import PolarisConfiguration
 from .plugin_management import PolarisPluginRegistry
 from .events import PolarisEventBus
 
 
+@observe_polaris_component("framework", auto_trace=True, auto_metrics=True, log_method_calls=True)
 class PolarisFramework(Injectable):
     """
     Main POLARIS Framework class that orchestrates all system components.
     
     This class implements the Facade pattern to provide a simple interface
-    for starting, stopping, and managing the entire POLARIS system.
+    for starting, stopping, and managing the entire POLARIS system with
+    comprehensive observability integration.
     """
     
     def __init__(
@@ -33,7 +40,8 @@ class PolarisFramework(Injectable):
         message_bus: PolarisMessageBus,
         data_store: PolarisDataStore,
         plugin_registry: PolarisPluginRegistry,
-        event_bus: PolarisEventBus
+        event_bus: PolarisEventBus,
+        observability_config: Optional[ObservabilityConfig] = None
     ):
         self.container = container
         self.configuration = configuration
@@ -42,7 +50,12 @@ class PolarisFramework(Injectable):
         self.plugin_registry = plugin_registry
         self.event_bus = event_bus
         
-        self.logger = logging.getLogger(__name__)
+        # Initialize observability
+        self.observability_config = observability_config or ObservabilityConfig()
+        self.observability_manager = initialize_observability(self.observability_config)
+        
+        # Use POLARIS logger instead of standard logging
+        self.logger = get_logger("polaris.framework")
         self._running = False
         self._components: List[str] = []
     
@@ -51,6 +64,7 @@ class PolarisFramework(Injectable):
         Start the POLARIS framework and all its components.
         
         This method initializes all layers in the correct order:
+        0. Observability layer (logging, metrics, tracing)
         1. Infrastructure layer (message bus, data store)
         2. Framework layer (plugin registry, event bus)
         3. Digital Twin layer
@@ -62,7 +76,12 @@ class PolarisFramework(Injectable):
             return
         
         try:
-            self.logger.info("Starting POLARIS framework...")
+            # Initialize observability first
+            await self.observability_manager.initialize()
+            self.logger.info("Starting POLARIS framework...", extra={
+                "framework_version": "2.0.0",
+                "service_name": self.observability_config.service_name
+            })
             
             # Start infrastructure components
             await self._start_infrastructure()
@@ -80,10 +99,20 @@ class PolarisFramework(Injectable):
             await self._start_adapters()
             
             self._running = True
-            self.logger.info("POLARIS framework started successfully")
+            self.logger.info("POLARIS framework started successfully", extra={
+                "components_started": len(self._components),
+                "startup_duration_ms": "tracked_by_metrics"
+            })
+            
+            # Update metrics
+            metrics = self.observability_manager.get_metrics_collector()
+            metrics.set_active_systems_count(len(self._components))
             
         except Exception as e:
-            self.logger.error(f"Failed to start POLARIS framework: {e}")
+            self.logger.error("Failed to start POLARIS framework", extra={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=e)
             await self._cleanup_on_failure()
             raise PolarisException(
                 "Failed to start POLARIS framework",
@@ -102,7 +131,9 @@ class PolarisFramework(Injectable):
             return
         
         try:
-            self.logger.info("Stopping POLARIS framework...")
+            self.logger.info("Stopping POLARIS framework...", extra={
+                "components_to_stop": len(self._components)
+            })
             
             # Stop components in reverse order
             await self._stop_adapters()
@@ -112,12 +143,25 @@ class PolarisFramework(Injectable):
             await self._stop_infrastructure()
             
             self._running = False
+            component_count = len(self._components)
             self._components.clear()
             
-            self.logger.info("POLARIS framework stopped successfully")
+            # Update metrics
+            metrics = self.observability_manager.get_metrics_collector()
+            metrics.set_active_systems_count(0)
+            
+            self.logger.info("POLARIS framework stopped successfully", extra={
+                "components_stopped": component_count
+            })
+            
+            # Shutdown observability last
+            await shutdown_observability()
             
         except Exception as e:
-            self.logger.error(f"Error stopping POLARIS framework: {e}")
+            self.logger.error("Error stopping POLARIS framework", extra={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=e)
             raise PolarisException(
                 "Failed to stop POLARIS framework",
                 error_code="FRAMEWORK_STOP_ERROR",

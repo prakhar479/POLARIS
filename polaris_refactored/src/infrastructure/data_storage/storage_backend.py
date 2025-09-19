@@ -237,6 +237,214 @@ class InMemoryGraphStorageBackend(GraphStorageBackend):
         return {"root": system_id, "depth": depth, "graph": graph}
 
 
+class TimeSeriesStorageBackend(StorageBackend):
+    """Abstract interface for time-series storage backends."""
+    
+    @abstractmethod
+    async def store_time_series(
+        self,
+        collection: str,
+        timestamp: datetime,
+        tags: Dict[str, str],
+        fields: Dict[str, Any]
+    ) -> None:
+        """Store time-series data point."""
+        pass
+    
+    @abstractmethod
+    async def query_time_range(
+        self,
+        collection: str,
+        start_time: datetime,
+        end_time: datetime,
+        tags: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Query time-series data within a time range."""
+        pass
+
+
+class DocumentStorageBackend(StorageBackend):
+    """Abstract interface for document storage backends."""
+    
+    @abstractmethod
+    async def create_index(self, collection: str, fields: List[str]) -> None:
+        """Create an index on specified fields."""
+        pass
+    
+    @abstractmethod
+    async def aggregate(self, collection: str, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute aggregation pipeline."""
+        pass
+
+
+class InMemoryTimeSeriesBackend(TimeSeriesStorageBackend):
+    """In-memory time-series backend for testing and development."""
+    
+    def __init__(self):
+        self._collections: Dict[str, List[Dict[str, Any]]] = {}
+        self._connected = False
+    
+    async def connect(self) -> None:
+        self._connected = True
+    
+    async def disconnect(self) -> None:
+        self._connected = False
+    
+    async def store(self, collection: str, key: str, data: Dict[str, Any]) -> None:
+        """Store generic document."""
+        if collection not in self._collections:
+            self._collections[collection] = []
+        
+        # Add key to data and store
+        data_with_key = dict(data)
+        data_with_key["_key"] = key
+        self._collections[collection].append(data_with_key)
+    
+    async def retrieve(self, collection: str, key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve document by key."""
+        if collection not in self._collections:
+            return None
+        
+        for item in self._collections[collection]:
+            if item.get("_key") == key:
+                result = dict(item)
+                result.pop("_key", None)
+                return result
+        return None
+    
+    async def query(self, collection: str, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Query documents with filters."""
+        if collection not in self._collections:
+            return []
+        
+        results = []
+        for item in self._collections[collection]:
+            if _match_filters(item, filters):
+                result = dict(item)
+                result.pop("_key", None)
+                results.append(result)
+        return results
+    
+    async def delete(self, collection: str, key: str) -> bool:
+        """Delete document by key."""
+        if collection not in self._collections:
+            return False
+        
+        for i, item in enumerate(self._collections[collection]):
+            if item.get("_key") == key:
+                del self._collections[collection][i]
+                return True
+        return False
+    
+    async def store_time_series(
+        self,
+        collection: str,
+        timestamp: datetime,
+        tags: Dict[str, str],
+        fields: Dict[str, Any]
+    ) -> None:
+        """Store time-series data point."""
+        data = {
+            "timestamp": timestamp.isoformat(),
+            "tags": tags,
+            "fields": fields
+        }
+        key = f"{timestamp.isoformat()}_{hash(str(tags))}"
+        await self.store(collection, key, data)
+    
+    async def query_time_range(
+        self,
+        collection: str,
+        start_time: datetime,
+        end_time: datetime,
+        tags: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Query time-series data within a time range."""
+        filters = {
+            "timestamp": {
+                "$gte": start_time.isoformat(),
+                "$lte": end_time.isoformat()
+            }
+        }
+        
+        if tags:
+            for key, value in tags.items():
+                filters[f"tags.{key}"] = value
+        
+        return await self.query(collection, filters)
+
+
+class InMemoryDocumentBackend(DocumentStorageBackend):
+    """In-memory document backend for testing and development."""
+    
+    def __init__(self):
+        self._collections: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._indexes: Dict[str, List[str]] = {}
+        self._connected = False
+    
+    async def connect(self) -> None:
+        self._connected = True
+    
+    async def disconnect(self) -> None:
+        self._connected = False
+    
+    async def store(self, collection: str, key: str, data: Dict[str, Any]) -> None:
+        """Store document."""
+        if collection not in self._collections:
+            self._collections[collection] = {}
+        self._collections[collection][key] = dict(data)
+    
+    async def retrieve(self, collection: str, key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve document by key."""
+        col = self._collections.get(collection, {})
+        val = col.get(key)
+        return dict(val) if val is not None else None
+    
+    async def query(self, collection: str, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Query documents with filters."""
+        col = self._collections.get(collection, {})
+        results = []
+        for item in col.values():
+            if _match_filters(item, filters):
+                results.append(dict(item))
+        return results
+    
+    async def delete(self, collection: str, key: str) -> bool:
+        """Delete document by key."""
+        col = self._collections.get(collection, {})
+        return col.pop(key, None) is not None
+    
+    async def create_index(self, collection: str, fields: List[str]) -> None:
+        """Create an index on specified fields."""
+        index_key = f"{collection}:{':'.join(fields)}"
+        self._indexes[index_key] = fields
+    
+    async def aggregate(self, collection: str, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute simple aggregation pipeline."""
+        # This is a simplified implementation for testing
+        col = self._collections.get(collection, {})
+        results = list(col.values())
+        
+        for stage in pipeline:
+            if "$match" in stage:
+                results = [item for item in results if _match_filters(item, stage["$match"])]
+            elif "$group" in stage:
+                # Simple grouping implementation
+                groups = {}
+                group_spec = stage["$group"]
+                group_by = group_spec.get("_id")
+                
+                for item in results:
+                    key = item.get(group_by) if isinstance(group_by, str) else str(group_by)
+                    if key not in groups:
+                        groups[key] = {"_id": key, "count": 0}
+                    groups[key]["count"] += 1
+                
+                results = list(groups.values())
+        
+        return results
+
+
 def _match_filters(item: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """Very small helper to match dicts to filters with optional $gte/$lte.
 

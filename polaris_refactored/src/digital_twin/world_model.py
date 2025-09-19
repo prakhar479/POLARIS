@@ -3,13 +3,14 @@ World Model Implementation
 
 Implements the digital twin's world modeling capabilities for the POLARIS framework.
 The world model maintains a dynamic representation of the managed system's state
-and provides simulation and prediction capabilities.
+and provides simulation and prediction capabilities with full observability integration.
 
 Key Features:
 - System state tracking and prediction
 - What-if scenario simulation
 - Multi-model composition and fusion
 - Statistical and ML-based modeling approaches
+- Comprehensive observability (logging, metrics, tracing)
 """
 
 from abc import ABC, abstractmethod
@@ -18,6 +19,10 @@ from typing import List, Dict, Any, Optional
 from ..domain.models import SystemState
 from ..framework.events import TelemetryEvent
 from ..infrastructure.di import Injectable
+from ..infrastructure.observability import (
+    observe_polaris_component, trace_world_model_operation, get_logger,
+    get_metrics_collector, get_tracer
+)
 from .knowledge_base import PolarisKnowledgeBase
 
 
@@ -40,6 +45,7 @@ class SimulationResult:
         self.probability = probability
 
 
+@observe_polaris_component("world_model", auto_trace=True, auto_metrics=True)
 class PolarisWorldModel(ABC):
     """Abstract base class for POLARIS world models.
     
@@ -48,6 +54,7 @@ class PolarisWorldModel(ABC):
     - State prediction and forecasting
     - Impact analysis of potential adaptations
     - Hypothesis testing through simulation
+    - Full observability integration
     
     Implementations should extend this class to provide specific modeling approaches
     (e.g., statistical, ML-based, physics-based).

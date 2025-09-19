@@ -10,12 +10,18 @@ from .repository import (
     SystemDependencyRepository, LearnedPatternRepository,
     SystemStateRepository, ExecutionResultRepository
 )
-from .storage_backend import StorageBackend, GraphStorageBackend, InMemoryGraphStorageBackend
+from .storage_backend import (
+    StorageBackend, GraphStorageBackend, InMemoryGraphStorageBackend,
+    TimeSeriesStorageBackend, DocumentStorageBackend,
+    InMemoryTimeSeriesBackend, InMemoryDocumentBackend
+)
+from .factory import DataStoreFactory
 
 __all__ = [
     # Data store
     "PolarisDataStore",
     "PolarisUnitOfWork",
+    "DataStoreFactory",
 
     # Repositories
     "Repository",
@@ -28,5 +34,9 @@ __all__ = [
     # Storage backends
     "StorageBackend",
     "GraphStorageBackend",
-    "InMemoryGraphStorageBackend"
+    "InMemoryGraphStorageBackend",
+    "TimeSeriesStorageBackend",
+    "DocumentStorageBackend",
+    "InMemoryTimeSeriesBackend",
+    "InMemoryDocumentBackend"
 ]

@@ -9,7 +9,7 @@ storage in Polaris.
 
 
 
-from typing import Dict, List, Any, TypeVar, AsyncContextManager
+from typing import Dict, List, Any, TypeVar, AsyncContextManager, Optional
 from contextlib import asynccontextmanager
 
 from ..exceptions import DataStoreError
@@ -133,18 +133,19 @@ class PolarisDataStore(Injectable):
     
     def _initialize_repositories(self) -> None:
         """Initialize all repositories with appropriate backends."""
-        # Use time-series backend for system states if available
+        # Use time-series backend for system states if available, fallback to document
         time_series_backend = self.storage_backends.get("time_series")
+        document_backend = self.storage_backends.get("document")
+        
         if time_series_backend:
             self._repositories["system_states"] = SystemStateRepository(time_series_backend)
+        elif document_backend:
+            self._repositories["system_states"] = SystemStateRepository(document_backend)
         
-        # Use document backend for actions if available
-        document_backend = self.storage_backends.get("document")
+        # Use document backend for actions, patterns, and results
         if document_backend:
             self._repositories["adaptation_actions"] = AdaptationActionRepository(document_backend)
-            # Learned patterns are document-oriented
             self._repositories["learned_patterns"] = LearnedPatternRepository(document_backend)
-            # Execution results are also document-oriented
             self._repositories["execution_results"] = ExecutionResultRepository(document_backend)
         
         # Use graph backend for system dependencies if available
@@ -164,8 +165,38 @@ class PolarisDataStore(Injectable):
         return repository
     
     @asynccontextmanager
-    async def unit_of_work(self) -> PolarisUnitOfWork:
+    async def unit_of_work(self):
         """Create a unit of work for transactional operations."""
         uow = PolarisUnitOfWork(self._repositories)
         async with uow:
             yield uow
+    
+    # Convenience methods for accessing specific repositories
+    
+    def get_system_state_repository(self) -> SystemStateRepository:
+        """Get the system state repository."""
+        return self.get_repository("system_states")
+    
+    def get_adaptation_action_repository(self) -> AdaptationActionRepository:
+        """Get the adaptation action repository."""
+        return self.get_repository("adaptation_actions")
+    
+    def get_learned_pattern_repository(self) -> LearnedPatternRepository:
+        """Get the learned pattern repository."""
+        return self.get_repository("learned_patterns")
+    
+    def get_execution_result_repository(self) -> ExecutionResultRepository:
+        """Get the execution result repository."""
+        return self.get_repository("execution_results")
+    
+    def get_system_dependency_repository(self) -> SystemDependencyRepository:
+        """Get the system dependency repository."""
+        return self.get_repository("system_dependencies")
+    
+    def get_available_backends(self) -> List[str]:
+        """Get list of available storage backend names."""
+        return list(self.storage_backends.keys())
+    
+    def get_backend(self, name: str) -> Optional[StorageBackend]:
+        """Get a storage backend by name."""
+        return self.storage_backends.get(name)
