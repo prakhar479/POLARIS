@@ -10,13 +10,13 @@ import asyncio
 from datetime import datetime, timedelta
 
 from tests.integration.harness.polaris_integration_test_harness import (
-    PolarisIntegrationTestHarness, IntegrationTestConfig, TestSystemConfig,
+    PolarisIntegrationTestHarness, IntegrationTestConfig,
     create_simple_harness, create_performance_harness, create_failure_testing_harness
 )
 from tests.integration.contracts.managed_system_connector_contract import (
     MockManagedSystemConnectorContractTest, validate_connector_contract
 )
-from tests.fixtures.mock_objects import MockManagedSystemConnector, TestDataBuilder
+from tests.fixtures.mock_objects import MockManagedSystemConnector, DataBuilder
 from src.domain.models import MetricValue, ExecutionStatus
 
 
@@ -62,7 +62,7 @@ class TestIntegrationHarness:
             
             # Test basic functionality
             await harness.inject_telemetry("system_1", {
-                "cpu_usage": MetricValue(value=50.0, unit="percent", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=50.0, unit="percent", timestamp=datetime.now())
             })
             
             events = await harness.wait_for_events("telemetry", 1, timeout=5.0)
@@ -78,17 +78,17 @@ class TestIntegrationHarness:
         async with create_simple_harness("telemetry_test", ["web_server", "database"]) as harness:
             # Inject telemetry for web server
             web_metrics = {
-                "cpu_usage": MetricValue(value=75.0, unit="percent", timestamp=datetime.now()),
-                "memory_usage": MetricValue(value=1024.0, unit="MB", timestamp=datetime.now()),
-                "active_connections": MetricValue(value=150.0, unit="connections", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=75.0, unit="percent", timestamp=datetime.now()),
+                "memory_usage": MetricValue(name="memory_usage", value=1024.0, unit="MB", timestamp=datetime.now()),
+                "active_connections": MetricValue(name="active_connections", value=150.0, unit="connections", timestamp=datetime.now())
             }
             
             await harness.inject_telemetry("web_server", web_metrics)
             
             # Inject telemetry for database
             db_metrics = {
-                "cpu_usage": MetricValue(value=60.0, unit="percent", timestamp=datetime.now()),
-                "query_latency": MetricValue(value=25.0, unit="ms", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=60.0, unit="percent", timestamp=datetime.now()),
+                "query_latency": MetricValue(name="query_latency", value=25.0, unit="ms", timestamp=datetime.now())
             }
             
             await harness.inject_telemetry("database", db_metrics)
@@ -116,7 +116,7 @@ class TestIntegrationHarness:
         """Test adaptation triggering and execution through harness."""
         async with create_simple_harness("adaptation_test", ["app_server"]) as harness:
             # Create adaptation action
-            scale_action = TestDataBuilder.adaptation_action(
+            scale_action = DataBuilder.adaptation_action(
                 action_id="test_scale_001",
                 action_type="horizontal_scale",
                 target_system="app_server",
@@ -131,9 +131,10 @@ class TestIntegrationHarness:
             
             assert len(adaptation_events) == 1
             event_data = adaptation_events[0]["data"]
+
             assert event_data["system_id"] == "app_server"
-            assert len(event_data["actions"]) == 1
-            assert event_data["actions"][0]["action_id"] == "test_scale_001"
+            assert len(event_data["suggested_actions"]) == 1
+            assert event_data["suggested_actions"][0]["action_id"] == "test_scale_001"
             
             # Execute the action
             result = await harness.execute_action(scale_action)
@@ -165,7 +166,7 @@ class TestIntegrationHarness:
             
             # Test that healthy system works
             await harness.inject_telemetry("healthy_system", {
-                "cpu_usage": MetricValue(value=30.0, unit="percent", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=30.0, unit="percent", timestamp=datetime.now())
             })
             
             events = await harness.wait_for_events("telemetry", 1, timeout=5.0)
@@ -179,10 +180,10 @@ class TestIntegrationHarness:
         async with create_simple_harness("metrics_test", ["system_1", "system_2"]) as harness:
             # Perform various operations
             await harness.inject_telemetry("system_1", {
-                "cpu_usage": MetricValue(value=40.0, unit="percent", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=40.0, unit="percent", timestamp=datetime.now())
             })
             
-            action = TestDataBuilder.adaptation_action(
+            action = DataBuilder.adaptation_action(
                 action_id="metrics_test_action",
                 target_system="system_2"
             )
@@ -263,8 +264,8 @@ class TestPerformanceHarness:
             for i in range(25):  # 25 events across 5 systems
                 system_id = systems[i % len(systems)]
                 metrics = {
-                    "cpu_usage": MetricValue(value=float(30 + i % 70), unit="percent", timestamp=datetime.now()),
-                    "memory_usage": MetricValue(value=float(500 + i * 20), unit="MB", timestamp=datetime.now())
+                    "cpu_usage": MetricValue(name="cpu_usage", value=float(30 + i % 70), unit="percent", timestamp=datetime.now()),
+                    "memory_usage": MetricValue(name="memory_usage", value=float(500 + i * 20), unit="MB", timestamp=datetime.now())
                 }
                 
                 tasks.append(harness.inject_telemetry(system_id, metrics))
@@ -298,7 +299,7 @@ class TestPerformanceHarness:
             # Create multiple adaptation actions
             actions = []
             for i, system_id in enumerate(systems):
-                action = TestDataBuilder.adaptation_action(
+                action = DataBuilder.adaptation_action(
                     action_id=f"concurrent_action_{i}",
                     action_type="scale_operation",
                     target_system=system_id,
@@ -337,18 +338,18 @@ class TestComplexIntegrationScenarios:
         async with create_simple_harness("multi_tier_app", systems) as harness:
             # Phase 1: Inject load at the load balancer
             await harness.inject_telemetry("load_balancer", {
-                "requests_per_second": MetricValue(value=500.0, unit="req/s", timestamp=datetime.now()),
-                "cpu_usage": MetricValue(value=70.0, unit="percent", timestamp=datetime.now())
+                "requests_per_second": MetricValue(name="requests_per_second", value=500.0, unit="req/s", timestamp=datetime.now()),
+                "cpu_usage": MetricValue(name="cpu_usage", value=70.0, unit="percent", timestamp=datetime.now())
             })
             
             # Phase 2: Web tier responds to increased load
             await harness.inject_telemetry("web_tier", {
-                "cpu_usage": MetricValue(value=85.0, unit="percent", timestamp=datetime.now()),
-                "response_time": MetricValue(value=200.0, unit="ms", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=85.0, unit="percent", timestamp=datetime.now()),
+                "response_time": MetricValue(name="response_time", value=200.0, unit="ms", timestamp=datetime.now())
             })
             
             # Phase 3: Trigger web tier scaling
-            web_scale_action = TestDataBuilder.adaptation_action(
+            web_scale_action = DataBuilder.adaptation_action(
                 action_id="web_tier_scale",
                 action_type="horizontal_scale",
                 target_system="web_tier",
@@ -360,18 +361,18 @@ class TestComplexIntegrationScenarios:
             
             # Phase 4: App tier experiences increased load
             await harness.inject_telemetry("app_tier", {
-                "cpu_usage": MetricValue(value=80.0, unit="percent", timestamp=datetime.now()),
-                "memory_usage": MetricValue(value=2048.0, unit="MB", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=80.0, unit="percent", timestamp=datetime.now()),
+                "memory_usage": MetricValue(name="memory_usage", value=2048.0, unit="MB", timestamp=datetime.now())
             })
             
             # Phase 5: Database tier shows impact
             await harness.inject_telemetry("database_tier", {
-                "active_connections": MetricValue(value=200.0, unit="connections", timestamp=datetime.now()),
-                "query_latency": MetricValue(value=150.0, unit="ms", timestamp=datetime.now())
+                "active_connections": MetricValue(name="active_connections", value=200.0, unit="connections", timestamp=datetime.now()),
+                "query_latency": MetricValue(name="query_latency", value=150.0, unit="ms", timestamp=datetime.now())
             })
             
             # Phase 6: Enable caching to reduce database load
-            cache_action = TestDataBuilder.adaptation_action(
+            cache_action = DataBuilder.adaptation_action(
                 action_id="enable_caching",
                 action_type="enable_cache",
                 target_system="cache_tier",
@@ -419,7 +420,7 @@ class TestComplexIntegrationScenarios:
             
             # Inject high CPU telemetry
             await harness.inject_telemetry("event_producer", {
-                "cpu_usage": MetricValue(value=90.0, unit="percent", timestamp=datetime.now())
+                "cpu_usage": MetricValue(name="cpu_usage", value=90.0, unit="percent", timestamp=datetime.now())
             })
             
             # Wait for event processing
@@ -429,7 +430,7 @@ class TestComplexIntegrationScenarios:
             assert received_high_cpu_event["value"], "High CPU event validator should have been triggered"
             
             # Test adaptation based on the event
-            cpu_action = TestDataBuilder.adaptation_action(
+            cpu_action = DataBuilder.adaptation_action(
                 action_id="cpu_response",
                 action_type="cpu_optimization",
                 target_system="event_consumer",

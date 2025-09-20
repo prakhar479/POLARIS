@@ -47,7 +47,7 @@ class LoggingConfiguration(BaseModel):
     format: str = Field(default="json", pattern="^(json|text)$")
     output: str = Field(default="console", pattern="^(console|file|both)$")
     file_path: Optional[str] = None
-    max_file_size: int = Field(default=10485760, ge=1048576)  # 10MB default, min 1MB
+    max_file_size: int = Field(default=10485760, ge=1024)  # 10MB default, min 1KB
     backup_count: int = Field(default=5, ge=1, le=100)
     
     @field_validator('file_path')

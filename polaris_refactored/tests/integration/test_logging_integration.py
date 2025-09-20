@@ -18,9 +18,10 @@ from polaris_refactored.src.infrastructure.observability.factory import (
     configure_logging, get_polaris_logger, reset_logging, get_framework_logger,
     get_infrastructure_logger, LoggerFactory
 )
+from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
 from polaris_refactored.src.infrastructure.observability.logging import LogLevel
 from polaris_refactored.tests.fixtures.logging_fixtures import (
-    integration_logging_setup, capture_logs, log_assertions, log_file_reader
+    integration_logging_setup, log_assertions, log_file_reader
 )
 
 
@@ -47,7 +48,6 @@ class TestFrameworkLoggingIntegration:
         
         with patch('polaris_refactored.src.infrastructure.observability.factory.configure_default_logging') as mock_configure:
             # Simulate framework configuration
-            from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
             
             config = LoggingConfiguration(
                 level="INFO",
@@ -80,7 +80,7 @@ class TestFrameworkLoggingIntegration:
         assert infrastructure_di.name == "polaris.infrastructure.di"
         assert infrastructure_messaging.name == "polaris.infrastructure.messaging"
     
-    def test_configuration_hot_reload_logging(self, integration_logging_setup):
+    def test_configuration_hot_reload_logging(self, integration_logging_setup, capture_logs):
         """Test logging during configuration hot-reload."""
         # Create temporary config file
         config_data = {
@@ -122,7 +122,7 @@ class TestFrameworkLoggingIntegration:
 class TestContextPropagation:
     """Test context propagation across components."""
     
-    def test_correlation_id_across_components(self, integration_logging_setup):
+    def test_correlation_id_across_components(self, integration_logging_setup, capture_logs):
         """Test correlation ID propagation across different components."""
         framework_logger = get_framework_logger("test")
         infrastructure_logger = get_infrastructure_logger("test")
@@ -149,7 +149,7 @@ class TestContextPropagation:
         assert framework_records[0]['correlation_id'] == correlation_id
         assert infra_records[0]['correlation_id'] == correlation_id
     
-    def test_adaptation_context_propagation(self, integration_logging_setup):
+    def test_adaptation_context_propagation(self, integration_logging_setup, capture_logs):
         """Test adaptation context propagation."""
         controller_logger = get_polaris_logger("polaris.control.adaptive_controller")
         adapter_logger = get_polaris_logger("polaris.adapter.test_system")
@@ -179,7 +179,7 @@ class TestContextPropagation:
         assert adapter_records[0]['adaptation_id'] == adaptation_id
         assert adapter_records[0]['system_id'] == system_id
     
-    def test_nested_context_propagation(self, integration_logging_setup):
+    def test_nested_context_propagation(self, integration_logging_setup, capture_logs):
         """Test nested context propagation."""
         logger = get_polaris_logger("test")
         
@@ -213,7 +213,7 @@ class TestContextPropagation:
 class TestObservabilityIntegration:
     """Test integration with observability decorators."""
     
-    def test_observe_component_decorator_logging(self, integration_logging_setup):
+    def test_observe_component_decorator_logging(self, integration_logging_setup, capture_logs):
         """Test that @observe_polaris_component decorator integrates with logging."""
         from polaris_refactored.src.infrastructure.observability import observe_polaris_component
         
@@ -239,7 +239,7 @@ class TestObservabilityIntegration:
         assert len(records) >= 1
         assert any("Method called" in record['message'] for record in records)
     
-    def test_trace_decorator_logging_integration(self, integration_logging_setup):
+    def test_trace_decorator_logging_integration(self, integration_logging_setup, capture_logs):
         """Test integration between tracing decorators and logging."""
         from polaris_refactored.src.infrastructure.observability import trace_adaptation_flow
         
@@ -266,9 +266,7 @@ class TestFileLoggingIntegration:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
             log_file = f.name
         
-        try:
-            from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
-            
+        try:            
             config = LoggingConfiguration(
                 level="INFO",
                 format="json",
@@ -326,9 +324,7 @@ class TestFileLoggingIntegration:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
             log_file = f.name
         
-        try:
-            from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
-            
+        try:            
             config = LoggingConfiguration(
                 level="INFO",
                 format="json",
@@ -382,7 +378,7 @@ class TestFileLoggingIntegration:
 class TestErrorScenarios:
     """Test logging in error scenarios."""
     
-    def test_logging_during_exceptions(self, integration_logging_setup):
+    def test_logging_during_exceptions(self, integration_logging_setup, capture_logs):
         """Test logging behavior during exception handling."""
         logger = get_polaris_logger("test")
         
@@ -416,9 +412,7 @@ class TestErrorScenarios:
         reset_logging()
         
         # Try to configure with invalid settings
-        try:
-            from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
-            
+        try:            
             invalid_config = LoggingConfiguration(
                 level="INFO",
                 format="json",

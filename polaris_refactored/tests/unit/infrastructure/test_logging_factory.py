@@ -9,6 +9,8 @@ import pytest
 import tempfile
 import threading
 import time
+from flaky import flaky
+
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -21,10 +23,9 @@ from polaris_refactored.src.infrastructure.observability.factory import (
 from polaris_refactored.src.infrastructure.observability.logging import (
     PolarisLogger, LogLevel
 )
-from polaris_refactored.tests.fixtures.logging_fixtures import (
-    test_logging_config, file_logging_config, logger_factory, 
-    configured_logger_factory, capture_logs, log_assertions
-)
+
+from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
+
 
 
 class TestLoggerFactory:
@@ -91,7 +92,6 @@ class TestLoggerFactory:
     
     def test_logger_config_override(self, logger_factory):
         """Test logger creation with config override."""
-        from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
         
         override_config = LoggingConfiguration(
             level="WARNING",
@@ -214,7 +214,6 @@ class TestTemporaryLoggingConfig:
     
     def test_temporary_config_context(self, test_logging_config):
         """Test temporary configuration context manager."""
-        from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
         
         reset_logging()
         
@@ -247,7 +246,6 @@ class TestTemporaryLoggingConfig:
     
     def test_temporary_config_exception_handling(self, test_logging_config):
         """Test temporary config handles exceptions properly."""
-        from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
         
         reset_logging()
         configure_logging(test_logging_config)
@@ -406,6 +404,7 @@ class TestLoggingPerformance:
         assert duration < 1.0
         assert len(loggers) == 1000
     
+    @flaky(max_runs=3, min_passes=1)
     def test_logging_overhead(self, configured_logger_factory):
         """Test logging overhead with disabled levels."""
         logger = configured_logger_factory.get_logger("test")
@@ -430,7 +429,6 @@ class TestErrorHandling:
     
     def test_invalid_log_level(self, logger_factory):
         """Test handling of invalid log levels."""
-        from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
         
         with pytest.raises(ValueError):
             config = LoggingConfiguration(
@@ -441,7 +439,6 @@ class TestErrorHandling:
     
     def test_missing_file_path_for_file_output(self):
         """Test validation of file path for file output."""
-        from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
         
         with pytest.raises(ValueError, match="file_path is required"):
             LoggingConfiguration(

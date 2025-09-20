@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from .mock_objects import (
     MockManagedSystemConnector, MockMessageBroker, MockDataStore,
     MockCacheStrategy, MockMetricsCollector, MockLogger, MockTracer,
-    TestDataBuilder, MockComponentFactory, TestScenarioBuilder
+    DataBuilder, MockComponentFactory, TestScenarioBuilder
 )
 
 from src.domain.models import SystemState, AdaptationAction
@@ -65,7 +65,7 @@ def mock_tracer():
 @pytest.fixture
 def test_data_builder():
     """Provides a test data builder for creating test objects."""
-    return TestDataBuilder()
+    return DataBuilder()
 
 
 @pytest.fixture

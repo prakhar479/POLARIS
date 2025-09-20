@@ -271,6 +271,12 @@ class PolarisPluginRegistry(Injectable):
         with self._registry_lock:
             return system_id in self._connectors
     
+    def register_test_connector(self, system_id: str, connector: ManagedSystemConnector) -> None:
+        """Register a test connector directly (for testing purposes only)."""
+        with self._registry_lock:
+            self._connectors[system_id] = connector
+            self.logger.debug("Test connector registered", extra={"system_id": system_id})
+    
     def _start_hot_reload_monitoring(self) -> None:
         """Start hot-reload monitoring in a background thread."""
         if self._hot_reload_thread is not None:

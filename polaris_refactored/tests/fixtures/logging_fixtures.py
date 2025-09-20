@@ -22,6 +22,8 @@ from polaris_refactored.src.infrastructure.observability.logging import (
     HumanReadableFormatter
 )
 
+from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
+
 
 class TestLogHandler(LogHandler):
     """Test log handler that captures log records for assertions."""
@@ -90,7 +92,6 @@ class LogCapture:
 @pytest.fixture
 def test_logging_config():
     """Provide a test logging configuration."""
-    from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
     return LoggingConfiguration(
         level="DEBUG",
         format="json",
@@ -104,7 +105,6 @@ def test_logging_config():
 @pytest.fixture
 def file_logging_config():
     """Provide a file-based logging configuration."""
-    from polaris_refactored.src.framework.configuration.models import LoggingConfiguration
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
         log_file = f.name

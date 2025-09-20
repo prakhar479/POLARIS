@@ -14,7 +14,7 @@ from tests.performance.polaris_performance_test_suite import (
     run_basic_performance_suite, run_comprehensive_performance_suite
 )
 from tests.integration.harness.polaris_integration_test_harness import create_performance_harness
-from tests.fixtures.mock_objects import TestDataBuilder
+from tests.fixtures.mock_objects import DataBuilder
 from src.domain.models import MetricValue
 
 
@@ -103,9 +103,9 @@ class TestTelemetryPerformance:
             for i in range(100):
                 system_id = systems[i % len(systems)]
                 metrics = {
-                    "cpu_usage": MetricValue(value=float(50 + i % 50), unit="percent", timestamp=datetime.now()),
-                    "memory_usage": MetricValue(value=float(1000 + i * 10), unit="MB", timestamp=datetime.now()),
-                    "burst_id": MetricValue(value=float(i), unit="count", timestamp=datetime.now())
+                    "cpu_usage": MetricValue(name="cpu_usage", value=float(50 + i % 50), unit="percent", timestamp=datetime.now()),
+                    "memory_usage": MetricValue(name="memory_usage", value=float(1000 + i * 10), unit="MB", timestamp=datetime.now()),
+                    "burst_id": MetricValue(name="burst_id", value=float(i), unit="count", timestamp=datetime.now())
                 }
                 
                 burst_tasks.append(harness.inject_telemetry(system_id, metrics))
@@ -171,7 +171,7 @@ class TestAdaptationPerformance:
             # Create multiple adaptation actions
             actions = []
             for i in range(20):
-                action = TestDataBuilder.adaptation_action(
+                action = DataBuilder.adaptation_action(
                     action_id=f"concurrent_action_{i}",
                     action_type="performance_test",
                     target_system=systems[i % len(systems)],
@@ -329,11 +329,11 @@ class TestStressBenchmarks:
                 
                 # Create metrics with larger data payloads
                 metrics = {
-                    "cpu_usage": MetricValue(value=float(30 + i % 70), unit="percent", timestamp=datetime.now()),
-                    "memory_usage": MetricValue(value=float(500 + i * 5), unit="MB", timestamp=datetime.now()),
-                    "large_data": MetricValue(value=float(i), unit="bytes", timestamp=datetime.now()),
+                    "cpu_usage": MetricValue(name="cpu_usage", value=float(30 + i % 70), unit="percent", timestamp=datetime.now()),
+                    "memory_usage": MetricValue(name="memory_usage", value=float(500 + i * 5), unit="MB", timestamp=datetime.now()),
+                    "large_data": MetricValue(name="large_data", value=float(i), unit="bytes", timestamp=datetime.now()),
                     # Simulate larger metric payloads
-                    f"metric_{i % 10}": MetricValue(value=float(i * 1.5), unit="custom", timestamp=datetime.now())
+                    f"metric_{i % 10}": MetricValue(name="metric", value=float(i * 1.5), unit="custom", timestamp=datetime.now())
                 }
                 
                 large_data_tasks.append(harness.inject_telemetry(system_id, metrics))

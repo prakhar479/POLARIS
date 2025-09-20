@@ -116,8 +116,8 @@ class TestMockObjects:
         assert result is None
 
 
-class TestTestDataBuilder:
-    """Test suite for TestDataBuilder utility."""
+class TestDataBuilder:
+    """Test suite for DataBuilder utility."""
     
     def test_system_state_builder(self, test_data_builder):
         """Test SystemState creation with builder."""

@@ -22,7 +22,7 @@ import numpy as np
 from tests.integration.harness.polaris_integration_test_harness import (
     PolarisIntegrationTestHarness, IntegrationTestConfig, create_performance_harness
 )
-from tests.fixtures.mock_objects import TestDataBuilder
+from tests.fixtures.mock_objects import DataBuilder
 from src.domain.models import MetricValue, AdaptationAction
 
 
@@ -302,11 +302,13 @@ class LoadGenerator:
         
         metrics = {
             "cpu_usage": MetricValue(
+                name="cpu_usage",
                 value=float(30 + (len(self.operation_times) % 70)),
                 unit="percent",
                 timestamp=datetime.now()
             ),
             "memory_usage": MetricValue(
+                name="memory_usage",
                 value=float(500 + (len(self.operation_times) % 1000)),
                 unit="MB",
                 timestamp=datetime.now()
@@ -319,7 +321,7 @@ class LoadGenerator:
         """Single adaptation operation."""
         system_id = systems[len(self.operation_times) % len(systems)]
         
-        action = TestDataBuilder.adaptation_action(
+        action = DataBuilder.adaptation_action(
             action_id=f"perf_action_{len(self.operation_times)}",
             action_type="performance_test",
             target_system=system_id,

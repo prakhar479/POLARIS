@@ -123,6 +123,8 @@ class PolarisTestRunner:
         # Add verbosity
         if verbose:
             cmd.append("-v")
+        else:
+            cmd.append("-q")
 
         # Add fail-fast
         if fail_fast:

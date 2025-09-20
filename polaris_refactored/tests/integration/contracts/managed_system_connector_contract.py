@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from src.domain.interfaces import ManagedSystemConnector
 from src.domain.models import AdaptationAction, ExecutionResult, ExecutionStatus, MetricValue
-from tests.fixtures.mock_objects import TestDataBuilder
+from tests.fixtures.mock_objects import DataBuilder
 
 
 class ManagedSystemConnectorContract(ABC):
@@ -110,7 +110,9 @@ class ManagedSystemConnectorContract(ABC):
                 assert isinstance(metric_value.timestamp, datetime)
                 
                 # Timestamp should be recent (within last minute)
-                time_diff = datetime.now() - metric_value.timestamp
+                from datetime import timezone
+                now = datetime.now(timezone.utc) if metric_value.timestamp.tzinfo else datetime.now()
+                time_diff = now - metric_value.timestamp
                 assert time_diff < timedelta(minutes=1)
                 
         finally:
@@ -140,7 +142,7 @@ class ManagedSystemConnectorContract(ABC):
         
         try:
             # Create a test action
-            action = TestDataBuilder.adaptation_action(
+            action = DataBuilder.adaptation_action(
                 action_id="test_action_001",
                 action_type="test_action",
                 target_system=connector.get_system_id(),
@@ -158,7 +160,9 @@ class ManagedSystemConnectorContract(ABC):
             assert isinstance(result.execution_time, timedelta)
             
             # Timestamp should be recent
-            time_diff = datetime.now() - result.timestamp
+            from datetime import timezone
+            now = datetime.now(timezone.utc) if result.timestamp.tzinfo else datetime.now()
+            time_diff = now - result.timestamp
             assert time_diff < timedelta(minutes=1)
             
             # Execution time should be reasonable (less than 30 seconds for tests)
@@ -172,7 +176,7 @@ class ManagedSystemConnectorContract(ABC):
         """Test execute_action behavior when not connected."""
         connector = self.create_connector()
         
-        action = TestDataBuilder.adaptation_action(
+        action = DataBuilder.adaptation_action(
             target_system=connector.get_system_id()
         )
         
@@ -206,7 +210,7 @@ class ManagedSystemConnectorContract(ABC):
             
             # Concurrent action executions
             for i in range(2):
-                action = TestDataBuilder.adaptation_action(
+                action = DataBuilder.adaptation_action(
                     action_id=f"concurrent_action_{i}",
                     target_system=connector.get_system_id()
                 )
@@ -282,7 +286,7 @@ class ManagedSystemConnectorContract(ABC):
         await connector.connect()
         
         try:
-            action = TestDataBuilder.adaptation_action(
+            action = DataBuilder.adaptation_action(
                 target_system=connector.get_system_id()
             )
             
@@ -356,8 +360,7 @@ class ManagedSystemConnectorContract(ABC):
                 action_id="invalid_action",
                 action_type="invalid_type",
                 target_system=connector.get_system_id(),
-                parameters={"invalid": "parameters"},
-                timestamp=datetime.now()
+                parameters={"invalid": "parameters"}
             )
             
             result = await connector.execute_action(invalid_action)
@@ -401,20 +404,20 @@ class ConnectorContractTestRunner:
     def create_test_class(self) -> Type[ManagedSystemConnectorContract]:
         """Create a test class for the specific connector."""
         
+        # Capture the factory and other attributes in the closure
+        connector_factory = self.connector_factory
+        system_id = self.system_id
+        is_real = self.is_real
+        
         class DynamicConnectorContractTest(ManagedSystemConnectorContract):
             def create_connector(self) -> ManagedSystemConnector:
-                return self.connector_factory()
+                return connector_factory()
             
             def get_expected_system_id(self) -> str:
-                return self.system_id
+                return system_id
             
             def is_real_connector(self) -> bool:
-                return self.is_real
-        
-        # Copy the factory and other attributes to the class
-        DynamicConnectorContractTest.connector_factory = self.connector_factory
-        DynamicConnectorContractTest.system_id = self.system_id
-        DynamicConnectorContractTest.is_real = self.is_real
+                return is_real
         
         return DynamicConnectorContractTest
     

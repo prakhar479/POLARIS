@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Callable, Set
 from unittest.mock import AsyncMock, MagicMock
 from dataclasses import dataclass, field
+from datetime import timedelta
 import json
 
 from src.domain.models import (
@@ -46,32 +47,45 @@ class MockManagedSystemConnector:
         if self.should_fail_metrics:
             raise RuntimeError("Failed to collect metrics")
         
+        # If metrics have been overridden for testing, use those
+        if self.collected_metrics:
+            # Return the most recently set metrics
+            return self.collected_metrics[-1]
+        
+        # Default metrics
         metrics = {
-            "cpu_usage": MetricValue(value=50.0, unit="percent", timestamp=datetime.now()),
-            "memory_usage": MetricValue(value=1024.0, unit="MB", timestamp=datetime.now()),
-            "response_time": MetricValue(value=100.0, unit="ms", timestamp=datetime.now())
+            "cpu_usage": MetricValue(name="cpu_usage", value=50.0, unit="percent", timestamp=datetime.now()),
+            "memory_usage": MetricValue(name="memory_usage", value=1024.0, unit="MB", timestamp=datetime.now()),
+            "response_time": MetricValue(name="response_time", value=100.0, unit="ms", timestamp=datetime.now())
         }
         self.collected_metrics.append(metrics)
         return metrics
         
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
         if self.should_fail_execution:
-            return ExecutionResult(
+            result = ExecutionResult(
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
                 result_data={"error": "Execution failed"},
-                timestamp=datetime.now(),
-                execution_time=timedelta(milliseconds=50)
+                execution_time_ms=50
+            )
+        else:
+            self.executed_actions.append(action)
+            result = ExecutionResult(
+                action_id=action.action_id,
+                status=ExecutionStatus.SUCCESS,
+                result_data={"message": "Action executed successfully"},
+                execution_time_ms=100
             )
         
-        self.executed_actions.append(action)
-        return ExecutionResult(
-            action_id=action.action_id,
-            status=ExecutionStatus.SUCCESS,
-            result_data={"message": "Action executed successfully"},
-            timestamp=datetime.now(),
-            execution_time=timedelta(milliseconds=100)
-        )
+        # Add compatibility properties for contract tests
+        if not hasattr(result, 'timestamp'):
+            object.__setattr__(result, 'timestamp', result.completed_at)
+        if not hasattr(result, 'execution_time'):
+            execution_time_seconds = (result.execution_time_ms or 0) / 1000.0
+            object.__setattr__(result, 'execution_time', timedelta(seconds=execution_time_seconds))
+        
+        return result
         
     def get_system_id(self) -> str:
         return self.system_id
@@ -103,11 +117,23 @@ class MockMessageBroker:
             "timestamp": datetime.now()
         })
         
-        # Deliver to subscribers
-        if topic in self.subscriptions:
-            for handler in self.subscriptions[topic]:
-                await asyncio.create_task(self._invoke_handler(handler, message))
+        # Deliver to subscribers (support wildcard patterns)
+        for pattern, handlers in self.subscriptions.items():
+            if self._topic_matches_pattern(topic, pattern):
+                for handler in handlers:
+                    await asyncio.create_task(self._invoke_handler(handler, message))
                 
+    def _topic_matches_pattern(self, topic: str, pattern: str) -> bool:
+        """Check if a topic matches a subscription pattern (supports * wildcard)."""
+        if pattern == topic:
+            return True
+        if '*' in pattern:
+            # Simple wildcard matching - replace * with .* for regex
+            import re
+            regex_pattern = pattern.replace('*', '.*')
+            return bool(re.match(f"^{regex_pattern}$", topic))
+        return False
+    
     async def _invoke_handler(self, handler: Callable, message: bytes) -> None:
         """Safely invoke message handler."""
         try:
@@ -138,7 +164,13 @@ class MockDataStore:
         self.data: Dict[str, Any] = {}
         self.transaction_active = False
         self.should_fail_operations = False
-        
+    
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
     async def connect(self) -> None:
         pass
         
@@ -302,8 +334,7 @@ class MockTracer:
                 break
 
 
-@dataclass
-class TestDataBuilder:
+class DataBuilder:
     """Builder for creating test data objects with sensible defaults."""
     
     @staticmethod
@@ -366,7 +397,7 @@ class TestDataBuilder:
         from src.framework.events import TelemetryEvent
         
         # Create a system state first (required by TelemetryEvent)
-        system_state = TestDataBuilder.system_state(system_id=system_id)
+        system_state = DataBuilder.system_state(system_id=system_id)
         
         return TelemetryEvent(
             system_state=system_state,
