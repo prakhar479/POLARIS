@@ -1,0 +1,144 @@
+ablation:
+  components:
+    causal_reasoning: true
+    experience_based_reasoning: true
+    knowledge_base: true
+    learning_engine: true
+    predictive_strategy: true
+    reactive_strategy: true
+    statistical_reasoning: true
+    world_model: true
+  description: Development configuration with all components enabled
+  study_parameters:
+    cooldown_period: 300
+    duration: 600
+    metrics_export_interval: 60
+    warmup_period: 300
+adaptation:
+  constraints:
+    dimmer_change_limit: 0.2
+    max_servers: 5
+    min_servers: 1
+    server_change_limit: 2
+  strategies:
+    predictive:
+      confidence_threshold: 0.6
+      enabled: true
+      prediction_window: 120.0
+      trend_analysis_window: 300.0
+      weight: 0.6
+    reactive:
+      enabled: true
+      response_time_threshold: 800.0
+      utilization_high_threshold: 0.7
+      utilization_low_threshold: 0.2
+      weight: 0.4
+  thresholds:
+    dimmer:
+      max: 1.0
+      min: 0.1
+    response_time:
+      critical: 960.0
+      warning: 640.0
+    server_utilization:
+      critical: 0.95
+      high: 0.7200000000000001
+      low: 0.2
+control_reasoning:
+  adaptive_controller:
+    adaptation_cooldown: 60.0
+    enabled: true
+    mape_k_interval: 15.0
+    max_concurrent_adaptations: 2
+  reasoning_engine:
+    confidence_threshold: 0.6
+    enabled: true
+    result_fusion: weighted_average
+    strategies:
+      causal:
+        enabled: true
+        weight: 0.4
+      experience_based:
+        enabled: true
+        weight: 0.3
+      statistical:
+        enabled: true
+        weight: 0.3
+data_storage:
+  backends:
+    default:
+      type: in_memory
+    metrics:
+      retention_hours: 24
+      type: in_memory
+digital_twin:
+  knowledge_base:
+    cleanup_interval: 1800.0
+    enabled: true
+    max_entries: 1000
+    similarity_threshold: 0.7
+  learning_engine:
+    batch_size: 16
+    enabled: true
+    learning_rate: 0.02
+    pattern_recognition: true
+    update_interval: 30.0
+  world_model:
+    confidence_threshold: 0.6
+    enabled: true
+    prediction_horizon: 120.0
+    type: statistical
+    update_interval: 15.0
+framework:
+  description: Development environment for SWIM POLARIS adaptation system
+  name: swim-polaris-adaptation-development
+  version: 1.0.0-development
+logging:
+  format: detailed
+  handlers:
+  - level: DEBUG
+    type: console
+  - backup_count: 5
+    level: DEBUG
+    max_size_mb: 100
+    path: logs/swim_polaris_development.log
+    type: file
+  level: DEBUG
+managed_systems:
+- config:
+    connection:
+      host: localhost
+      port: 4242
+    implementation:
+      collection_interval: 5.0
+      max_retries: 3
+      retry_base_delay: 1.0
+      retry_max_delay: 5.0
+      timeout: 30.0
+    system_name: swim-development
+  connector_type: swim
+  enabled: true
+  system_id: swim-development
+message_bus:
+  nats:
+    connection_timeout: 10.0
+    name: swim-polaris-development-client
+    reconnect_attempts: 5
+    reconnect_delay: 2.0
+    servers:
+    - nats://localhost:4222
+performance:
+  adaptation_tracking:
+    enabled: true
+    track_impact: true
+    track_response_time: true
+    track_success_rate: true
+  metrics_collection:
+    collection_interval: 30.0
+    enabled: true
+    retention_period: 86400
+  system_monitoring:
+    cpu_monitoring: true
+    enabled: true
+    memory_monitoring: true
+    network_monitoring: false

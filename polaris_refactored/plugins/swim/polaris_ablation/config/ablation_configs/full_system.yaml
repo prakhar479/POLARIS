@@ -1,0 +1,22 @@
+ablation:
+  components:
+    causal_reasoning: true
+    experience_based_reasoning: true
+    knowledge_base: true
+    learning_engine: true
+    predictive_strategy: true
+    reactive_strategy: true
+    statistical_reasoning: true
+    world_model: true
+  description: Full system with all components enabled
+  study_parameters:
+    cooldown_period: 300
+    duration: 3600
+    metrics_export_interval: 60
+    warmup_period: 300
+logging:
+  handlers:
+  - level: DEBUG
+    path: logs/full_system.log
+    type: file
+  level: INFO

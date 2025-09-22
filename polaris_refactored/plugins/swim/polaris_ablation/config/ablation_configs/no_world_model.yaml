@@ -1,0 +1,22 @@
+ablation:
+  components:
+    causal_reasoning: false
+    experience_based_reasoning: true
+    knowledge_base: true
+    learning_engine: true
+    predictive_strategy: false
+    reactive_strategy: true
+    statistical_reasoning: true
+    world_model: false
+  description: System without world model
+  study_parameters:
+    cooldown_period: 300
+    duration: 3600
+    metrics_export_interval: 60
+    warmup_period: 300
+logging:
+  handlers:
+  - level: DEBUG
+    path: logs/no_world_model.log
+    type: file
+  level: INFO

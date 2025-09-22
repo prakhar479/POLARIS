@@ -1,0 +1,181 @@
+ablation:
+  components:
+    causal_reasoning: true
+    experience_based_reasoning: true
+    knowledge_base: true
+    learning_engine: true
+    predictive_strategy: true
+    reactive_strategy: true
+    statistical_reasoning: true
+    world_model: true
+  description: Production configuration with all components enabled
+  study_parameters:
+    cooldown_period: 300
+    duration: 7200
+    metrics_export_interval: 60
+    warmup_period: 300
+adaptation:
+  constraints:
+    dimmer_change_limit: 0.1
+    max_servers: 20
+    min_servers: 2
+    server_change_limit: 2
+  strategies:
+    predictive:
+      confidence_threshold: 0.8
+      enabled: true
+      prediction_window: 600.0
+      trend_analysis_window: 1800.0
+      weight: 0.7
+    reactive:
+      enabled: true
+      response_time_threshold: 1000.0
+      utilization_high_threshold: 0.8
+      utilization_low_threshold: 0.25
+      weight: 0.3
+  thresholds:
+    dimmer:
+      max: 1.0
+      min: 0.1
+    response_time:
+      critical: 1200.0
+      warning: 800.0
+    server_utilization:
+      critical: 0.95
+      high: 0.8
+      low: 0.2
+control_reasoning:
+  adaptive_controller:
+    adaptation_cooldown: 300.0
+    enabled: true
+    mape_k_interval: 60.0
+    max_concurrent_adaptations: 2
+    safety_checks: true
+  reasoning_engine:
+    confidence_threshold: 0.75
+    enabled: true
+    result_fusion: weighted_consensus
+    strategies:
+      causal:
+        enabled: true
+        weight: 0.4
+      experience_based:
+        enabled: true
+        weight: 0.3
+      statistical:
+        enabled: true
+        weight: 0.3
+    validation_enabled: true
+data_storage:
+  backends:
+    default:
+      connection_string: ${SWIM_POLARIS_DB_URL}
+      max_overflow: 30
+      pool_size: 20
+      type: postgresql
+    metrics:
+      connection_string: ${SWIM_POLARIS_METRICS_DB_URL}
+      retention_hours: 168
+      type: timeseries
+digital_twin:
+  knowledge_base:
+    backup_interval: 86400.0
+    cleanup_interval: 7200.0
+    enabled: true
+    max_entries: 100000
+    persistence: true
+    similarity_threshold: 0.85
+  learning_engine:
+    batch_size: 64
+    enabled: true
+    learning_rate: 0.005
+    pattern_recognition: true
+    update_interval: 300.0
+  world_model:
+    confidence_threshold: 0.8
+    enabled: true
+    models:
+    - type: statistical
+      weight: 0.4
+    - type: neural_network
+      weight: 0.6
+    prediction_horizon: 1800.0
+    type: composite
+    update_interval: 60.0
+framework:
+  description: Production environment for SWIM POLARIS adaptation system
+  name: swim-polaris-adaptation-production
+  version: 1.0.0
+logging:
+  format: json
+  handlers:
+  - level: INFO
+    type: console
+  - backup_count: 5
+    level: INFO
+    max_size_mb: 100
+    path: logs/swim_polaris_production.log
+    type: file
+  - facility: local0
+    level: WARNING
+    type: syslog
+  level: INFO
+managed_systems:
+- config:
+    connection:
+      host: localhost
+      port: 4242
+    implementation:
+      collection_interval: 30.0
+      max_retries: 3
+      retry_base_delay: 1.0
+      retry_max_delay: 5.0
+      timeout: 30.0
+    system_name: swim-production
+  connector_type: swim
+  enabled: true
+  system_id: swim-production
+message_bus:
+  nats:
+    connection_timeout: 30.0
+    max_pings_outstanding: 2
+    max_reconnect_delay: 60.0
+    name: swim-polaris-production-client
+    ping_interval: 120.0
+    reconnect_attempts: 10
+    reconnect_delay: 5.0
+    servers:
+    - nats://nats-1.production:4222
+    - nats://nats-2.production:4222
+    - nats://nats-3.production:4222
+observability:
+  enable_metrics: true
+  enable_tracing: true
+  jaeger_endpoint: ${JAEGER_ENDPOINT}
+  prometheus_endpoint: ${PROMETHEUS_ENDPOINT}
+performance:
+  adaptation_tracking:
+    enabled: true
+    track_impact: true
+    track_response_time: true
+    track_success_rate: true
+  metrics_collection:
+    collection_interval: 30.0
+    enabled: true
+    retention_period: 86400
+  system_monitoring:
+    cpu_monitoring: true
+    enabled: true
+    memory_monitoring: true
+    network_monitoring: true
+security:
+  authentication:
+    enabled: true
+    method: jwt
+  authorization:
+    enabled: true
+    rbac: true
+  enabled: true
+  encryption:
+    enabled: true
+    tls_version: '1.3'

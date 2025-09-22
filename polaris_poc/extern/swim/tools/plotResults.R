@@ -120,7 +120,7 @@ readVector <- function(dbconn, vectorName, moduleName) {
     dbGetQuery(dbconn, query)  
 }
 
-plotResults <- function(config, folder="SWIM", run, saveAs=NULL, instantaneousUtility=FALSE,
+plotResults <- function(config, folder="TEST", run, saveAs=NULL, instantaneousUtility=FALSE,
                          periodGrid=FALSE, utilityFc=periodUtilitySEAMS2017A,
                          brief=FALSE) {
   USE_COMPUTED_UTILITY <- TRUE

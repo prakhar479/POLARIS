@@ -1,0 +1,134 @@
+ablation:
+  components:
+    causal_reasoning: false
+    experience_based_reasoning: false
+    knowledge_base: true
+    learning_engine: false
+    predictive_strategy: false
+    reactive_strategy: true
+    statistical_reasoning: true
+    world_model: true
+  description: Testing configuration with all components enabled
+  study_parameters:
+    cooldown_period: 5
+    duration: 60
+    metrics_export_interval: 10
+    warmup_period: 5
+adaptation:
+  constraints:
+    dimmer_change_limit: 0.2
+    max_servers: 3
+    min_servers: 1
+    server_change_limit: 1
+  strategies:
+    predictive:
+      enabled: false
+      weight: 0.0
+    reactive:
+      enabled: true
+      response_time_threshold: 500.0
+      utilization_high_threshold: 0.8
+      utilization_low_threshold: 0.3
+      weight: 1.0
+  thresholds:
+    dimmer:
+      max: 1.0
+      min: 0.1
+    response_time:
+      critical: 1200.0
+      warning: 800.0
+    server_utilization:
+      critical: 0.95
+      high: 0.8
+      low: 0.2
+control_reasoning:
+  adaptive_controller:
+    adaptation_cooldown: 10.0
+    enabled: true
+    mape_k_interval: 5.0
+    max_concurrent_adaptations: 1
+  reasoning_engine:
+    confidence_threshold: 0.8
+    enabled: true
+    result_fusion: first_valid
+    strategies:
+      causal:
+        enabled: false
+        weight: 0.0
+      experience_based:
+        enabled: false
+        weight: 0.0
+      statistical:
+        enabled: true
+        weight: 1.0
+digital_twin:
+  knowledge_base:
+    cleanup_interval: 7200.0
+    enabled: true
+    max_entries: 10000
+    similarity_threshold: 0.85
+  learning_engine:
+    batch_size: 64
+    enabled: false
+    learning_rate: 0.005
+    pattern_recognition: true
+    update_interval: 300.0
+  world_model:
+    confidence_threshold: 0.8
+    enabled: true
+    prediction_horizon: 1800.0
+    type: statistical
+    update_interval: 60.0
+framework:
+  description: Testing environment for SWIM POLARIS adaptation system
+  name: swim-polaris-adaptation-testing
+  version: 1.0.0-testing
+logging:
+  format: detailed
+  handlers:
+  - level: ERROR
+    type: console
+  - backup_count: 1
+    level: INFO
+    max_size_mb: 10
+    path: logs/swim_polaris_testing.log
+    type: file
+  level: WARNING
+managed_systems:
+- config:
+    connection:
+      host: localhost
+      port: 4242
+    implementation:
+      collection_interval: 1.0
+      max_retries: 3
+      retry_base_delay: 1.0
+      retry_max_delay: 5.0
+      timeout: 30.0
+    system_name: swim-testing
+  connector_type: swim
+  enabled: true
+  system_id: swim-testing
+message_bus:
+  nats:
+    connection_timeout: 2.0
+    name: swim-polaris-testing-client
+    reconnect_attempts: 1
+    reconnect_delay: 0.5
+    servers:
+    - nats://localhost:4223
+performance:
+  adaptation_tracking:
+    enabled: true
+    track_impact: false
+    track_response_time: true
+    track_success_rate: true
+  metrics_collection:
+    collection_interval: 1.0
+    enabled: true
+    retention_period: 300
+  system_monitoring:
+    cpu_monitoring: true
+    enabled: false
+    memory_monitoring: true
+    network_monitoring: false

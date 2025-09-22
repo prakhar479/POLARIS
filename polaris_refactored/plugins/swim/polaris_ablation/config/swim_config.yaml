@@ -1,0 +1,145 @@
+# SWIM-Specific Configuration
+# Detailed configuration for SWIM system integration
+
+swim:
+  # Connection configuration
+  connection:
+    host: "localhost"
+    port: 4242
+    timeout: 30.0
+    max_retries: 3
+    retry_base_delay: 1.0
+    retry_max_delay: 5.0
+    connection_pool_size: 5
+  
+  # Metrics collection configuration
+  metrics:
+    collection_interval: 10.0
+    batch_size: 1
+    timeout: 15.0
+    
+    # Available metrics
+    basic_metrics:
+      - "server_count"
+      - "active_servers"
+      - "max_servers"
+      - "dimmer"
+    
+    performance_metrics:
+      - "basic_response_time"
+      - "optional_response_time"
+    
+    derived_metrics:
+      - "server_utilization"
+      - "performance_ratio"
+      - "load_factor"
+  
+  # Action configuration
+  actions:
+    add_server:
+      command: "add_server"
+      validation: true
+      constraints:
+        max_servers_check: true
+      cooldown: 60.0
+    
+    remove_server:
+      command: "remove_server"
+      validation: true
+      constraints:
+        min_servers_check: true
+        min_servers: 1
+      cooldown: 60.0
+    
+    set_dimmer:
+      command: "set_dimmer"
+      validation: true
+      constraints:
+        min_value: 0.0
+        max_value: 1.0
+        step_size: 0.1
+      cooldown: 30.0
+    
+    adjust_qos:
+      command: "set_dimmer"  # Maps to dimmer command
+      validation: true
+      constraints:
+        min_value: 0.1
+        max_value: 1.0
+        step_size: 0.05
+      cooldown: 30.0
+  
+  # Health monitoring
+  health:
+    check_interval: 30.0
+    timeout: 10.0
+    failure_threshold: 3
+    recovery_threshold: 2
+    
+    checks:
+      - name: "connection"
+        command: "get_servers"
+        expected_type: "int"
+      
+      - name: "responsiveness"
+        command: "dimmer"
+        expected_type: "float"
+        timeout: 5.0
+  
+  # Performance baselines and thresholds
+  performance:
+    baselines:
+      response_time: 500.0  # ms
+      server_utilization: 0.6
+      dimmer_optimal: 1.0
+    
+    thresholds:
+      response_time:
+        good: 400.0
+        warning: 800.0
+        critical: 1200.0
+      
+      server_utilization:
+        low: 0.2
+        optimal_min: 0.4
+        optimal_max: 0.8
+        high: 0.9
+        critical: 0.95
+      
+      dimmer:
+        min_acceptable: 0.3
+        optimal: 1.0
+        degraded: 0.7
+  
+  # Adaptation constraints
+  constraints:
+    servers:
+      min: 1
+      max: 10
+      change_limit: 2  # max servers to add/remove at once
+    
+    dimmer:
+      min: 0.1
+      max: 1.0
+      change_limit: 0.2  # max change at once
+      precision: 0.05   # minimum change increment
+    
+    timing:
+      min_interval_between_actions: 30.0  # seconds
+      max_concurrent_actions: 1
+      action_timeout: 60.0
+  
+  # Workload patterns (for predictive adaptation)
+  workload_patterns:
+    daily:
+      enabled: true
+      peak_hours: [9, 10, 11, 14, 15, 16]
+      low_hours: [0, 1, 2, 3, 4, 5, 22, 23]
+    
+    weekly:
+      enabled: true
+      high_days: [1, 2, 3, 4, 5]  # Monday-Friday
+      low_days: [0, 6]  # Sunday, Saturday
+    
+    seasonal:
+      enabled: false  # Not applicable for short-term studies

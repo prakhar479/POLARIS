@@ -1,0 +1,224 @@
+# Base Configuration for SWIM POLARIS Adaptation System
+# This configuration provides the foundation for all ablation studies
+
+framework:
+  name: "swim-polaris-adaptation"
+  version: "1.0.0"
+  description: "Complete self-adaptation system for SWIM using POLARIS framework"
+
+# Message bus configuration (NATS)
+message_bus:
+  nats:
+    servers:
+      - "nats://localhost:4222"
+    name: "swim-polaris-client"
+    connection_timeout: 10.0
+    reconnect_attempts: 5
+    reconnect_delay: 2.0
+
+# Data storage configuration
+data_storage:
+  backends:
+    default:
+      type: "in_memory"
+    metrics:
+      type: "in_memory"
+      retention_hours: 24
+    knowledge:
+      type: "in_memory"
+      max_entries: 10000
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "json"
+  handlers:
+    - type: "console"
+      level: "INFO"
+    - type: "file"
+      path: "logs/swim_polaris.log"
+      level: "DEBUG"
+      max_size_mb: 100
+      backup_count: 5
+
+# Observability configuration
+observability:
+  service_name: "swim-polaris-adaptation"
+  enable_metrics: true
+  enable_tracing: true
+  enable_json_logging: true
+  metrics_export_interval: 30
+  jaeger_endpoint: "http://localhost:14268/api/traces"
+
+# SWIM managed system configuration
+managed_systems:
+  - system_id: "swim"
+    connector_type: "swim"
+    enabled: true
+    config:
+      system_name: "swim"
+      connection:
+        host: "localhost"
+        port: 4242
+      implementation:
+        timeout: 30.0
+        max_retries: 3
+        retry_base_delay: 1.0
+        retry_max_delay: 5.0
+        collection_interval: 10.0
+
+# Monitor adapter configuration
+monitor_adapter:
+  enabled: true
+  collection_interval: 10.0
+  health_check_interval: 30.0
+  batch_size: 10
+  timeout: 15.0
+
+# Execution adapter configuration
+execution_adapter:
+  enabled: true
+  validation_enabled: true
+  execution_timeout: 30.0
+  result_monitoring_duration: 60.0
+
+# Digital twin layer configuration
+digital_twin:
+  world_model:
+    enabled: true
+    type: "statistical"
+    update_interval: 30.0
+    prediction_horizon: 300.0
+    confidence_threshold: 0.7
+  
+  knowledge_base:
+    enabled: true
+    max_entries: 10000
+    similarity_threshold: 0.8
+    cleanup_interval: 3600.0
+  
+  learning_engine:
+    enabled: true
+    learning_rate: 0.01
+    batch_size: 32
+    update_interval: 60.0
+    pattern_recognition: true
+
+# Control and reasoning layer configuration
+control_reasoning:
+  adaptive_controller:
+    enabled: true
+    mape_k_interval: 30.0
+    max_concurrent_adaptations: 3
+    adaptation_cooldown: 60.0
+  
+  reasoning_engine:
+    enabled: true
+    strategies:
+      statistical:
+        enabled: true
+        weight: 0.3
+      causal:
+        enabled: true
+        weight: 0.4
+      experience_based:
+        enabled: true
+        weight: 0.3
+    confidence_threshold: 0.6
+    result_fusion: "weighted_average"
+
+# SWIM-specific adaptation configuration
+adaptation:
+  strategies:
+    reactive:
+      enabled: true
+      weight: 0.4
+      response_time_threshold: 1000.0  # ms
+      utilization_high_threshold: 0.8
+      utilization_low_threshold: 0.3
+    
+    predictive:
+      enabled: true
+      weight: 0.6
+      prediction_window: 300.0  # seconds
+      trend_analysis_window: 600.0  # seconds
+      confidence_threshold: 0.7
+  
+  thresholds:
+    response_time:
+      warning: 800.0   # ms
+      critical: 1200.0 # ms
+    
+    server_utilization:
+      low: 0.2
+      high: 0.8
+      critical: 0.95
+    
+    dimmer:
+      min: 0.1
+      max: 1.0
+      default: 1.0
+  
+  constraints:
+    min_servers: 1
+    max_servers: 10
+    server_change_limit: 2  # max servers to add/remove at once
+    dimmer_change_limit: 0.2  # max dimmer change at once
+  
+  actions:
+    add_server:
+      enabled: true
+      cooldown: 60.0
+      max_concurrent: 1
+    
+    remove_server:
+      enabled: true
+      cooldown: 60.0
+      max_concurrent: 1
+    
+    set_dimmer:
+      enabled: true
+      cooldown: 30.0
+      step_size: 0.1
+    
+    adjust_qos:
+      enabled: true
+      cooldown: 30.0
+
+# Performance monitoring configuration
+performance:
+  metrics_collection:
+    enabled: true
+    collection_interval: 10.0
+    retention_period: 86400  # 24 hours in seconds
+  
+  adaptation_tracking:
+    enabled: true
+    track_success_rate: true
+    track_response_time: true
+    track_impact: true
+  
+  system_monitoring:
+    enabled: true
+    cpu_monitoring: true
+    memory_monitoring: true
+    network_monitoring: true
+
+# Ablation study configuration (base - all components enabled)
+ablation:
+  description: "Base configuration with all components enabled"
+  components:
+    world_model: true
+    knowledge_base: true
+    learning_engine: true
+    statistical_reasoning: true
+    causal_reasoning: true
+    experience_based_reasoning: true
+    reactive_strategy: true
+    predictive_strategy: true
+  
+  study_parameters:
+    duration: 3600  # 1 hour
+    warmup_period: 300  # 5 minutes
+    cooldown_period: 300  # 5 minutes
+    metrics_export_interval: 60  # 1 minute
