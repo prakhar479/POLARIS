@@ -422,6 +422,20 @@ class PolarisMetricsCollector:
             return Timer(histogram, labels={"system_id": system_id})
         return Timer(Histogram("dummy", "dummy"))
 
+    # Compatibility helper for code that expects a generic increment_counter API
+    def increment_counter(self, name: str, labels: Optional[dict] = None) -> None:
+        """Increment a counter metric by name. Safe no-op if metric not registered.
+
+        This method is provided for compatibility: some components expect a generic
+        increment_counter(name, labels) helper on the global metrics collector.
+        """
+        metric = self.get_metric(name)
+        if isinstance(metric, Counter):
+            metric.increment(labels=labels or {})
+        else:
+            # Metric not found or not a counter: log a debug and continue (non-fatal)
+            pass
+
 
 class MetricsExporter(ABC):
     """Abstract base class for metrics exporters"""

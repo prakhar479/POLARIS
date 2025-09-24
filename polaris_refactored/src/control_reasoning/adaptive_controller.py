@@ -266,6 +266,8 @@ class PolarisAdaptiveController:
         world_model: Optional[PolarisWorldModel] = None,
         knowledge_base: Optional[PolarisKnowledgeBase] = None,
         event_bus: Optional[PolarisEventBus] = None,
+        enable_pid_strategy: bool = False,
+        pid_config: Optional[Dict[str, Any]] = None,
     ):
         # Observability integration
         self.logger = get_logger("polaris.adaptive_controller")
@@ -278,11 +280,38 @@ class PolarisAdaptiveController:
         self._event_bus: Optional[PolarisEventBus] = event_bus
 
         # Strategies (wire dependencies where applicable)
-        default_strategies: List[ControlStrategy] = [
-            ReactiveControlStrategy(),
+        default_strategies: List[ControlStrategy] = []
+        
+        # Add PID strategy if enabled
+        if enable_pid_strategy:
+            try:
+                from .pid_strategy_factory import PIDStrategyFactory, create_pid_strategy_from_system_type
+                
+                if pid_config:
+                    pid_strategy = PIDStrategyFactory.create_from_config(pid_config)
+                else:
+                    # Use default CPU/memory strategy
+                    pid_strategy = PIDStrategyFactory.create_default_cpu_memory_strategy()
+                
+                default_strategies.append(pid_strategy)
+                self.logger.info("PID strategy enabled and added")
+                
+            except Exception as e:
+                self.logger.error("Failed to initialize PID strategy", extra={
+                    "error": str(e)
+                }, exc_info=e)
+                # Fall back to basic reactive strategy
+                default_strategies.append(ReactiveControlStrategy())
+        else:
+            # Use basic reactive strategy
+            default_strategies.append(ReactiveControlStrategy())
+        
+        # Add other strategies
+        default_strategies.extend([
             PredictiveControlStrategy(world_model=world_model),
             LearningControlStrategy(knowledge_base=knowledge_base),
-        ]
+        ])
+        
         self._control_strategies = control_strategies or default_strategies
         
         self.logger.info("Adaptive controller initialized", extra={
@@ -442,10 +471,19 @@ class PolarisAdaptiveController:
                             return s
             except Exception:
                 pass
-        # Default reactive
+        # Default reactive - prefer PID strategy if available
+        from .pid_reactive_strategy import PIDReactiveStrategy
+        
+        # First try to find PID strategy
+        for s in self._control_strategies:
+            if isinstance(s, PIDReactiveStrategy):
+                return s
+        
+        # Fall back to basic reactive strategy
         for s in self._control_strategies:
             if isinstance(s, ReactiveControlStrategy):
                 return s
+        
         return self._control_strategies[0] if self._control_strategies else None
 
     async def _get_current_state_snapshot(self, system_id: str) -> Dict[str, Any]:
