@@ -1,0 +1,182 @@
+# LLM Integration Configuration Example
+# This file shows how to configure the LLM integration infrastructure
+# for different environments and use cases.
+
+# Development Environment Configuration
+development:
+  llm:
+    provider: "mock"
+    api_endpoint: "http://localhost:8000"
+    model_name: "mock-gpt-4"
+    max_tokens: 1000
+    temperature: 0.1
+    timeout: 30.0
+    max_retries: 3
+    cache_ttl: 300
+    enable_function_calling: true
+  
+  prompt_management:
+    template_directory: "./config/prompts"
+    enable_custom_templates: true
+  
+  tool_registry:
+    default_tools: ["echo", "calculator"]
+    custom_tools_directory: "./plugins/tools"
+  
+  conversation_management:
+    max_conversations: 100
+    max_messages_per_conversation: 50
+    cleanup_interval_hours: 24
+  
+  caching:
+    max_size: 500
+    default_ttl: 300
+    cleanup_interval: 60
+
+# Staging Environment Configuration  
+staging:
+  llm:
+    provider: "openai"
+    api_endpoint: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model_name: "gpt-4"
+    max_tokens: 1500
+    temperature: 0.1
+    timeout: 60.0
+    max_retries: 5
+    cache_ttl: 600
+    enable_function_calling: true
+  
+  prompt_management:
+    template_directory: "./config/prompts"
+    enable_custom_templates: true
+  
+  tool_registry:
+    default_tools: ["echo", "calculator", "system_metrics", "knowledge_base"]
+    custom_tools_directory: "./plugins/tools"
+  
+  conversation_management:
+    max_conversations: 500
+    max_messages_per_conversation: 100
+    cleanup_interval_hours: 12
+  
+  caching:
+    max_size: 2000
+    default_ttl: 600
+    cleanup_interval: 300
+
+# Production Environment Configuration
+production:
+  llm:
+    provider: "openai"
+    api_endpoint: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model_name: "gpt-4"
+    max_tokens: 2000
+    temperature: 0.05  # Lower temperature for more consistent responses
+    timeout: 120.0
+    max_retries: 5
+    retry_delay: 2.0
+    cache_ttl: 1800  # 30 minutes
+    enable_function_calling: true
+  
+  prompt_management:
+    template_directory: "./config/prompts"
+    enable_custom_templates: false  # Use only validated templates in production
+  
+  tool_registry:
+    default_tools: ["system_metrics", "knowledge_base", "world_model", "action_validator"]
+    custom_tools_directory: "./plugins/tools"
+    enable_tool_validation: true
+  
+  conversation_management:
+    max_conversations: 1000
+    max_messages_per_conversation: 200
+    cleanup_interval_hours: 6
+    enable_conversation_persistence: true
+  
+  caching:
+    max_size: 5000
+    default_ttl: 1800
+    cleanup_interval: 600
+    enable_cache_metrics: true
+
+# Alternative Provider Configuration (Anthropic)
+anthropic_config:
+  llm:
+    provider: "anthropic"
+    api_endpoint: "https://api.anthropic.com"
+    api_key: "${ANTHROPIC_API_KEY}"
+    model_name: "claude-3-sonnet-20240229"
+    max_tokens: 2000
+    temperature: 0.1
+    timeout: 90.0
+    max_retries: 3
+    cache_ttl: 900
+    enable_function_calling: true
+
+# Tool-specific configurations
+tools:
+  system_metrics:
+    enabled: true
+    cache_ttl: 60  # Cache metrics for 1 minute
+    timeout: 10.0
+    
+  knowledge_base:
+    enabled: true
+    cache_ttl: 3600  # Cache knowledge queries for 1 hour
+    max_results: 50
+    
+  world_model:
+    enabled: true
+    cache_ttl: 300  # Cache predictions for 5 minutes
+    prediction_horizon: 3600  # 1 hour predictions
+    
+  action_validator:
+    enabled: true
+    cache_ttl: 0  # Don't cache validation results
+    strict_validation: true
+
+# Prompt template configurations
+prompts:
+  system_reasoning:
+    max_context_length: 4000
+    include_history: true
+    history_limit: 10
+    
+  world_model_update:
+    max_context_length: 6000
+    include_dependencies: true
+    include_patterns: true
+    
+  adaptation_impact_simulation:
+    max_context_length: 5000
+    include_risk_factors: true
+    simulation_depth: 3
+
+# Observability and monitoring
+observability:
+  enable_llm_metrics: true
+  enable_tool_metrics: true
+  enable_conversation_metrics: true
+  enable_cache_metrics: true
+  
+  metrics:
+    - llm_api_calls_total
+    - llm_api_latency_seconds
+    - llm_cache_hit_rate
+    - tool_execution_total
+    - tool_execution_duration_seconds
+    - conversation_duration_seconds
+    
+  logging:
+    log_llm_requests: false  # Don't log full requests in production
+    log_llm_responses: false  # Don't log full responses in production
+    log_tool_executions: true
+    log_conversation_flows: true
+    
+  tracing:
+    enable_distributed_tracing: true
+    trace_llm_calls: true
+    trace_tool_executions: true
+    trace_conversations: true
