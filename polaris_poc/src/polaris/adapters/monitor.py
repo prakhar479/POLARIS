@@ -123,34 +123,41 @@ class MonitorAdapter(ExternalAdapter):
     async def _query_metric(
         self, metric_config: Dict[str, Any], cycle_ctx: Dict[str, Any]
     ) -> Optional[TelemetryEvent]:
-        """Query a single metric from the managed system.
-
-        Args:
-            metric_config: Metric configuration from plugin
-            cycle_ctx: Context for this collection cycle
-
-        Returns:
-            TelemetryEvent if successful, None otherwise
-        """
         metric_name = metric_config["name"]
         command = metric_config["command"]
         unit = metric_config.get("unit", "unknown")
         metric_type = metric_config.get("type", "float")
 
         try:
-            response = await self.connector.execute_command(command)
+            # Check if this is a per-server utilization metric
+            server_index = metric_config.get("server_index")
+            if server_index is not None:
+                # Use cached active_servers if already collected in this cycle
+                active_servers = cycle_ctx.get("active_servers")
+                if active_servers is None:
+                    resp = await self.connector.execute_command("get_active_servers")
+                    active_servers = int(resp)
+                    cycle_ctx["active_servers"] = active_servers
 
-            # Parse response based on type
-            if metric_type == "float":
-                value = float(response)
-            elif metric_type == "integer":
-                value = int(response)
-            elif metric_type == "boolean":
-                value = response.lower() in ("true", "1", "yes", "on")
-            else:  # string
-                value = response
+                if server_index >= active_servers:
+                    # Server doesn’t exist → set value to 0
+                    value = 0.0
+                else:
+                    response = await self.connector.execute_command(command)
+                    value = float(response)
 
-            # Create telemetry event
+            else:
+                # Normal metric
+                response = await self.connector.execute_command(command)
+                if metric_type == "float":
+                    value = float(response)
+                elif metric_type == "integer":
+                    value = int(response)
+                elif metric_type == "boolean":
+                    value = response.lower() in ("true", "1", "yes", "on")
+                else:
+                    value = response
+
             event = TelemetryEvent(
                 name=f"{self.plugin_config['system_name']}.{metric_name}",
                 value=value,
@@ -166,36 +173,11 @@ class MonitorAdapter(ExternalAdapter):
                 "Metric collected",
                 extra={"metric": metric_name, "value": value, "unit": unit, **cycle_ctx},
             )
-
             return event
 
         except Exception as e:
-            if self.error_handling == "fail":
-                raise
-            elif self.error_handling == "default":
-                # Return a default value event
-                default_value = (
-                    0
-                    if metric_type in ("float", "integer")
-                    else False if metric_type == "boolean" else ""
-                )
-                return TelemetryEvent(
-                    name=f"{self.plugin_config['system_name']}.{metric_name}",
-                    value=default_value,
-                    unit=unit,
-                    source=f"{self.plugin_config['system_name']}_monitor",
-                    tags={
-                        "system": self.plugin_config["system_name"],
-                        "category": metric_config.get("category", "unknown"),
-                        "error": "default_value_used",
-                    },
-                )
-            else:  # skip
-                self.logger.warning(
-                    "Metric collection failed",
-                    extra={"metric": metric_name, "command": command, "error": str(e), **cycle_ctx},
-                )
-                return None
+            self.logger.error(f"Failed to collect metric {metric_name}: {e}")
+            return None
 
     def _calculate_derived_metrics(self, base_metrics: Dict[str, float]) -> Dict[str, float]:
         """Calculate derived metrics from base metrics.
@@ -333,9 +315,6 @@ class MonitorAdapter(ExternalAdapter):
                 break
 
         current_state_metrics = {**base_metrics, **derived_metrics}
-        # remove server_utilization from snapshot
-        if "server_utilization" in current_state_metrics:
-            del current_state_metrics["server_utilization"]
 
         # 2. Assemble the snapshot payload.
         monitor_snapshot = {
@@ -348,6 +327,7 @@ class MonitorAdapter(ExternalAdapter):
             "cycle_id": cycle_id,
         }
 
+        print(monitor_snapshot)  # <- add this
         # 3. Call the function to store this snapshot in the Knowledge Base.
         await self.store_system_snapshot(monitor_snapshot)
 

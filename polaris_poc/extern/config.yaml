@@ -167,6 +167,31 @@ monitoring:
       type: "float"
       description: "Current request arrival rate (requests per second). Represents system load demand."
       category: "performance"
+    
+    - name: "utilization_server_0"
+      command: "get_utilization server1"
+      server_index: 0
+      unit: "ratio"
+      type: "float"
+      description: "Current server utilization for server 0"
+      category: "resource"
+
+    - name: "utilization_server_1"
+      command: "get_utilization server2"
+      server_index: 1
+      unit: "ratio"
+      type: "float"
+      description: "Current server utilization for server 1"
+      category: "resource"
+
+    - name: "utilization_server_2"
+      command: "get_utilization server3"
+      server_index: 2
+      unit: "ratio"
+      type: "float"
+      description: "Current server utilization for server 2"
+      category: "resource"
+
   
   # -------------------------------------------------------------------------
   # Derived Metrics - Calculated Indicators
@@ -180,10 +205,11 @@ monitoring:
       description: "Weighted average response time across all services. Overall performance indicator."
     
     - name: "server_utilization"
-      formula: "active_servers / max_servers"
+      formula: "(utilization_server_0 + utilization_server_1 + utilization_server_2) / active_servers"
       unit: "ratio"
-      description: "Server utilization ratio (0.0-1.0). Indicates how close system is to capacity limits."
-  
+      description: "Average server utilization ratio (0.0-1.0). Indicates how close system is to capacity limits."
+
+
   # -------------------------------------------------------------------------
   # Monitoring Strategy Configuration
   # -------------------------------------------------------------------------
