@@ -53,6 +53,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.temperature = temperature
         self.max_retries = 5
         self.timeout = timeout
+        self.last_run_time: Optional[float] = None
         self.initial_backoff = 2.0  # seconds
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
         self.logger.info(f"Initializing LLMReasoningImplementation with model {model}")
@@ -74,16 +75,16 @@ class LLMReasoningImplementation(ReasoningInterface):
   You MUST follow this structured, sequential reasoning process, embodying a different expert persona at each step.
 
   **System Context & Rules:**
-  - **Primary Goal:** Maximize user experience (high dimmer) while keeping response time low (target < 3.0s) and minimizing cost by reducing servers.
+  - **Primary Goal:** Response time can never go above 3s (3000ms), reduce dimmer. Add server if response time is above 3s, reduce dimmer if above 2s. Maximize utilization. Maximize user experience (high dimmer) and minimizing cost by reducing servers.
   - **Server Limits:** The system cannot exceed its maximum server count or go below 1 server. Goal is to minimize server count while meeting performance targets.
-  - **Dimmer Range:** The dimmer value must be a float between 0.0 and 1.0. Changes should be gradual (less than 0.2 step).
+  - **Dimmer Range:** The dimmer value must be a float between 0.0 and 1.0. Changes should be gradual (less than 0.2 step) and not frequent.
   - **Action Cooldown:** Avoid adding/removing servers if a server action was taken recently.
 
   **Reasoning Steps (Chain of Thought):**
 
   1.  **Data Observer:**
       - **Task:** Concisely summarize the current system state from the input data.
-      - **Check:** Does the state violate any thresholds? (e.g., "Response time is 3.5s, exceeding the 3.0s target.")
+      - **Check:** Does the state violate any thresholds? (e.g., "Response time is 2.5s, exceeding the 2.0s target.")
 
   2.  **Trend Analyst:**
       - **Task:** Analyze the `historical_trends` data.
@@ -94,7 +95,7 @@ class LLMReasoningImplementation(ReasoningInterface):
       - **Check:** Did the action achieve its intended goal? (e.g., "The last action `REMOVE_SERVER` was `FAILED`; utilization dropped further.")
 
   4.  **Strategy Planner:**
-      - **Task:** Based on the observation, trend, and review, devise a plan. Your priorities are: 1) fix threshold violations, 2) increase utilization/efficiency, 3) maximize user experience (dimmer).
+      - **Task:** Based on the observation, trend, and review, devise a plan. Your priorities are: 1) fix threshold violations, 2) increase utilization and decrease response time, 3) maximize user experience (dimmer).
       - **Action:** Propose one action from [`add_server`, `remove_server`, `set_dimmer [value]`, `no_action`] with a brief justification.
 
   5.  **Action Sanity Check:**
@@ -111,7 +112,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         - `priority`: (String) Choose from `"low"`, `"medium"`, `"high"`.
 
   **Output Format:**
-  First, provide your entire step-by-step reasoning within a `<thinking>` block.
+  First, provide your entire step-by-step reasoning within a `<thinking>` block. Keep it in one short sentence per agent.
   After the thinking block, provide ONLY the final **JSON object** in a `<json_output>` block.
 
   ---
@@ -125,10 +126,10 @@ class LLMReasoningImplementation(ReasoningInterface):
 
   **Your Output:**
   <thinking>
-  1.  **Data Observer:** The system is overloaded. Utilization is 95% and response time is 4100ms (exceeds 3000ms target).
+  1.  **Data Observer:** The system is overloaded. Utilization is 0.95 and response time is 4100ms (exceeds 2000ms target).
   2.  **Trend Analyst:** Data indicates metrics are worsening, suggesting increasing load.
   3.  **Performance Reviewer:** The last action failed to control the rising response time.
-  4.  **Strategy Planner:** The priority is to reduce response time immediately. The best action is to increase capacity by adding a server.
+  4.  **Strategy Planner:** The priority is to reduce response time immediately. The best action is to increase capacity by adding a server. If server actions seem to excessive, play woth dimmer values
   5.  **Action Sanity Check:** The action `add_server` is valid. Current server count is 2, which is below the max of 3.
   6.  **Command Generator:** The command is to add a server. I will now generate the JSON object with high priority.
   </thinking>
@@ -153,7 +154,7 @@ class LLMReasoningImplementation(ReasoningInterface):
 
   **Your Output:**
   <thinking>
-  1.  **Data Observer:** The system is underutilized at 35% (below 50% target). Response time is excellent.
+  1.  **Data Observer:** The system is underutilized at 35% (below 50% target). Response time is less than 500ms which is good.
   2.  **Trend Analyst:** Utilization has been steadily decreasing, indicating inefficiency.
   3.  **Performance Reviewer:** The last action had a neutral outcome, but the system state has become inefficient.
   4.  **Strategy Planner:** To increase utilization and reduce cost, the system should remove a server.
@@ -189,7 +190,18 @@ class LLMReasoningImplementation(ReasoningInterface):
         """Execute LLM-based reasoning on the telemetry data."""
         start_time = time.time()
         reasoning_steps = ["Starting single-LLM agentic reasoning"]
+        now = time.time()
+        if self.last_run_time and (now - self.last_run_time) < 60:
+            self.logger.info("Skipping reasoning : cooldown not reached (2 mins)")
+            return ReasoningResult(
+                result={"action_type": "NO_ACTION", "source": "rate_limiter"},
+                confidence=1.0,
+                reasoning_steps=["Rate-limited: too soon since last run"],
+                context=context,
+                execution_time=0.01,
+            )
 
+        self.last_run_time = now
         try:
             # 1. Query KB for necessary data
             reasoning_steps.append("Querying KB for recent monitor snapshots.")
@@ -290,23 +302,23 @@ class LLMReasoningImplementation(ReasoningInterface):
                         extra={"component": "llm_thinking"},
                     )
 
-            # Look for the <json_output> block
-            if "<json_output>" in response:
-                json_start = response.find("<json_output>") + len("<json_output>")
-                json_end = response.find("</json_output>", json_start)
-                if json_end == -1:
-                    raise ValueError("Found <json_output> but no closing </json_output> tag.")
-                json_str = response[json_start:json_end].strip()
-            else:
+                # # Look for the <json_output> block
+                # if "<json_output>" in response:
+                #     json_start = response.find("<json_output>") + len("<json_output>")
+                #     json_end = response.find("</json_output>", json_start)
+                #     if json_end == -1:
+                #         raise ValueError("Found <json_output> but no closing </json_output> tag.")
+                #     json_str = response[json_start:json_end].strip()
+                # else:
                 # Fallback for cases where the model might forget the tags
-                self.logger.warning(
-                    "LLM response did not contain <json_output> tags. Falling back to extracting first JSON object."
-                )
-                json_start = response.find("{")
-                json_end = response.rfind("}") + 1
-                if json_start == -1 or json_end == 0:
-                    raise ValueError("No JSON object found in response")
-                json_str = response[json_start:json_end]
+            self.logger.warning(
+                "LLM response did not contain <json_output> tags. Falling back to extracting first JSON object."
+            )
+            json_start = response.find("{")
+            json_end = response.rfind("}") + 1
+            if json_start == -1 or json_end == 0:
+                raise ValueError("No JSON object found in response")
+            json_str = response[json_start:json_end]
 
             action = json.loads(json_str)
 
@@ -477,7 +489,7 @@ class LLMReasoningImplementation(ReasoningInterface):
 
                                 Behavior: High utilization → exponential rise in response time; adding servers lowers per-server load but raises cost; lowering dimmer reduces load/response time.
 
-                                Thresholds: Critical utilization = 0.85, normal response time = 1.0, recommended servers ≈ arrival_rate/10.
+                                Thresholds: Critical utilization = 1.0, normal response time = 1.0s, recommended servers ≈ arrival_rate/10.
                                 
                                 """
         )
@@ -706,8 +718,11 @@ class ContextBuilder:
             if pre_action_snapshot:
                 pre_state = pre_action_snapshot["content"]["content"]["current_state"]
 
-                rt_before = pre_state.get("response_time_ms_weighted", 0)
-                rt_after = current_state.get("response_time_ms_weighted", 0)
+                rt_before = pre_state.get("average_response_time", 0)
+                rt_after = current_state.get("average_response_time", 0)
+                # convert to ms
+                rt_before = rt_before * 1000
+                rt_after = rt_after * 1000
                 rt_change = rt_after - rt_before
 
                 # Define simple evaluation criteria
@@ -730,7 +745,7 @@ class ContextBuilder:
         system_goals_and_constraints = {
             "goals": {
                 "target_response_time_ms_weighted": 100.0,
-                "target_utilization_min_for_scale_down": 0.40,
+                "target_utilization_min_for_scale_down": 0.50,
             },
             "constraints": {
                 "max_servers": 3,
@@ -741,7 +756,7 @@ class ContextBuilder:
 
         # 4. Define Goals and Constraints (can be loaded from config)
         system_goals_and_constraints = {
-            "goals": {"target_utilization": 0.85},
+            "goals": {"target_utilization": 0.9},
             "constraints": {"max_servers": 3, "cooldown_period_minutes": 5},
         }
 
