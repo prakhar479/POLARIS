@@ -16,6 +16,7 @@ import google
 from pathlib import Path
 import random
 import uuid  # Import uuid for generating action_id
+import httpx
 
 # Add these imports to the existing reasoner_agent.py file
 from .reasoner_core import (
@@ -38,11 +39,11 @@ class LLMReasoningImplementation(ReasoningInterface):
         api_key: str,
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
-        model: str = "gemini-2.0-flash",
-        max_tokens: int = 1024,
+        model: str = "gpt-oss:20b",  # Default model for your local API
+        max_tokens: int = 512,
         temperature: float = 0.2,
-        timeout: float = 30.0,
-        base_url: Optional[str] = None,
+        timeout: float = 600.0,
+        base_url: str = "http://10.10.16.46:11435",  # Make the URL configurable
         logger: Optional[logging.Logger] = None,
     ):
 
@@ -53,12 +54,16 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.temperature = temperature
         self.max_retries = 5
         self.timeout = timeout
+        self.base_url = base_url  # Store the base URL
         self.last_run_time: Optional[float] = None
         self.initial_backoff = 2.0  # seconds
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
-        self.logger.info(f"Initializing LLMReasoningImplementation with model {model}")
-        # Initialize Gemini client
-        self.client = genai.Client(api_key=api_key)
+        self.logger.info(
+            f"Initializing LLMReasoningImplementation with model {model} at endpoint {self.base_url}"
+        )
+
+        # The google.genai client is no longer needed
+        # self.client = genai.Client(api_key=api_key)
 
         # In-memory storage for the last action
         self.last_action_memory: Optional[Dict[str, Any]] = None
@@ -72,10 +77,12 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.system_prompt_template = """
   You are an integrated, autonomous system controller for a web service. Your objective is to maintain optimal performance by analyzing telemetry data and executing control actions.
 
-  You MUST follow this structured, sequential reasoning process, embodying a different expert persona at each step.
+  You MUST follow this structured, sequential reasoning process, embodying a different expert persona at each step. Important Rule:
+- Your <thinking> section must be concise: **no more than one short sentence per step**.
+- Do not add extra commentary, disclaimers, or repetition.
 
   **System Context & Rules:**
-  - **Primary Goal:** Response time can never go above 3s (3000ms), reduce dimmer. Add server if response time is above 3s, reduce dimmer if above 2s. Maximize utilization. Maximize user experience (high dimmer) and minimizing cost by reducing servers.
+  - **Primary Goal:** Response time can never go above 1s (1000ms), reduce dimmer. Add server if response time is above 1s, reduce dimmer if above 0.7s. Maximize utilization. Maximize user experience (high dimmer) and minimizing cost by reducing servers.
   - **Server Limits:** The system cannot exceed its maximum server count or go below 1 server. Goal is to minimize server count while meeting performance targets.
   - **Dimmer Range:** The dimmer value must be a float between 0.0 and 1.0. Changes should be gradual (less than 0.2 step) and not frequent.
   - **Action Cooldown:** Avoid adding/removing servers if a server action was taken recently.
@@ -84,7 +91,7 @@ class LLMReasoningImplementation(ReasoningInterface):
 
   1.  **Data Observer:**
       - **Task:** Concisely summarize the current system state from the input data.
-      - **Check:** Does the state violate any thresholds? (e.g., "Response time is 2.5s, exceeding the 2.0s target.")
+      - **Check:** Does the state violate any thresholds? (e.g., "Response time is 2.5s, exceeding the 1.0s target.")
 
   2.  **Trend Analyst:**
       - **Task:** Analyze the `historical_trends` data.
@@ -126,7 +133,7 @@ class LLMReasoningImplementation(ReasoningInterface):
 
   **Your Output:**
   <thinking>
-  1.  **Data Observer:** The system is overloaded. Utilization is 0.95 and response time is 4100ms (exceeds 2000ms target).
+  1.  **Data Observer:** The system is overloaded. Utilization is 0.95 and response time is 4100ms (exceeds 1000ms target).
   2.  **Trend Analyst:** Data indicates metrics are worsening, suggesting increasing load.
   3.  **Performance Reviewer:** The last action failed to control the rising response time.
   4.  **Strategy Planner:** The priority is to reduce response time immediately. The best action is to increase capacity by adding a server. If server actions seem to excessive, play woth dimmer values
@@ -393,33 +400,57 @@ class LLMReasoningImplementation(ReasoningInterface):
         return []
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
+        """Calls the local LLM API endpoint."""
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=full_prompt)])]
-        generate_content_config = types.GenerateContentConfig(
-            temperature=self.temperature, max_output_tokens=self.max_tokens
-        )
+        endpoint_url = f"{self.base_url}/api/generate"
+
+        # Payload structure for Ollama-like APIs
+        payload = {
+            "model": self.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "max_tokens": self.max_tokens,
+        }
+
+        headers = {"Content-Type": "application/json"}
+
         for attempt in range(self.max_retries):
             try:
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=generate_content_config,
-                )
-                response_text = response.text.strip()
-                self.logger.info(f"LLM response received on attempt {attempt + 1}")
-                return response_text
-            except google.genai.errors.ServerError as e:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    self.logger.info(f"Sending request to local LLM at {endpoint_url}")
+                    response = await client.post(endpoint_url, json=payload, headers=headers)
+                    response.raise_for_status()  # Raise an exception for 4xx/5xx errors
+
+                    self.logger.debug(f"Raw response: {response.text[:500]}")
+
+                    response_data = response.json()
+                    response_text = response_data.get("response", "").strip()
+
+                    if not response_text:
+                        raise ValueError("LLM response JSON was empty or malformed.")
+
+                    self.logger.info(f"LLM response received on attempt {attempt + 1}")
+                    return response_text
+
+            except (
+                httpx.RequestError,
+                httpx.HTTPStatusError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as e:
                 self.logger.warning(
-                    f"Gemini API call failed with ServerError: {e}. Attempt {attempt + 1}/{self.max_retries}."
+                    f"Local LLM API call failed with error: {e}. Attempt {attempt + 1}/{self.max_retries}."
                 )
                 if attempt + 1 == self.max_retries:
-                    self.logger.error("Max retries reached. Failing the operation.")
+                    self.logger.error("Max retries reached. Failing the LLM operation.")
                     raise
+
                 backoff_time = self.initial_backoff * (2**attempt)
                 jitter = random.uniform(0, backoff_time * 0.1)
                 delay = backoff_time + jitter
-                self.logger.info(f"Model is overloaded. Retrying in {delay:.2f} seconds...")
+                self.logger.info(f"Retrying in {delay:.2f} seconds...")
                 await asyncio.sleep(delay)
+
         raise Exception("LLM call failed after all retries.")
 
     def _store_call_history(
