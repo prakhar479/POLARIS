@@ -18,6 +18,9 @@ Examples:
     # Start Digital Twin with specific World Model
     python start_component.py digital-twin --world-model gemini
 
+    # Start Meta-Learner agent
+    python start_component.py meta-learner
+
     # Start with debug logging
     python start_component.py monitor --plugin-dir extern --log-level DEBUG
 """
@@ -67,7 +70,8 @@ Examples:
   %(prog)s digital-twin                         # Start Digital Twin
   %(prog)s digital-twin --world-model gemini    # Start Digital Twin with Gemini
   %(prog)s knowledge-base                       # Start Knowledge Base Service
-  %(prog)s kernel                               # Start Kernel Service 
+  %(prog)s kernel                               # Start Kernel Service
+  %(prog)s meta-learner                         # Start Meta-Learner agent
         """,
     )
 
@@ -81,6 +85,7 @@ Examples:
             "knowledge-base",
             "kernel",
             "reasoner",
+            "meta-learner",
         ],
         help="Component to start",
     )
@@ -163,6 +168,10 @@ Examples:
 
     if args.component == "reasoner":
         await start_reasoner(args, config_path)
+        return
+
+    if args.component == "meta-learner":
+        await start_meta_learner(args, config_path)
         return
 
     # Handle adapter components (monitor/execution/verification)
@@ -644,7 +653,13 @@ async def start_reasoner(args, config_path: Path):
 
     # Build Reasoner
     agent = create_llm_reasoner_agent(
-        "polaris_reasoner_001", config_path, API_KEY, nats_url=None, logger=logger, mode="llm"
+        "polaris_reasoner_001",
+        config_path,
+        API_KEY,
+        nats_url=None,
+        logger=logger,
+        mode="llm",
+        llm_config_path="/home/vyakhya/Desktop/serc/self_adapt/POLARIS/polaris_poc/src/polaris/agents/prompt.yaml",
     )
 
     # Setup shutdown handling
@@ -674,6 +689,70 @@ async def start_reasoner(args, config_path: Path):
         raise
     finally:
         logger.info("🛑 Shutting down Reasoner agent...")
+        await agent.disconnect()
+
+
+async def start_meta_learner(args, config_path: Path):
+    """Start Meta-Learner agent."""
+    # Setup logging
+    logger = setup_logging()
+    logger.setLevel(getattr(logging, args.log_level))
+
+    # Validation-only mode
+    if args.validate_only:
+        logger.info("✅ Meta-Learner configuration validated")
+        return
+
+    # Dry run mode
+    if args.dry_run:
+        logger.info("✅ Meta-Learner initialized (dry-run mode)")
+        return
+
+    # Import meta-learner
+    from polaris.agents.meta_learner_llm import create_meta_learner_agent
+
+    # Resolve prompt config path (relative to src/polaris/agents)
+    script_dir = Path(__file__).parent
+    src_dir = script_dir.parent
+    prompt_config_path = src_dir / "polaris" / "agents" / "prompt.yaml"
+
+    if not prompt_config_path.exists():
+        logger.error(f"Prompt config not found: {prompt_config_path}")
+        return
+
+    # Build Meta-Learner
+    agent = create_meta_learner_agent(
+        agent_id="polaris_meta_learner_001",
+        api_key=API_KEY,
+        prompt_config_path=str(prompt_config_path),
+        config_path=str(config_path),
+        nats_url="nats://localhost:4222",
+        update_interval_seconds=300.0,  # 5 minutes
+        logger=logger,
+    )
+
+    # Connect to NATS
+    await agent.connect()
+
+    # Setup shutdown handling
+    stop_event = asyncio.Event()
+
+    def signal_handler():
+        logger.info("Received shutdown signal")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
+
+    # Start Meta-Learner
+    logger.info("🚀 Starting Meta-Learner agent...")
+    try:
+        await agent.run(stop_event)
+    except Exception as e:
+        logger.error(f"❌ Meta-Learner agent error: {e}", exc_info=True)
+        raise
+    finally:
+        logger.info("🛑 Shutting down Meta-Learner agent...")
         await agent.disconnect()
 
 

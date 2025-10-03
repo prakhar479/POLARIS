@@ -48,36 +48,36 @@ telemetry:
   # Used by MonitorAdapter.publish() for immediate event publishing
   # Higher frequency = more real-time but higher NATS load
   stream_subject: "polaris.telemetry.events.stream"
-  
+
   # NATS subject for batched telemetry events
   # Used by MonitorAdapter batch publishing for efficiency
   # Reduces NATS message overhead for high-volume telemetry
   batch_subject: "polaris.telemetry.events.batch"
-  
+
   # Maximum number of events per batch (triggers send when reached)
   # Development: 10-50 for faster feedback and easier debugging
   # Production: 100-500 for better throughput (balance with memory usage)
   # High-volume systems: 500-1000 (monitor memory consumption)
   batch_size: 10000
-  
+
   # Maximum wait time (seconds) before sending an incomplete batch
   # Lower values = more real-time but less efficient batching
   # Higher values = better batching but higher latency
   # Recommended: 0.5-2.0 seconds for most use cases
   batch_max_wait: 60
-  
+
   # Maximum queue size for MonitorAdapter in-memory buffering
   # 0 = unbounded (risk of memory exhaustion under high load)
   # Recommended: 1000-10000 based on expected telemetry volume
   # Monitor memory usage and adjust based on system capacity
   queue_maxsize: 5000
-  
+
   # Enable immediate streaming in addition to batching
   # true = Publish events both individually and in batches (higher load, more real-time)
   # false = Only batch publishing (more efficient, slightly higher latency)
   # Recommended: true for development, false for high-volume production
   stream: true
-  
+
   # Knowledge Base configuration for telemetry storage
   # Enables local storage and aggregation of telemetry events
   knowledge_base:
@@ -88,9 +88,6 @@ telemetry:
     # When buffer fills, events are aggregated into observations
     # Recommended: 100-200 based on metric frequency and memory constraints
     buffer_size: 100
-
-
-
 
 reasoner:
   kernel_request_subject: "polaris.reasoner.kernel.requests"
@@ -109,16 +106,21 @@ execution:
   # Default: 'polaris.execution.actions' if omitted
   # Security: Consider using authenticated subjects in production
   action_subject: "polaris.execution.actions"
-  
+
   # NATS subject where execution results are published by ExecutionAdapter
   # Digital Twin and other components can subscribe to track action outcomes
   # Used for feedback loops and adaptation effectiveness analysis
   result_subject: "polaris.execution.results"
-  
+
   # NATS subject for execution-related performance metrics
   # Includes action latency, success rates, and execution adapter health
   # Useful for monitoring adaptation system performance
   metrics_subject: "polaris.execution.metrics"
+
+  # NATS subject where adaptation decisions are published for knowledge base storage
+  # ExecutionAdapter publishes each executed action with its result for learning
+  # Knowledge Base subscribes to this to track adaptation history
+  decisions_subject: "polaris.execution.decisions"
 
 # =============================================================================
 # Verification Control Configuration
@@ -127,7 +129,7 @@ execution:
 # The Verification Adapter validates actions before execution to ensure
 # safety, policy compliance, and system constraints are met.
 #
-# Optimized Data Flow: 
+# Optimized Data Flow:
 # - Kernel/DigitalTwin -> VerificationAdapter (via input_subject)
 # - VerificationAdapter -> ExecutionAdapter (direct for approved actions)
 # - VerificationAdapter -> output_subject (for rejected actions and monitoring)
@@ -135,19 +137,19 @@ verification:
   # NATS subject where verification requests are published
   # Components send actions here for pre-execution validation
   input_subject: "polaris.verification.requests"
-  
+
   # NATS subject where verification results are published
   # Contains approval/rejection decisions with detailed reasoning
   output_subject: "polaris.verification.results"
-  
+
   # NATS subject for policy updates and configuration changes
   # Allows dynamic policy updates without adapter restart
   policy_subject: "polaris.verification.policies"
-  
+
   # NATS subject for verification performance metrics
   # Includes verification latency, approval rates, and constraint violations
   metrics_subject: "polaris.verification.metrics"
-  
+
   # Default verification settings (can be overridden by plugins)
   default_timeout_sec: 30
   max_concurrent_verifications: 5
@@ -162,7 +164,7 @@ logger:
   # Logger name used by the framework (becomes LOGGER_NAME environment variable)
   # Used as the root logger name for all POLARIS framework components
   name: "polaris"
-  
+
   # Logging level controls verbosity and performance
   # DEBUG: Detailed information for debugging (development only - high overhead)
   # INFO: General information about system operation (recommended for production)
@@ -170,7 +172,7 @@ logger:
   # ERROR: Only error messages (production troubleshooting)
   # Environment override: LOGGER_LEVEL
   level: "DEBUG"
-  
+
   # Log output format affects readability and parsing
   # 'pretty': Colored, human-readable format (development, local debugging)
   # 'json': Structured JSON format (production, log aggregation systems)
@@ -201,27 +203,27 @@ digital_twin:
     # Subject for publishing calibration commands to managed systems
     # Used when Digital Twin needs to trigger system recalibration
     calibrate_subject: "polaris.digitaltwin.calibrate"
-    
+
     # Subject for Digital Twin error reporting and diagnostics
     # Other components can monitor Digital Twin health via this subject
     error_subject: "polaris.digitaltwin.errors"
-    
+
     # NATS queue group for load balancing multiple Digital Twin instances
     # Enables horizontal scaling of Digital Twin processing
     # Production: Use meaningful names like "dt_prod_cluster"
     queue_group: "digital_twin_workers"
-    
+
     # Connection resilience settings
     # Higher values = more resilient but longer recovery times
     max_reconnect_attempts: 10
     reconnect_wait_sec: 2
-    
+
     # Internal message buffering for Digital Twin processing
     # Balance memory usage with processing capability
     queue_maxsize: 1000
     batch_size: 10
     batch_timeout_sec: 1.0
-  
+
   # -------------------------------------------------------------------------
   # gRPC API Configuration
   # -------------------------------------------------------------------------
@@ -233,29 +235,29 @@ digital_twin:
     # "127.0.0.1": Local connections only (security-focused deployment)
     # Production: Use specific interface IP for security
     host: "0.0.0.0"
-    
+
     # gRPC server port
     # Standard: 50051 (default gRPC port)
     # Production: Use non-standard port + firewall rules for security
     # Docker: Ensure port is exposed in container configuration
     port: 50051
-    
+
     # Maximum concurrent gRPC workers
     # Higher values = more concurrent API requests but more memory usage
     # Recommended: 2-4x CPU cores for CPU-bound workloads
     max_workers: 10
-    
+
     # Maximum message size (bytes) for gRPC requests/responses
     # 4MB default handles most telemetry payloads
     # Increase for large batch queries or complex world model responses
-    max_message_size: 4194304  # 4MB
-    
+    max_message_size: 4194304 # 4MB
+
     # Connection keepalive settings (milliseconds)
     # Prevents connection drops during long-running operations
     # Adjust based on network reliability and load balancer timeouts
-    keepalive_time_ms: 30000      # Send keepalive every 30 seconds
-    keepalive_timeout_ms: 5000    # Wait 5 seconds for keepalive response
-  
+    keepalive_time_ms: 30000 # Send keepalive every 30 seconds
+    keepalive_timeout_ms: 5000 # Wait 5 seconds for keepalive response
+
   # -------------------------------------------------------------------------
   # World Model Integration
   # -------------------------------------------------------------------------
@@ -268,23 +270,23 @@ digital_twin:
     # "statistical": Time series and statistical analysis
     # "hybrid": Combines multiple approaches for robust reasoning
     implementation: "mock"
-    
+
     # Path to World Model configuration file (relative to this config)
     # Contains implementation-specific settings for the selected World Model
     # IMPORTANT: This creates a dependency on world_model.yaml
     config_path: "mock_world_model.yaml"
-    
+
     # Automatic reload on World Model failure
     # true: Attempt to reload World Model configuration on errors
     # false: Fail fast and require manual intervention
     # Production: Consider false for predictable behavior
     reload_on_failure: true
-    
+
     # Health check interval for World Model monitoring (seconds)
     # Regular health checks ensure World Model responsiveness
     # Balance monitoring overhead with failure detection speed
     health_check_interval_sec: 60
-  
+
   # -------------------------------------------------------------------------
   # Performance and Resource Management
   # -------------------------------------------------------------------------
@@ -295,17 +297,17 @@ digital_twin:
     # Higher values = better throughput but more resource usage
     # Consider World Model implementation limits (e.g., API rate limits)
     max_concurrent_queries: 10
-    
+
     # Timeout for individual World Model queries (seconds)
     # Balance responsiveness with complex analysis requirements
     # Consider World Model processing time and network latency
     query_timeout_sec: 30
-    
+
     # Timeout for simulation requests (seconds)
     # Simulations may require more time than simple queries
     # Adjust based on simulation complexity and accuracy requirements
     simulation_timeout_sec: 60
-  
+
   # -------------------------------------------------------------------------
   # Debugging and Development Support
   # -------------------------------------------------------------------------
@@ -315,24 +317,20 @@ digital_twin:
     # Digital Twin specific log level (overrides framework logger.level)
     # Use DEBUG for development, INFO for production
     log_level: "DEBUG"
-    
+
     # Enable detailed operation logging
     # Logs World Model interactions, decision processes, and timing
     # WARNING: High overhead - disable in production
     enable_detailed_logging: true
-    
+
     # Output logs to console in addition to log files
     # Useful for development and container-based deployments
     log_to_console: true
-    
+
     # Digital Twin specific log file path
     # Separate from framework logs for easier analysis
     # Ensure directory exists and has write permissions
     log_file: "logs/digital_twin.log"
-
-
-
-
 # =============================================================================
 # Security Considerations for Production Deployment
 # =============================================================================

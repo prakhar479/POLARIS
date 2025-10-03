@@ -9,6 +9,7 @@ from polaris.controllers.fast_controller import FastController
 from polaris.controllers.slow_controller import SlowController
 from polaris.controllers.controller_strategy import ControllerStrategy
 
+
 # BaseKernel class
 class BaseKernel(ABC):
     def __init__(self, nats_url: str, logger: logging.Logger, name: str):
@@ -25,9 +26,11 @@ class BaseKernel(ABC):
         await self.nats_client.connect()
         self.running = True
 
-        await self.nats_client.subscribe("polaris.telemetry.events.batch", self.process_telemetry_event)
+        await self.nats_client.subscribe(
+            "polaris.telemetry.events.batch", self.process_telemetry_event
+        )
         self.logger.info(f"Subscribed to 'polaris.telemetry.events.batch'")
-        
+
         # Note: Verification results are now handled directly by verification adapter
         # No need to subscribe to verification results
 
@@ -45,40 +48,41 @@ class BaseKernel(ABC):
     def generate_action(self, telemetry_data):
         """Generate an action based on telemetry data."""
         pass
-    
-    async def send_action_for_verification(self, action: Dict[str, Any], context: Dict[str, Any]) -> str:
+
+    async def send_action_for_verification(
+        self, action: Dict[str, Any], context: Dict[str, Any]
+    ) -> str:
         """Send action for verification (fire-and-forget - verification adapter handles execution)."""
         request_id = str(uuid.uuid4())
-        
+
         verification_request = {
             "request_id": request_id,
             "action": action,
             "context": context,
             "verification_level": "basic",  # Can be configured
             "timeout_sec": self.verification_timeout,
-            "requester": self.__class__.__name__
+            "requester": self.__class__.__name__,
         }
-        
+
         # Send verification request (no need to track - verification adapter handles execution)
-        await self.nats_client.publish_json(
-            "polaris.verification.requests",
-            verification_request
-        )
-        
+        await self.nats_client.publish_json("polaris.verification.requests", verification_request)
+
         self.logger.info(
             "Action sent for verification",
             extra={
                 "request_id": request_id,
                 "action_type": action.get("action_type"),
-                "action_id": action.get("action_id")
-            }
+                "action_id": action.get("action_id"),
+            },
         )
-        
+
         return request_id
-    
+
     # Note: handle_verification_result method removed - verification adapter now handles execution directly
-    
-    async def execute_action_with_verification(self, action: Dict[str, Any], context: Dict[str, Any] = None):
+
+    async def execute_action_with_verification(
+        self, action: Dict[str, Any], context: Dict[str, Any] = None
+    ):
         """Execute an action with optional verification (optimized flow)."""
         if self.enable_verification:
             # Send for verification - verification adapter will handle execution if approved
@@ -90,9 +94,10 @@ class BaseKernel(ABC):
                 "Action sent directly for execution (verification disabled)",
                 extra={
                     "action_type": action.get("action_type"),
-                    "action_id": action.get("action_id")
-                }
+                    "action_id": action.get("action_id"),
+                },
             )
+
 
 # SWIMKernel class
 class SWIMKernel(BaseKernel):
@@ -111,10 +116,11 @@ class SWIMKernel(BaseKernel):
             if isinstance(controller, SlowController):
                 # Send telemetry to reasoner instead of generating action here
                 await self.nats_client.publish(
-                    "polaris.reasoner.kernel.requests",
-                    json.dumps(telemetry_data).encode()
+                    "polaris.reasoner.kernel.requests", json.dumps(telemetry_data).encode()
                 )
-                self.logger.info("Delegated telemetry to Reasoner via polaris.reasoner.kernel.requests")
+                self.logger.info(
+                    "Delegated telemetry to Reasoner via polaris.reasoner.kernel.requests"
+                )
             else:
                 # Normal fast path
                 action = self.generate_action(telemetry_data)
@@ -131,23 +137,22 @@ class SWIMKernel(BaseKernel):
         except Exception as e:
             self.logger.error("Error processing telemetry event", extra={"error": str(e)})
 
-
     def generate_action(self, telemetry_data):
         if self.controller:
             return self.controller.decide_action(telemetry_data)
         return None
-    
+
     def _extract_context_from_telemetry(self, telemetry_data) -> Dict[str, Any]:
         """Extract relevant context from telemetry for verification."""
         context = {}
-        
+
         # Extract current system state from telemetry
         events = telemetry_data.get("events", [])
-        
+
         for event in events:
             name = event.get("name", "")
             value = event.get("value")
-            
+
             if "active.servers" in name:
                 context["active_servers"] = value
             elif "max.servers" in name:
@@ -158,9 +163,10 @@ class SWIMKernel(BaseKernel):
                 context["response_time"] = value
             elif "dimmer" in name:
                 context["dimmer"] = value
-        
+
         return context
-    
+
+
 async def main():
     logger = logging.getLogger("SWIMKernel")
     logging.basicConfig(level=logging.INFO)
@@ -173,6 +179,6 @@ async def main():
     finally:
         await kernel.stop()
 
+
 if __name__ == "__main__":
     asyncio.run(main())
-

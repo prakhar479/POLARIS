@@ -55,7 +55,9 @@ class KnowledgeBaseService:
         self.logger = logger or logging.getLogger(__name__)
 
         # Knowledge base instance
-        self.kb = InMemoryKnowledgeBase(logger=self.logger,telemetry_buffer_size=telemetry_buffer_size)
+        self.kb = InMemoryKnowledgeBase(
+            logger=self.logger, telemetry_buffer_size=telemetry_buffer_size
+        )
 
         # NATS client
         self.nats_client: Optional[NATS] = None
@@ -83,8 +85,6 @@ class KnowledgeBaseService:
 
             # Subscribe to query requests
             await self._subscribe_queries()
-
-
 
             self.running = True
             self.logger.info("✅ Knowledge Base Service started successfully")
@@ -122,15 +122,18 @@ class KnowledgeBaseService:
 
         self.logger.info("📡 Subscribed to telemetry streams")
 
-    async def _subscribe_queries(self):
-        """Subscribe to query requests."""
+        # Subscribe to adaptation decisions
         await self.nats_client.subscribe(
-            "polaris.knowledge.query", cb=self._handle_query_request
+            "polaris.execution.decisions", cb=self._handle_adaptation_decision
         )
 
-        await self.nats_client.subscribe(
-            "polaris.knowledge.stats", cb=self._handle_stats_request
-        )
+        self.logger.info("🎯 Subscribed to adaptation decisions")
+
+    async def _subscribe_queries(self):
+        """Subscribe to query requests."""
+        await self.nats_client.subscribe("polaris.knowledge.query", cb=self._handle_query_request)
+
+        await self.nats_client.subscribe("polaris.knowledge.stats", cb=self._handle_stats_request)
 
         self.logger.info("🔍 Subscribed to query requests")
 
@@ -155,9 +158,7 @@ class KnowledgeBaseService:
             self.stats["last_event_time"] = time.time()
 
             if self.stats["events_processed"] % 100 == 0:
-                self.logger.info(
-                    f"📊 Processed {self.stats['events_processed']} telemetry events"
-                )
+                self.logger.info(f"📊 Processed {self.stats['events_processed']} telemetry events")
 
         except Exception as e:
             self.logger.error(f"❌ Error processing telemetry event: {e}")
@@ -193,12 +194,12 @@ class KnowledgeBaseService:
             self.stats["events_processed"] += 1
             self.stats["last_event_time"] = time.time()
 
-            self.logger.debug(f"📸 Processed snapshot {snapshot_id} with utilization {current_util}")
+            self.logger.debug(
+                f"📸 Processed snapshot {snapshot_id} with utilization {current_util}"
+            )
 
         except Exception as e:
             self.logger.error(f"❌ Error processing telemetry snapshot: {e}")
-
-
 
     async def _handle_telemetry_batch(self, msg):
         """Handle batch telemetry events from NATS."""
@@ -228,6 +229,41 @@ class KnowledgeBaseService:
         except Exception as e:
             self.logger.error(f"❌ Error processing telemetry batch: {e}")
 
+    async def _handle_adaptation_decision(self, msg):
+        """Handle adaptation decision from execution adapter.
+
+        Stores the executed action and its result in the knowledge base
+        for learning and analysis purposes.
+        """
+        try:
+            decision_data = json.loads(msg.data.decode())
+
+            # Create KBEntry from the decision data
+            # The data is already in KBEntry format from the execution adapter
+            entry = KBEntry(**decision_data)
+
+            # Store in knowledge base
+            self.kb.store(entry)
+            self.stats["events_processed"] += 1
+            self.stats["last_event_time"] = time.time()
+
+            action_type = entry.content.get("action_type", "unknown")
+            action_success = entry.content.get("execution_success", False)
+
+            self.logger.info(
+                f"🎯 Stored adaptation decision: {action_type} "
+                f"({'✅ success' if action_success else '❌ failed'})"
+            )
+
+            if self.stats["events_processed"] % 10 == 0:
+                self.logger.info(
+                    f"📊 Total processed: {self.stats['events_processed']} events "
+                    f"(including adaptation decisions)"
+                )
+
+        except Exception as e:
+            self.logger.error(f"❌ Error processing adaptation decision: {e}", exc_info=True)
+
     async def _handle_query_request(self, msg):
         """Handle knowledge base query request."""
         try:
@@ -252,9 +288,7 @@ class KnowledgeBaseService:
                 "results": [entry.dict() for entry in response.results],
             }
 
-            await self.nats_client.publish(
-                msg.reply, json.dumps(response_data).encode()
-            )
+            await self.nats_client.publish(msg.reply, json.dumps(response_data).encode())
 
             self.logger.debug(
                 f"🔍 Query processed: {response.total_results} results in {response.processing_time_ms:.2f}ms"
@@ -271,9 +305,7 @@ class KnowledgeBaseService:
                     "total_results": 0,
                     "results": [],
                 }
-                await self.nats_client.publish(
-                    msg.reply, json.dumps(error_response).encode()
-                )
+                await self.nats_client.publish(msg.reply, json.dumps(error_response).encode())
 
     async def _handle_stats_request(self, msg):
         """Handle knowledge base statistics request."""
