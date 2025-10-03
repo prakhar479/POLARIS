@@ -72,9 +72,11 @@ class MetaLearnerLLM(NATSReasonerBase):
             raise
 
         # Load initial prompt config
-        self.current_thresholds = self._load_prompt_config()
+        self.prompt_config = self._load_prompt_config()
+        self.current_thresholds = self.prompt_config.get("thresholds", {})
         self.logger.info(f"Update interval: {update_interval_seconds}s")
         self.logger.info(f"Prompt config: {self.prompt_config_path}")
+        self.logger.info(f"Loaded {len(self.current_thresholds)} threshold parameters")
 
     async def perform_reasoning(self, context) -> Any:
         """
@@ -89,10 +91,15 @@ class MetaLearnerLLM(NATSReasonerBase):
         try:
             with open(self.prompt_config_path, "r") as f:
                 config = yaml.safe_load(f)
-                return config.get("prompt_config", {}).get("thresholds", {})
+                full_config = config.get("prompt_config", {})
+                # Return both thresholds and template parts for reference
+                return {
+                    "thresholds": full_config.get("thresholds", {}),
+                    "template_parts": full_config.get("template_parts", {}),
+                }
         except Exception as e:
             self.logger.error(f"Failed to load prompt config: {e}")
-            return {}
+            return {"thresholds": {}, "template_parts": {}}
 
     def _save_prompt_config(self, new_thresholds: Dict[str, Any]) -> bool:
         """Update thresholds in prompt.yaml."""
@@ -261,11 +268,19 @@ class MetaLearnerLLM(NATSReasonerBase):
     def _parse_threshold_updates(self, llm_response: str) -> Optional[Dict[str, Any]]:
         """Parse JSON threshold updates from LLM response."""
         try:
-            # Try to extract JSON from response
-            # Look for JSON block in markdown or raw JSON
             response = llm_response.strip()
 
+            # Extract thinking block if present (for logging)
+            thinking = None
+            if "<thinking>" in response:
+                thinking_start = response.find("<thinking>") + 10
+                thinking_end = response.find("</thinking>")
+                if thinking_end > thinking_start:
+                    thinking = response[thinking_start:thinking_end].strip()
+                    self.logger.info(f"LLM Reasoning: {thinking}")
+
             # Try to find JSON between ```json and ``` or just raw JSON
+            json_str = None
             if "```json" in response:
                 start = response.find("```json") + 7
                 end = response.find("```", start)
@@ -275,16 +290,23 @@ class MetaLearnerLLM(NATSReasonerBase):
                 end = response.find("```", start)
                 json_str = response[start:end].strip()
             else:
-                # Try to find JSON object
+                # Try to find JSON object (look for outermost braces)
                 start = response.find("{")
                 end = response.rfind("}") + 1
                 if start >= 0 and end > start:
                     json_str = response[start:end]
-                else:
-                    json_str = response
+
+            if not json_str:
+                self.logger.warning("No JSON found in LLM response")
+                return None
 
             parsed = json.loads(json_str)
-            self.logger.info(f"Parsed threshold updates: {parsed}")
+
+            if parsed:
+                self.logger.info(f"Parsed threshold updates: {json.dumps(parsed, indent=2)}")
+            else:
+                self.logger.info("LLM suggests no threshold changes (empty object)")
+
             return parsed
 
         except json.JSONDecodeError as e:
@@ -368,8 +390,12 @@ class MetaLearnerLLM(NATSReasonerBase):
             if valid_updates:
                 success = self._save_prompt_config(valid_updates)
                 if success:
-                    self.current_thresholds.update(valid_updates)
-                    self.logger.info("Meta-learning cycle completed successfully")
+                    # Reload config to ensure consistency
+                    self.prompt_config = self._load_prompt_config()
+                    self.current_thresholds = self.prompt_config.get("thresholds", {})
+                    self.logger.info(
+                        f"Meta-learning cycle completed successfully. Updated {len(valid_updates)} thresholds."
+                    )
 
                     # Publish update notification
                     await self._publish_update_notification(valid_updates)
@@ -386,63 +412,155 @@ class MetaLearnerLLM(NATSReasonerBase):
             return False
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt for meta-learning."""
-        return """You are a meta-learning agent for a self-adaptive system controller.
+        """Build system prompt for meta-learning with domain-specific information."""
+        return """You are a meta-learning agent for POLARIS, a self-adaptive web service management system.
 
-Your task is to analyze recent system telemetry, system snapshots, and adaptation decisions, 
-then propose improved threshold values for the control system.
+**DOMAIN CONTEXT:**
+POLARIS controls a web service with the following characteristics:
+- **Server Scaling**: The system can dynamically add or remove servers to handle varying load
+- **Content Dimmer**: A quality control mechanism (0.0-1.0) that reduces content fidelity to improve response times
+  * 1.0 = Full quality (all features enabled, highest user experience)
+  * Lower values = Reduced quality (simplified rendering, fewer features, faster responses)
+  * Trade-off: User experience vs. performance
+- **Performance Metrics**: 
+  * Response Time: How quickly the system responds to user requests
+  * Utilization: Percentage of server capacity being used
+  * Server Count: Number of active servers (impacts cost)
+- **System Goals**:
+  1. Maintain response times below critical thresholds (primary constraint)
+  2. Maximize utilization efficiency (reduce idle capacity)
+  3. Maximize user experience (keep dimmer high when possible)
+  4. Minimize operational costs (reduce server count when safe)
 
-Current thresholds:
+**YOUR TASK:**
+Analyze recent system telemetry, snapshots, and adaptation decisions to learn patterns and 
+propose improved threshold values that better balance these competing goals.
+
+**Current Threshold Configuration:**
 {current_thresholds}
 
-You will be provided with:
-1. **System Snapshots**: Recent system state observations including utilization, response times, 
-   server counts, and dimmer values
-2. **Aggregated Observations**: Statistical summaries of key metrics showing trends
-3. **Adaptation Decisions**: Actions taken by the controller (ADD_SERVER, REMOVE_SERVER, SET_DIMMER)
-   and their success/failure status
+**Available Threshold Parameters:**
+Response Time Controls:
+- max_response_time_s/ms: Hard limit for response times (critical constraint)
+- dimmer_reduction_threshold_s: When to reduce content quality to improve speed
+- target_response_time_ms: Ideal response time target
+- acceptable_response_time_variance: Acceptable deviation from target
 
-Analyze this data considering:
-- Are response times consistently above/below thresholds?
-- Are adaptation actions (from decisions) effective or failing?
-- Do utilization patterns suggest threshold adjustments?
-- Is the system stable or oscillating?
-- Is it necessary to change thresholds or should we wait and watch?
+Dimmer Controls:
+- dimmer_max_step: Maximum dimmer adjustment per action (prevents drastic quality changes)
 
-Propose updated threshold values that would improve system performance. Return ONLY a JSON 
-object with the threshold fields you want to update and a block <thinking> explaining your chain of thought to do this in one sentence. For example:
+Utilization Controls:
+- utilization_scale_up_threshold_percent: When to add servers (high load)
+- utilization_scale_down_target_percent: When to remove servers (low load)
+- utilization_optimal_range_min/max: Target efficiency range
 
+Server Management:
+- server_action_cooldown_seconds: Minimum time between server changes (prevents thrashing)
+- min_servers/max_servers: System capacity bounds
+
+**Data You'll Receive:**
+1. **System Snapshots**: Recent state observations (utilization, response times, server counts, dimmer values)
+2. **Aggregated Observations**: Statistical summaries showing trends over time
+3. **Adaptation Decisions**: Controller actions (ADD_SERVER, REMOVE_SERVER, SET_DIMMER) with success/failure
+
+**Analysis Guidelines:**
+- Are response times consistently above/below thresholds? (Performance vs. over-provisioning)
+- Are adaptation actions effective or failing? (Controller effectiveness)
+- Do utilization patterns suggest threshold adjustments? (Efficiency improvements)
+- Is the system stable or oscillating? (Stability analysis)
+- Are server changes too frequent? (Cooldown tuning)
+- Is the dimmer being used effectively? (Quality vs. performance balance)
+- Is the system meeting goals? (Multi-objective optimization)
+
+**Output Format:**
+Return ONLY a JSON object with threshold fields you want to update, followed by a <thinking> block 
+explaining your reasoning in 2-3 concise sentences.
+
+Example:
 ```json
 {{
   "max_response_time_s": 1.2,
   "dimmer_reduction_threshold_s": 0.8,
-  "utilization_scale_down_target_percent": 55
+  "utilization_scale_down_target_percent": 55,
+  "server_action_cooldown_seconds": 90,
+  "target_response_time_ms": 750
 }}
 ```
 
-Only include thresholds you want to change. Values must be reasonable and safe.
-If the current thresholds are working well, return an empty object: {{}}.
+<thinking>
+Response times are consistently 200ms below threshold, indicating over-provisioning.
+Increasing scale-down target and cooldown will reduce unnecessary server churn.
+Adjusting dimmer threshold gives more headroom before quality reduction.
+</thinking>
+
+**Important Rules:**
+- Only include thresholds you want to change
+- Values must be within safe, reasonable bounds
+- If current thresholds are working well, return empty object: {{}}
+- Prioritize stability over aggressive optimization
+- Consider interactions between thresholds (e.g., scaling thresholds vs. cooldown)
+- Explain your reasoning clearly in the <thinking> block
 """.format(
             current_thresholds=json.dumps(self.current_thresholds, indent=2)
         )
 
     def _build_user_prompt(self, telemetry_summary: Dict[str, Any]) -> str:
         """Build user prompt with telemetry context."""
-        # Build a more structured summary
-        prompt = f"""Analyze the following system data:
+        # Extract key statistics for easier analysis
+        metrics = telemetry_summary.get("metrics", {})
+        decisions = telemetry_summary.get("adaptation_decisions", [])
 
-**Summary:**
-- Time Range: {telemetry_summary.get('time_range', {}).get('start', 'N/A')} to {telemetry_summary.get('time_range', {}).get('end', 'N/A')}
-- Snapshots: {telemetry_summary.get('snapshot_count', 0)} system state observations
-- Other Observations: {telemetry_summary.get('other_observation_count', 0)} metric aggregations
-- Adaptation Decisions: {telemetry_summary.get('adaptation_decision_count', 0)} controller actions
+        # Count decision outcomes
+        decision_summary = {"total": len(decisions), "by_type": {}, "success_rate": {}}
 
-**Detailed Data:**
+        for dec in decisions:
+            action_type = dec.get("action_type", "UNKNOWN")
+            success = dec.get("execution_success", False)
+
+            if action_type not in decision_summary["by_type"]:
+                decision_summary["by_type"][action_type] = {"total": 0, "success": 0, "failed": 0}
+
+            decision_summary["by_type"][action_type]["total"] += 1
+            if success:
+                decision_summary["by_type"][action_type]["success"] += 1
+            else:
+                decision_summary["by_type"][action_type]["failed"] += 1
+
+        # Calculate success rates
+        for action_type, counts in decision_summary["by_type"].items():
+            if counts["total"] > 0:
+                decision_summary["success_rate"][action_type] = counts["success"] / counts["total"]
+
+        prompt = f"""Analyze the following system data and propose threshold adjustments:
+
+**Time Period:**
+- Start: {telemetry_summary.get('time_range', {}).get('start', 'N/A')}
+- End: {telemetry_summary.get('time_range', {}).get('end', 'N/A')}
+
+**Data Overview:**
+- System Snapshots: {telemetry_summary.get('snapshot_count', 0)} observations
+- Metric Aggregations: {telemetry_summary.get('other_observation_count', 0)} summaries
+- Adaptation Actions: {telemetry_summary.get('adaptation_decision_count', 0)} decisions
+
+**Adaptation Decision Analysis:**
+{json.dumps(decision_summary, indent=2)}
+
+**Key Metrics Summary:**
+Available metrics: {list(metrics.keys())}
+(Each metric contains timestamped values showing trends over the period)
+
+**Complete Detailed Data:**
 {json.dumps(telemetry_summary, indent=2)}
 
-Based on this data, what threshold adjustments would improve system performance?
-Consider the snapshot states, metric trends, and adaptation decision outcomes.
-Return only the JSON object with proposed threshold updates."""
+**Your Analysis Task:**
+1. Examine response time patterns vs. current thresholds
+2. Assess utilization trends and scaling behavior
+3. Evaluate adaptation decision effectiveness (success rates, timing)
+4. Identify system stability issues (oscillations, thrashing)
+5. Consider dimmer usage patterns
+6. Propose specific threshold adjustments with clear justification
+
+Return the JSON object with your proposed threshold updates and explain your reasoning in the <thinking> block."""
 
         return prompt
 
@@ -450,13 +568,27 @@ Return only the JSON object with proposed threshold updates."""
         """Validate threshold updates are within safe bounds."""
         valid_updates = {}
 
-        # Define validation rules
+        # Define validation rules (min, max)
         rules = {
-            "max_response_time_s": (0.5, 5.0),  # 500ms to 5s
+            # Response time thresholds
+            "max_response_time_s": (0.5, 5.0),
             "max_response_time_ms": (500, 5000),
             "dimmer_reduction_threshold_s": (0.3, 2.0),
+            "target_response_time_ms": (300, 2000),
+            "acceptable_response_time_variance": (0.05, 0.3),
+            # Dimmer control parameters
             "dimmer_max_step": (0.05, 0.5),
+            "dimmer_min_value": (0.0, 0.0),  # Fixed value
+            "dimmer_max_value": (1.0, 1.0),  # Fixed value
+            # Utilization thresholds
+            "utilization_scale_up_threshold_percent": (70, 95),
             "utilization_scale_down_target_percent": (30, 70),
+            "utilization_optimal_range_min": (40, 70),
+            "utilization_optimal_range_max": (60, 85),
+            # Server management parameters
+            "server_action_cooldown_seconds": (30, 300),
+            "min_servers": (1, 5),
+            "max_servers": (3, 50),
         }
 
         for key, value in updates.items():
@@ -471,6 +603,21 @@ Return only the JSON object with proposed threshold updates."""
                     )
             else:
                 self.logger.warning(f"Unknown threshold key: {key}")
+
+        # Additional cross-validation
+        if (
+            "utilization_optimal_range_min" in valid_updates
+            and "utilization_optimal_range_max" in valid_updates
+        ):
+            if (
+                valid_updates["utilization_optimal_range_min"]
+                >= valid_updates["utilization_optimal_range_max"]
+            ):
+                self.logger.warning(
+                    "utilization_optimal_range_min must be less than max, skipping both"
+                )
+                del valid_updates["utilization_optimal_range_min"]
+                del valid_updates["utilization_optimal_range_max"]
 
         return valid_updates
 
@@ -487,7 +634,9 @@ Return only the JSON object with proposed threshold updates."""
 
             # Use parent class's publish method
             await self.publish("polaris.meta_learner.threshold_update", notification)
-            self.logger.info(f"Published threshold update notification to polaris.meta_learner.threshold_update")
+            self.logger.info(
+                f"Published threshold update notification to polaris.meta_learner.threshold_update"
+            )
 
         except Exception as e:
             self.logger.error(f"Failed to publish update notification: {e}")

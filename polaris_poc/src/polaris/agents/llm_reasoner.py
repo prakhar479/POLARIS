@@ -40,6 +40,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         api_key: str,
         reasoning_type: ReasoningType,
         prompt_config: Dict[str, Any],  # <-- New parameter for the config
+        prompt_config_path: Optional[str] = None,  # <-- Add path to reload config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         model: str = "gpt-oss:20b",
         max_tokens: int = 512,
@@ -56,6 +57,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.max_retries = 5
         self.timeout = timeout
         self.base_url = base_url
+        self.prompt_config_path = prompt_config_path  # Store for reloading
         self.last_run_time: Optional[float] = None
         self.initial_backoff = 2.0
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
@@ -88,6 +90,32 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.domain_context = ""
         self.safety_constraints = []
         self.call_history: List[Dict[str, Any]] = []
+
+    def reload_prompt_config(self) -> bool:
+        """Reload prompt configuration from file."""
+        if not self.prompt_config_path:
+            self.logger.warning("No prompt_config_path set, cannot reload config")
+            return False
+
+        try:
+            self.logger.info(f"Reloading prompt config from {self.prompt_config_path}")
+            with open(self.prompt_config_path, "r") as f:
+                config = yaml.safe_load(f)
+                prompt_config = config["prompt_config"]
+
+            old_thresholds = self.prompt_thresholds.copy()
+            self.prompt_thresholds = prompt_config["thresholds"]
+            self.raw_prompt_template = prompt_config["template"]
+
+            self.logger.info(f"✅ Prompt config reloaded successfully")
+            self.logger.info(f"   Old thresholds: {old_thresholds}")
+            self.logger.info(f"   New thresholds: {self.prompt_thresholds}")
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to reload prompt config: {e}", exc_info=True)
+            return False
 
     def _build_system_prompt(self, context: ReasoningContext) -> str:
         """Build the system prompt by formatting the template with configured thresholds."""
@@ -487,6 +515,7 @@ def create_llm_reasoner_agent(
                 api_key=llm_api_key,
                 reasoning_type=reasoning_type,
                 prompt_config=prompt_config,  # <-- Pass the loaded config here
+                prompt_config_path=llm_config_path,  # <-- Pass path for reloading
                 kb_query_interface=agent.kb_query,
                 logger=logger,
             )

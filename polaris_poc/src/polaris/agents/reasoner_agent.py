@@ -649,6 +649,38 @@ class ReasonerAgent(NATSReasonerBase):
         if self.dt_query:
             await self.dt_query.connect()
 
+        # Subscribe to threshold update notifications from meta-learner
+        await self._subscribe_to_threshold_updates()
+
+    async def _subscribe_to_threshold_updates(self) -> None:
+        """Subscribe to threshold update notifications."""
+        try:
+            await self.nc.subscribe(
+                "polaris.meta_learner.threshold_update",
+                cb=self._handle_threshold_update
+            )
+            self.logger.info("Subscribed to polaris.meta_learner.threshold_update")
+        except Exception as e:
+            self.logger.error(f"Failed to subscribe to threshold updates: {e}")
+
+    async def _handle_threshold_update(self, msg):
+        """Handle threshold update notification from meta-learner."""
+        try:
+            notification = json.loads(msg.data.decode())
+            self.logger.info(f"Received threshold update notification: {notification}")
+
+            # Reload config for all LLM reasoning implementations
+            for reasoning_type, impl in self.reasoning_implementations.items():
+                if hasattr(impl, 'reload_prompt_config'):
+                    success = impl.reload_prompt_config()
+                    if success:
+                        self.logger.info(f"✅ Reloaded prompt config for {reasoning_type.value}")
+                    else:
+                        self.logger.warning(f"⚠️  Failed to reload prompt config for {reasoning_type.value}")
+
+        except Exception as e:
+            self.logger.error(f"Error handling threshold update: {e}", exc_info=True)
+
     async def disconnect(self) -> None:
         """Disconnect NATS and Digital Twin clients."""
         if self.dt_query:
