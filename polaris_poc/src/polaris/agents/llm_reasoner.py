@@ -17,6 +17,7 @@ from pathlib import Path
 import random
 import uuid  # Import uuid for generating action_id
 import httpx
+import yaml
 
 # Add these imports to the existing reasoner_agent.py file
 from .reasoner_core import (
@@ -38,15 +39,15 @@ class LLMReasoningImplementation(ReasoningInterface):
         self,
         api_key: str,
         reasoning_type: ReasoningType,
+        prompt_config: Dict[str, Any],  # <-- New parameter for the config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
-        model: str = "gpt-oss:20b",  # Default model for your local API
+        model: str = "gpt-oss:20b",
         max_tokens: int = 512,
         temperature: float = 0.2,
         timeout: float = 600.0,
-        base_url: str = "http://10.10.16.46:11435",  # Make the URL configurable
+        base_url: str = "http://10.10.16.46:11435",
         logger: Optional[logging.Logger] = None,
     ):
-
         self.api_key = api_key
         self.reasoning_type = reasoning_type
         self.model = model
@@ -54,142 +55,49 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.temperature = temperature
         self.max_retries = 5
         self.timeout = timeout
-        self.base_url = base_url  # Store the base URL
+        self.base_url = base_url
         self.last_run_time: Optional[float] = None
-        self.initial_backoff = 2.0  # seconds
+        self.initial_backoff = 2.0
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
         self.logger.info(
             f"Initializing LLMReasoningImplementation with model {model} at endpoint {self.base_url}"
         )
 
-        # The google.genai client is no longer needed
-        # self.client = genai.Client(api_key=api_key)
-
-        # In-memory storage for the last action
         self.last_action_memory: Optional[Dict[str, Any]] = None
-
         self.kb_query = kb_query_interface
         self.context_builder = ContextBuilder(self.logger)
 
-        # ======================================================================
-        # == NEW PROMPT TEMPLATE FOR SINGLE LLM AGENTIC SIMULATION            ==
-        # ======================================================================
-        self.system_prompt_template = """
-  You are an integrated, autonomous system controller for a web service. Your objective is to maintain optimal performance by analyzing telemetry data and executing control actions.
+        # Load prompt template and thresholds from the config dictionary
+        try:
+            self.prompt_thresholds = prompt_config["thresholds"]
+            self.raw_prompt_template = prompt_config["template"]
+            self.logger.info("Successfully loaded prompt template and thresholds from config.")
+        except KeyError as e:
+            self.logger.error(f"Prompt configuration is missing required key: {e}")
+            raise ValueError(f"Invalid prompt_config dictionary: missing {e}") from e
 
-  You MUST follow this structured, sequential reasoning process, embodying a different expert persona at each step. Important Rule:
-- Your <thinking> section must be concise: **no more than one short sentence per step**.
-- Do not add extra commentary, disclaimers, or repetition.
-
-  **System Context & Rules:**
-  - **Primary Goal:** Response time can never go above 1s (1000ms), reduce dimmer. Add server if response time is above 1s, reduce dimmer if above 0.7s. Maximize utilization. Maximize user experience (high dimmer) and minimizing cost by reducing servers.
-  - **Server Limits:** The system cannot exceed its maximum server count or go below 1 server. Goal is to minimize server count while meeting performance targets.
-  - **Dimmer Range:** The dimmer value must be a float between 0.0 and 1.0. Changes should be gradual (less than 0.2 step) and not frequent.
-  - **Action Cooldown:** Avoid adding/removing servers if a server action was taken recently.
-
-  **Reasoning Steps (Chain of Thought):**
-
-  1.  **Data Observer:**
-      - **Task:** Concisely summarize the current system state from the input data.
-      - **Check:** Does the state violate any thresholds? (e.g., "Response time is 2.5s, exceeding the 1.0s target.")
-
-  2.  **Trend Analyst:**
-      - **Task:** Analyze the `historical_trends` data.
-      - **Check:** Are key metrics like `utilization` or `response_time_ms_weighted` trending in a problematic direction?
-
-  3.  **Performance Reviewer:**
-      - **Task:** Critically evaluate the effectiveness of the most recent action based on the `feedback_on_last_action` data. Are we repeating actions?
-      - **Check:** Did the action achieve its intended goal? (e.g., "The last action `REMOVE_SERVER` was `FAILED`; utilization dropped further.")
-
-  4.  **Strategy Planner:**
-      - **Task:** Based on the observation, trend, and review, devise a plan. Your priorities are: 1) fix threshold violations, 2) increase utilization and decrease response time, 3) maximize user experience (dimmer).
-      - **Action:** Propose one action from [`add_server`, `remove_server`, `set_dimmer [value]`, `no_action`] with a brief justification.
-
-  5.  **Action Sanity Check:**
-      - **Task:** Validate the proposed action against all System Context & Rules using the provided data.
-      - **Check:** If the action is invalid (e.g., adding a server at max capacity), propose a valid alternative.
-
-  6.  **Command Generator:**
-      - **Task:** Convert the final, validated action into a complete **JSON object**.
-      - **Output Rules:** The JSON must strictly adhere to the following structure:
-        - `action_type`: (String) Must be one of `"ADD_SERVER"`, `"REMOVE_SERVER"`, `"SET_DIMMER"`, or `"NO_ACTION"`.
-        - `source`: (String) Must be `"single_llm_controller"`.
-        - `action_id`: (String) Provide a placeholder string like `"generated-uuid"`.
-        - `params`: (Object) Varies by `action_type`. E.g., `{"value": 0.8}` for `SET_DIMMER`.
-        - `priority`: (String) Choose from `"low"`, `"medium"`, `"high"`.
-
-  **Output Format:**
-  First, provide your entire step-by-step reasoning within a `<thinking>` block. Keep it in one short sentence per agent.
-  After the thinking block, provide ONLY the final **JSON object** in a `<json_output>` block.
-
-  ---
-  **Example 1:**
-  **Input Data:**
-  {
-    "current_state": { "utilization": 0.95, "response_time_ms_weighted": 4100, "servers": 2, "dimmer": 1.0 },
-    "system_goals_and_constraints": { "constraints": { "max_servers": 3 }},
-    "feedback_on_last_action": { "evaluation": "FAILED", "outcome_details": "Response time continued to climb."}
-  }
-
-  **Your Output:**
-  <thinking>
-  1.  **Data Observer:** The system is overloaded. Utilization is 0.95 and response time is 4100ms (exceeds 1000ms target).
-  2.  **Trend Analyst:** Data indicates metrics are worsening, suggesting increasing load.
-  3.  **Performance Reviewer:** The last action failed to control the rising response time.
-  4.  **Strategy Planner:** The priority is to reduce response time immediately. The best action is to increase capacity by adding a server. If server actions seem to excessive, play woth dimmer values
-  5.  **Action Sanity Check:** The action `add_server` is valid. Current server count is 2, which is below the max of 3.
-  6.  **Command Generator:** The command is to add a server. I will now generate the JSON object with high priority.
-  </thinking>
-  <json_output>
-  {
-    "action_type": "ADD_SERVER",
-    "source": "single_llm_controller",
-    "action_id": "generated-uuid-1",
-    "params": {"server_type": "compute", "count": 1},
-    "priority": "high"
-  }
-  </json_output>
-
-  ---
-  **Example 2:**
-  **Input Data:**
-  {
-    "current_state": { "utilization": 0.35, "response_time_ms_weighted": 500, "servers": 3, "dimmer": 0.8 },
-    "system_goals_and_constraints": { "constraints": { "min_servers": 1 }},
-    "feedback_on_last_action": { "evaluation": "NEUTRAL" }
-  }
-
-  **Your Output:**
-  <thinking>
-  1.  **Data Observer:** The system is underutilized at 35% (below 50% target). Response time is less than 500ms which is good.
-  2.  **Trend Analyst:** Utilization has been steadily decreasing, indicating inefficiency.
-  3.  **Performance Reviewer:** The last action had a neutral outcome, but the system state has become inefficient.
-  4.  **Strategy Planner:** To increase utilization and reduce cost, the system should remove a server.
-  5.  **Action Sanity Check:** The action `remove_server` is valid. The current count is 3, which is above the minimum of 1.
-  6.  **Command Generator:** The command is to remove a server to improve efficiency. I will generate the JSON object.
-  </thinking>
-  <json_output>
-  {
-    "action_type": "REMOVE_SERVER",
-    "source": "single_llm_controller",
-    "action_id": "generated-uuid-2",
-    "params": {"server_type": "compute", "count": 1},
-    "priority": "medium"
-  }
-  </json_output>
-"""
-
+        # The user prompt remains static for now
         self.user_prompt_template = """
 ---
 **Now, perform your analysis on the following data:**
 
 {context_data}
 """
-        # Customizable fields
+        # Customizable fields can still be used if needed
         self.custom_instructions = ""
         self.domain_context = ""
         self.safety_constraints = []
         self.call_history: List[Dict[str, Any]] = []
+
+    def _build_system_prompt(self, context: ReasoningContext) -> str:
+        """Build the system prompt by formatting the template with configured thresholds."""
+        try:
+            # Use the stored template and thresholds to create the final prompt
+            return self.raw_prompt_template.format(**self.prompt_thresholds)
+        except KeyError as e:
+            self.logger.error(f"Failed to format prompt template. Missing threshold key: {e}")
+            # Fallback to the raw template to avoid a hard crash
+            return self.raw_prompt_template
 
     async def reason(
         self, context: ReasoningContext, knowledge: Optional[List[Dict[str, Any]]] = None
@@ -281,11 +189,6 @@ class LLMReasoningImplementation(ReasoningInterface):
                 context=context,
                 execution_time=execution_time,
             )
-
-    def _build_system_prompt(self, context: ReasoningContext) -> str:
-        """Build the system prompt."""
-        # System prompt is now a static template, but this method remains for future customization.
-        return self.system_prompt_template
 
     def _build_user_prompt(self, context: ReasoningContext, telemetry_data: Dict[str, Any]) -> str:
         """Build the user prompt with the dynamic context data."""
@@ -540,71 +443,57 @@ def create_llm_reasoner_agent(
     agent_id: str,
     config_path: str,
     llm_api_key: str,
+    llm_config_path: str,  # <-- Add path to the new llm_config.yaml
     nats_url: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
     mode="llm",
 ) -> "ReasonerAgent":
     """
     Create a reasoner agent with LLM-based reasoning implementations.
-    This factory correctly injects the agent's knowledge base query interface
-    into the LLM reasoner for its own specialized data processing.
-
-    Usage:
-        agent = create_llm_reasoner_agent(
-            agent_id="smart_reasoner",
-            config_path="config.yaml",
-            llm_api_key="your-gemini-key"
-        )
-
-        # Customize prompts
-        llm_reasoner = agent.reasoning_implementations[ReasoningType.DECISION]
-        llm_reasoner.add_custom_instructions("Always prioritize system stability")
-        llm_reasoner.add_safety_constraint("Never exceed 80% server capacity")
     """
     from .reasoner_agent import ReasonerAgent, ReasoningType
-
-    # This import is now needed here
     from .llm_reasoner import LLMReasoningImplementation
     from .multi_agent_reasoner import MultiAgentReasoner
 
-    # Step 1: Create the agent instance first, with an empty set of implementations.
-    # Its __init__ method will create and own the self.kb_query interface.
+    # Load the new LLM prompt configuration from the YAML file
+    try:
+        with open(llm_config_path, "r") as f:
+            llm_config = yaml.safe_load(f)
+            prompt_config = llm_config["prompt_config"]
+    except (FileNotFoundError, yaml.YAMLError, KeyError) as e:
+        if logger:
+            logger.error(f"Failed to load or parse LLM config from {llm_config_path}: {e}")
+        raise ValueError(f"Could not load LLM configuration from {llm_config_path}") from e
+
     agent = ReasonerAgent(
         agent_id=agent_id,
-        reasoning_implementations={},  # Start with an empty dictionary
+        reasoning_implementations={},
         config_path=config_path,
         nats_url=nats_url,
         logger=logger,
     )
 
-    # Step 2: Create the LLM reasoners for all reasoning types and inject the dependency.
     for reasoning_type in ReasoningType:
-
         if mode == "multi":
             llm_reasoner = MultiAgentReasoner(
                 api_key=llm_api_key,
                 reasoning_type=reasoning_type,
-                # This is the crucial dependency injection step:
                 kb_query_interface=agent.kb_query,
                 logger=logger,
             )
-            agent.add_reasoning_implementation(reasoning_type, llm_reasoner)
+            # Note: You might need a similar config system for the MultiAgentReasoner
         else:
             llm_reasoner = LLMReasoningImplementation(
                 api_key=llm_api_key,
                 reasoning_type=reasoning_type,
-                # This is the crucial dependency injection step:
+                prompt_config=prompt_config,  # <-- Pass the loaded config here
                 kb_query_interface=agent.kb_query,
                 logger=logger,
             )
 
-        # Configure with basic settings
         llm_reasoner.configure_basic()
-
-        # Step 3: Add the fully configured implementation back into the agent.
         agent.add_reasoning_implementation(reasoning_type, llm_reasoner)
 
-    # Return the fully assembled and configured agent
     return agent
 
 
