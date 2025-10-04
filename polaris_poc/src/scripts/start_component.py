@@ -56,6 +56,7 @@ from polaris.agents.reasoner_agent import (
     ReasoningType,
 )
 from polaris.agents.llm_reasoner import create_llm_reasoner_agent
+from polaris.agents.agentic_reasoner import create_agentic_reasoner_agent
 
 
 async def main():
@@ -71,6 +72,8 @@ Examples:
   %(prog)s digital-twin --world-model gemini    # Start Digital Twin with Gemini
   %(prog)s knowledge-base                       # Start Knowledge Base Service
   %(prog)s kernel                               # Start Kernel Service
+  %(prog)s reasoner                             # Start LLM Reasoner agent
+  %(prog)s agentic-reasoner                     # Start Agentic Reasoner agent
   %(prog)s meta-learner                         # Start Meta-Learner agent
         """,
     )
@@ -85,6 +88,7 @@ Examples:
             "knowledge-base",
             "kernel",
             "reasoner",
+            "agentic-reasoner",
             "meta-learner",
         ],
         help="Component to start",
@@ -168,6 +172,10 @@ Examples:
 
     if args.component == "reasoner":
         await start_reasoner(args, config_path)
+        return
+
+    if args.component == "agentic-reasoner":
+        await start_agentic_reasoner(args, config_path)
         return
 
     if args.component == "meta-learner":
@@ -689,6 +697,74 @@ async def start_reasoner(args, config_path: Path):
         raise
     finally:
         logger.info("🛑 Shutting down Reasoner agent...")
+        await agent.disconnect()
+
+
+async def start_agentic_reasoner(args, config_path: Path):
+    """Start Agentic Reasoner agent."""
+    # Setup logging
+    logger = setup_logging()
+    logger.setLevel(getattr(logging, args.log_level))
+
+    # Validation-only mode
+    if args.validate_only:
+        logger.info("✅ Agentic Reasoner validation passed (configuration file exists)")
+        logger.info("🏁 Validation complete - exiting")
+        return
+
+    # Dry run mode
+    if args.dry_run:
+        logger.info("🧪 Dry run mode - agentic reasoner would be started but not executing")
+        logger.info("🏁 Dry run complete - exiting")
+        return
+
+    # Use agentic reasoner specific config if available, otherwise fall back to main config
+    agentic_config_path = Path("src/config/agentic_reasoner_config.yaml")
+    if agentic_config_path.exists():
+        logger.info(f"Using agentic reasoner config: {agentic_config_path}")
+        config_to_use = agentic_config_path
+    else:
+        logger.info(f"Using main config: {config_path}")
+        config_to_use = config_path
+
+    # Build Agentic Reasoner
+    agent = create_agentic_reasoner_agent(
+        agent_id="polaris_agentic_reasoner_001",
+        config_path=str(config_to_use),
+        llm_api_key=API_KEY,
+        nats_url=None,
+        logger=logger,
+    )
+
+    # Setup shutdown handling
+    stop_event = asyncio.Event()
+
+    def signal_handler():
+        logger.info("Received shutdown signal")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            asyncio.get_running_loop().add_signal_handler(sig, signal_handler)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: signal_handler())
+
+    # Start Agentic Reasoner
+    logger.info("🚀 Starting Agentic Reasoner agent...")
+    logger.info("🤖 This reasoner can autonomously use tools (KB, Digital Twin) to make decisions")
+    try:
+        await agent.connect()
+        logger.info("✅ Agentic Reasoner agent started successfully")
+        logger.info("📡 Agentic Reasoner is running - press Ctrl+C to stop")
+        logger.info("🔧 Available tools: Knowledge Base queries, Digital Twin interactions")
+
+        # Wait until shutdown
+        await stop_event.wait()
+    except Exception as e:
+        logger.error(f"❌ Agentic Reasoner agent error: {e}")
+        raise
+    finally:
+        logger.info("🛑 Shutting down Agentic Reasoner agent...")
         await agent.disconnect()
 
 

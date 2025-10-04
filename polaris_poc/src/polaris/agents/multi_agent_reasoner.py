@@ -63,7 +63,7 @@ async def _call_llm( system_prompt: str, user_prompt: str) -> str:
             try:
                 # Direct API call without the 'tools' parameter
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',  # Ensure self.model is set to "gemini-1.5-flash"
+                    model='gemini-2.5-flash',  
                     contents=contents,
                     config=generate_content_config,
                 )

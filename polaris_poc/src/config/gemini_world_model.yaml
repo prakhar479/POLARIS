@@ -37,9 +37,9 @@ config:
   api_key_env: "GEMINI_API_KEY"  # Environment variable containing the API key.
 
   # Model selection affects capabilities and cost.
-  # "gemini-1.5-flash": Fast, cost-effective, good for most use cases.
-  # "gemini-1.5-pro": More capable, higher cost, better for complex reasoning.
-  model: "gemini-1.5-flash"
+  # "gemini-2.5-flash": Fast, cost-effective, good for most use cases.
+  # "gemini-2.5-pro": More capable, higher cost, better for complex reasoning.
+  model: "gemini-2.5-flash"
 
   # --- Generation Parameters - Control AI Behavior ---
   # Temperature controls randomness in responses (0.0 to 1.0).
@@ -69,24 +69,14 @@ config:
   retry_attempts: 3
   retry_delay_sec: 1 # Initial delay, uses exponential backoff.
 
-  # --- LangChain Integration Configuration ---
-  langchain:
-    # "stuff": Simple, for small contexts.
-    # "map_reduce": Better for large contexts.
-    # "refine": Most thorough, iterative.
-    chain_type: "stuff"
-    verbose: false # Set to true for detailed debugging logs.
-
-  # --- Vector Store Configuration - Context Retrieval ---
-  # Vector stores enable semantic search over system documentation and history.
-  vector_store:
-    # "chroma": Local, for development.
-    # "faiss": High-performance, for production.
-    # "pinecone": Cloud-based, managed service.
-    provider: "chroma"
-    collection_name: "polaris_knowledge"
-    embedding_model: "text-embedding-ada-002"
-    max_documents: 1000
+  # --- Memory and Learning Configuration ---
+  # Configuration for conversation memory and meta-learning
+  max_conversation_memory: 50
+  max_history_events: 1000
+  
+  # Meta-learning parameters for continuous improvement
+  learning_rate: 0.1  # Alpha for exponential moving average in calibration
+  confidence_threshold: 0.6  # Minimum confidence for reliable predictions
 
   # --- Prompt Templates - Control AI Reasoning Behavior ---
   prompts:
@@ -95,12 +85,16 @@ config:
       You are an expert system analyst for the POLARIS adaptive system framework.
       You have deep knowledge of system monitoring, performance analysis, and root cause diagnosis.
       You understand distributed systems, performance metrics, and adaptation strategies.
+      
       Your responses should be:
       - Accurate and based on provided data
       - Actionable with specific recommendations
       - Clear and concise for technical audiences
-      - Include confidence levels for your assessments
+      - Include confidence levels (0.0-1.0) for your assessments
+      
+      You learn from calibration feedback to improve your accuracy over time.
       Always consider system safety and stability in your recommendations.
+      Provide confidence scores for all your assessments and explain your reasoning.
 
 # Environment variable overrides for different deployment environments
 # Values here will override the configuration above when the corresponding
@@ -109,7 +103,7 @@ env_overrides:
   # Development environment overrides (LOCAL_DEV=true)
   LOCAL_DEV:
     config:
-      model: "gemini-1.5-flash"  # Use faster, cheaper model in dev
+      model: "gemini-2.5-flash"  # Use faster, cheaper model in dev
       temperature: 0.3  # More deterministic responses
       max_tokens: 1024  # Shorter responses
       concurrent_requests: 2  # Lower concurrency
@@ -157,45 +151,3 @@ env_overrides:
           reliable analysis with safety as the top priority. Be explicit about
           confidence levels and potential risks in your recommendations.
 
-    # Template for general system queries and state analysis.
-    query_prompt: |
-      Based on the following system information, answer this query: {query}
-      System Context:
-      {context}
-      Recent Telemetry Data:
-      {telemetry}
-      Please provide:
-      1. A clear, concise answer to the query
-      2. Supporting evidence from the telemetry data
-      3. Your confidence level (0-100%)
-      4. Any relevant warnings or considerations
-
-    # Template for future state simulation and prediction.
-    simulation_prompt: |
-      Simulate the following scenario for the adaptive system:
-      Proposed Actions: {actions}
-      Time Horizon: {horizon_minutes} minutes
-      Current System State: {current_state}
-      Predict the likely outcomes and provide:
-      1. Expected system performance changes
-      2. Resource utilization impacts
-      3. Potential risks and mitigation strategies
-      4. Expected benefits and improvements
-      5. Confidence level in predictions (0-100%)
-      6. Recommended monitoring points during execution
-      Consider both immediate effects and longer-term implications.
-
-    # Template for anomaly analysis and root cause diagnosis.
-    diagnosis_prompt: |
-      Analyze the following system anomaly and provide comprehensive root cause analysis:
-      Anomaly Description: {anomaly}
-      System Context: {context}
-      Recent System Events: {events}
-      Provide detailed analysis including:
-      1. Most likely root causes (ranked by probability with percentages)
-      2. Supporting evidence for each hypothesis from the available data
-      3. Recommended investigation steps to confirm diagnosis
-      4. Immediate mitigation actions to prevent further impact
-      5. Long-term preventive measures
-      6. Overall confidence in analysis (0-100%)
-      Focus on actionable insights that system operators can implement.

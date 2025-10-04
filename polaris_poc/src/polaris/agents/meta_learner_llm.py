@@ -43,7 +43,7 @@ class MetaLearnerLLM(NATSReasonerBase):
         config_path: str,
         nats_url: Optional[str] = None,
         update_interval_seconds: float = 300.0,  # 5 minutes
-        model: str = "gemini-1.5-flash-latest",  # Updated model for Gemini
+        model: str = "gemini-2.5-flash",  # Updated model for Gemini
         temperature: float = 0.3,
         max_tokens: int = 1024,
         kb_request_timeout: float = 30.0,

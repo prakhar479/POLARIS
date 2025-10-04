@@ -1,0 +1,200 @@
+# Agentic Reasoner Configuration
+# =====================================
+# Configuration for the autonomous agentic reasoner that can dynamically
+# use tools (Knowledge Base, Digital Twin) to make adaptation decisions.
+
+# =============================================================================
+# NATS Message Bus Configuration (inherited from main config)
+# =============================================================================
+nats:
+  url: "nats://localhost:4222"
+
+# =============================================================================
+# Telemetry Configuration (inherited from main config)
+# =============================================================================
+telemetry:
+  stream_subject: "polaris.telemetry.events.stream"
+  batch_subject: "polaris.telemetry.events.batch"
+  knowledge_base:
+    enabled: true
+    buffer_size: 100
+
+# =============================================================================
+# Reasoner Configuration
+# =============================================================================
+reasoner:
+  kernel_request_subject: "polaris.reasoner.kernel.requests"
+
+# =============================================================================
+# Execution Configuration (inherited from main config)
+# =============================================================================
+execution:
+  action_subject: "polaris.execution.actions"
+  result_subject: "polaris.execution.results"
+  metrics_subject: "polaris.execution.metrics"
+  decisions_subject: "polaris.execution.decisions"
+
+# =============================================================================
+# Digital Twin Configuration (inherited from main config)
+# =============================================================================
+digital_twin:
+  nats:
+    update_subject: "polaris.digitaltwin.update"
+    calibrate_subject: "polaris.digitaltwin.calibrate"
+    error_subject: "polaris.digitaltwin.errors"
+    queue_group: "digital_twin_workers"
+    max_reconnect_attempts: 10
+    reconnect_wait_sec: 2
+    queue_maxsize: 1000
+    batch_size: 10
+    batch_timeout_sec: 1.0
+
+  grpc:
+    host: "0.0.0.0"
+    port: 50051
+    max_workers: 10
+    max_message_size: 4194304
+    keepalive_time_ms: 30000
+    keepalive_timeout_ms: 5000
+
+  world_model:
+    implementation: "mock"
+    config_path: "mock_world_model.yaml"
+    reload_on_failure: true
+    health_check_interval_sec: 60
+
+  performance:
+    max_concurrent_queries: 10
+    query_timeout_sec: 30
+    simulation_timeout_sec: 60
+
+  debugging:
+    log_level: "DEBUG"
+    enable_detailed_logging: true
+    log_to_console: true
+    log_file: "logs/digital_twin.log"
+
+# =============================================================================
+# Agentic Reasoner Specific Configuration
+# =============================================================================
+agentic_reasoner:
+  # LLM Configuration
+  llm:
+    model: "gpt-oss:20b"
+    base_url: "http://10.10.16.46:11435"
+    max_tokens: 1024
+    temperature: 0.3
+    timeout: 600.0
+    max_retries: 3
+
+  # Tool Usage Configuration
+  tools:
+    # Maximum number of tool calls per reasoning session
+    max_tool_calls: 5
+    
+    # Enable/disable specific tools
+    knowledge_base_enabled: true
+    digital_twin_enabled: true
+    
+    # Tool-specific timeouts (seconds)
+    kb_query_timeout: 30.0
+    dt_query_timeout: 45.0
+
+  # Decision Making Configuration
+  decision_making:
+    # Confidence thresholds for different action types
+    confidence_thresholds:
+      high_impact_actions: 0.8  # ADD_SERVER, REMOVE_SERVER
+      medium_impact_actions: 0.6  # SET_DIMMER
+      low_impact_actions: 0.4   # NO_ACTION
+    
+    # System constraints
+    constraints:
+      max_response_time_ms: 1000
+      min_utilization: 0.5
+      max_utilization: 0.85
+      min_servers: 1
+      max_servers: 10
+      min_dimmer: 0.0
+      max_dimmer: 1.0
+    
+    # Action priorities based on system state
+    priority_rules:
+      critical_response_time: "high"    # Response time > 1000ms
+      high_utilization: "high"          # Utilization > 85%
+      low_utilization: "medium"         # Utilization < 50%
+      normal_operation: "low"           # Everything within bounds
+
+  # Reasoning Configuration
+  reasoning:
+    # Enable different reasoning modes
+    enable_proactive_reasoning: true    # Reason about future states
+    enable_reactive_reasoning: true     # React to current issues
+    enable_diagnostic_reasoning: true   # Diagnose problems
+    
+    # Reasoning depth
+    max_reasoning_iterations: 3
+    enable_multi_step_planning: true
+    
+    # Memory and learning
+    enable_action_memory: true
+    max_action_history: 100
+    enable_pattern_recognition: true
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logger:
+  name: "agentic_reasoner"
+  level: "DEBUG"
+  format: "pretty"
+
+# =============================================================================
+# Performance Monitoring
+# =============================================================================
+monitoring:
+  # Metrics to track for the agentic reasoner
+  metrics:
+    - reasoning_time
+    - tool_calls_per_session
+    - decision_confidence
+    - action_success_rate
+    - tool_success_rate
+  
+  # Performance thresholds
+  performance_thresholds:
+    max_reasoning_time_sec: 60
+    max_tool_calls_per_session: 5
+    min_decision_confidence: 0.5
+    min_action_success_rate: 0.8
+
+# =============================================================================
+# Safety and Constraints
+# =============================================================================
+safety:
+  # Enable safety checks
+  enable_constraint_validation: true
+  enable_action_simulation: false  # Simulate actions before execution
+  enable_rollback_capability: false  # Enable action rollback
+  
+  # Emergency stops
+  emergency_stops:
+    max_consecutive_failures: 3
+    max_response_time_violations: 5
+    enable_circuit_breaker: true
+    circuit_breaker_timeout_sec: 300
+
+# =============================================================================
+# Development and Testing
+# =============================================================================
+development:
+  # Enable development features
+  enable_debug_mode: true
+  log_tool_calls: true
+  log_llm_conversations: true
+  save_reasoning_traces: true
+  
+  # Testing configuration
+  enable_dry_run: false
+  mock_tool_responses: false
+  simulate_failures: false
