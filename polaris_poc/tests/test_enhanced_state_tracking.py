@@ -29,7 +29,7 @@ class TestEnhancedStateTracking:
         """Create and initialize a test world model."""
         config = {
             "api_key_env": "GEMINI_API_KEY",
-            "model": "gemini-1.5-pro",
+            "model": "gemini-2.5-pro",
             "temperature": 0.1,
             "max_tokens": 2000,
             "concurrent_requests": 5,
@@ -469,7 +469,7 @@ async def run_integration_test():
     # Create world model
     config = {
         "api_key_env": "GEMINI_API_KEY",
-        "model": "gemini-1.5-pro",
+        "model": "gemini-2.5-pro",
         "temperature": 0.1,
         "max_tokens": 2000,
         "concurrent_requests": 5,

@@ -355,9 +355,9 @@ class ConfigurationErrorSuggestionDatabase:
             
             "gemini.model": {
                 "invalid_model": [
-                    "Valid models: gemini-1.5-flash, gemini-1.5-pro, gemini-1.0-pro",
-                    "gemini-1.5-flash: Fast and cost-effective",
-                    "gemini-1.5-pro: More capable but higher cost",
+                    "Valid models: gemini-2.5-flash, gemini-2.5-pro, gemini-1.0-pro",
+                    "gemini-2.5-flash: Fast and cost-effective",
+                    "gemini-2.5-pro: More capable but higher cost",
                     "Check Google AI documentation for latest model versions"
                 ]
             },
@@ -650,7 +650,7 @@ class ConfigurationErrorSuggestionDatabase:
             "digital_twin.world_model.implementation": ["mock", "gemini", "statistical", "hybrid"],
             
             # Gemini Examples
-            "gemini.model": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"],
+            "gemini.model": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.0-pro"],
             "gemini.temperature": ["0.0", "0.3", "0.7", "1.0"],
             "gemini.api_key_env": ["GEMINI_API_KEY", "GOOGLE_AI_API_KEY"],
             

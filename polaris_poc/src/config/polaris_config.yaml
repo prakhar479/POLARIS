@@ -269,12 +269,12 @@ digital_twin:
     # "gemini": Google Gemini LLM-based reasoning (production AI)
     # "statistical": Time series and statistical analysis
     # "hybrid": Combines multiple approaches for robust reasoning
-    implementation: "mock"
+    implementation: "gemini"
 
     # Path to World Model configuration file (relative to this config)
     # Contains implementation-specific settings for the selected World Model
     # IMPORTANT: This creates a dependency on world_model.yaml
-    config_path: "mock_world_model.yaml"
+    config_path: "gemini_world_model.yaml"
 
     # Automatic reload on World Model failure
     # true: Attempt to reload World Model configuration on errors

@@ -236,8 +236,20 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
         """Establish the gRPC connection."""
         if not self.channel:
             self.logger.info(f"Connecting to Digital Twin gRPC server at {self.grpc_address}")
-            self.channel = grpc.aio.insecure_channel(self.grpc_address)
-            self.stub = digital_twin_pb2_grpc.DigitalTwinStub(self.channel)
+            try:
+                self.channel = grpc.aio.insecure_channel(self.grpc_address)
+                self.stub = digital_twin_pb2_grpc.DigitalTwinStub(self.channel)
+                
+                # Test the connection with a simple health check
+                await self._test_connection()
+                self.logger.info("Digital Twin gRPC connection established successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to connect to Digital Twin: {e}")
+                if self.channel:
+                    await self.channel.close()
+                    self.channel = None
+                    self.stub = None
+                raise
 
     async def disconnect(self):
         """Close the gRPC connection."""
@@ -261,9 +273,18 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
         )
         try:
             response_pb = await self.stub.Query(request_pb, timeout=10.0)
+            # Parse result - it might be JSON string or plain string
+            result = None
+            if response_pb.result:
+                try:
+                    result = json.loads(response_pb.result)
+                except json.JSONDecodeError:
+                    # If it's not valid JSON, use as plain string
+                    result = response_pb.result
+            
             return DTResponse(
                 success=response_pb.success,
-                result=json.loads(response_pb.result) if response_pb.result else None,
+                result=result,
                 confidence=response_pb.confidence,
                 explanation=response_pb.explanation,
                 metadata=dict(response_pb.metadata),
@@ -300,7 +321,17 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
         )
         try:
             response_pb = await self.stub.Simulate(request_pb, timeout=30.0)
-            future_states = [json.loads(s.result) for s in response_pb.future_states]
+            # Parse future states properly from the protobuf response
+            future_states = []
+            for state in response_pb.future_states:
+                future_state = {
+                    "timestamp": state.timestamp,
+                    "metrics": dict(state.metrics),
+                    "confidence": state.confidence,
+                    "description": state.description
+                }
+                future_states.append(future_state)
+            
             return DTResponse(
                 success=response_pb.success,
                 confidence=response_pb.confidence,
@@ -350,6 +381,34 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
         except Exception as e:
             self.logger.error(f"Error processing gRPC Diagnose response: {e}", exc_info=True)
             return None
+    
+    async def _test_connection(self):
+        """Test the gRPC connection with a simple management request."""
+        if not self.stub:
+            raise Exception("gRPC stub not initialized")
+        
+        try:
+            # Send a simple health check request
+            request = digital_twin_pb2.ManagementRequest(
+                request_id=str(uuid.uuid4()),
+                operation="health_check",
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            
+            # Short timeout for connection test
+            response = await self.stub.Manage(request, timeout=5.0)
+            
+            if not response.success:
+                self.logger.warning(f"Digital Twin health check returned: {response.result}")
+            
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                # Health check not implemented, but connection works
+                self.logger.debug("Digital Twin health check not implemented, but connection is working")
+            else:
+                raise Exception(f"gRPC connection test failed: {e.details()}")
+        except Exception as e:
+            raise Exception(f"Connection test failed: {e}")
 
 
 class NATSReasonerBase(ABC):

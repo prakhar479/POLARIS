@@ -332,7 +332,7 @@ class TestDigitalTwinConfigManagerIntegration:
         world_model_config = {
             "gemini": {
                 "api_key_env": "GEMINI_API_KEY",
-                "model": "gemini-1.5-flash",
+                "model": "gemini-2.5-flash",
                 "temperature": 0.7
             },
             "mock": {
