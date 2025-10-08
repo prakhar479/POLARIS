@@ -72,8 +72,20 @@ class LLMReasoningImplementation(ReasoningInterface):
         # Load prompt template and thresholds from the config dictionary
         try:
             self.prompt_thresholds = prompt_config["thresholds"]
+            self.prompt_template_parts = prompt_config.get("template_parts", {})
+            self.prompt_examples = prompt_config.get("examples", "")
             self.raw_prompt_template = prompt_config["template"]
-            self.logger.info("Successfully loaded prompt template and thresholds from config.")
+
+            # Combine thresholds, template parts, and examples for formatting
+            self.prompt_format_vars = {
+                **self.prompt_thresholds,
+                **self.prompt_template_parts,
+                "examples": self.prompt_examples,
+            }
+
+            self.logger.info(
+                "Successfully loaded prompt template, thresholds, template parts, and examples from config."
+            )
         except KeyError as e:
             self.logger.error(f"Prompt configuration is missing required key: {e}")
             raise ValueError(f"Invalid prompt_config dictionary: missing {e}") from e
@@ -104,12 +116,26 @@ class LLMReasoningImplementation(ReasoningInterface):
                 prompt_config = config["prompt_config"]
 
             old_thresholds = self.prompt_thresholds.copy()
+            old_template_parts = self.prompt_template_parts.copy()
+
             self.prompt_thresholds = prompt_config["thresholds"]
+            self.prompt_template_parts = prompt_config.get("template_parts", {})
+            self.prompt_examples = prompt_config.get("examples", "")
             self.raw_prompt_template = prompt_config["template"]
+
+            # Combine thresholds, template parts, and examples for formatting
+            self.prompt_format_vars = {
+                **self.prompt_thresholds,
+                **self.prompt_template_parts,
+                "examples": self.prompt_examples,
+            }
 
             self.logger.info(f"✅ Prompt config reloaded successfully")
             self.logger.info(f"   Old thresholds: {old_thresholds}")
             self.logger.info(f"   New thresholds: {self.prompt_thresholds}")
+            self.logger.info(
+                f"   Template parts updated: {list(self.prompt_template_parts.keys())}"
+            )
 
             return True
 
@@ -118,12 +144,13 @@ class LLMReasoningImplementation(ReasoningInterface):
             return False
 
     def _build_system_prompt(self, context: ReasoningContext) -> str:
-        """Build the system prompt by formatting the template with configured thresholds."""
+        """Build the system prompt by formatting the template with configured thresholds and template parts."""
         try:
-            # Use the stored template and thresholds to create the final prompt
-            return self.raw_prompt_template.format(**self.prompt_thresholds)
+            # Use the stored template and combined format variables to create the final prompt
+            return self.raw_prompt_template.format(**self.prompt_format_vars)
         except KeyError as e:
-            self.logger.error(f"Failed to format prompt template. Missing threshold key: {e}")
+            self.logger.error(f"Failed to format prompt template. Missing key: {e}")
+            self.logger.error(f"Available keys: {list(self.prompt_format_vars.keys())}")
             # Fallback to the raw template to avoid a hard crash
             return self.raw_prompt_template
 
@@ -699,7 +726,7 @@ class ContextBuilder:
             "constraints": {
                 "max_servers": 3,
                 "min_servers": 1,
-                "cooldown_period_minutes": 5,
+                "cooldown_period_minutes": 2,
             },
         }
 

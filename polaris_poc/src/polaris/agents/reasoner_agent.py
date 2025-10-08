@@ -37,8 +37,9 @@ from polaris.proto import digital_twin_pb2, digital_twin_pb2_grpc
 
 class ReasoningType(Enum):
     """Types of reasoning operations."""
+
     INFERENCE = "inference"
-    PLANNING = "planning" 
+    PLANNING = "planning"
     ANALYSIS = "analysis"
     DECISION = "decision"
     PREDICTION = "prediction"
@@ -47,6 +48,7 @@ class ReasoningType(Enum):
 @dataclass
 class ReasoningContext:
     """Context information for reasoning operations."""
+
     session_id: str
     timestamp: float
     input_data: Dict[str, Any]
@@ -57,6 +59,7 @@ class ReasoningContext:
 @dataclass
 class ReasoningResult:
     """Result of a reasoning operation."""
+
     result: Any
     confidence: float
     reasoning_steps: List[str]
@@ -64,7 +67,7 @@ class ReasoningResult:
     execution_time: float
     kb_queries_made: int = 0
     dt_queries_made: int = 0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         context_dict = asdict(self.context)
         if isinstance(context_dict.get("reasoning_type"), ReasoningType):
@@ -77,40 +80,49 @@ class ReasoningResult:
             "context": context_dict,
             "execution_time": self.execution_time,
             "kb_queries_made": self.kb_queries_made,
-            "dt_queries_made": self.dt_queries_made
+            "dt_queries_made": self.dt_queries_made,
         }
+
 
 # ===============================================================
 # == DIGITAL TWIN INTERFACES (Updated based on digital_twin_probe.py)
 # ===============================================================
 
+
 @dataclass
 class DTQuery:
     """Represents a query to the Digital Twin."""
+
     query_content: str
     query_type: str = "natural_language"  # e.g., current_state, historical
     parameters: Optional[Dict[str, Any]] = None
     query_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
+
 @dataclass
 class DTSimulation:
     """Represents a simulation request to the Digital Twin."""
+
     simulation_type: str  # e.g., forecast, what_if, scenario
     actions: List[Dict[str, Any]]
     horizon_minutes: int = 60
     parameters: Optional[Dict[str, Any]] = None
     simulation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
+
 @dataclass
 class DTDiagnosis:
     """Represents a diagnosis request to the Digital Twin."""
+
     anomaly_description: str
     context: Optional[Dict[str, Any]] = None
     diagnosis_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
+
 @dataclass
 class DTResponse:
     """Represents a generic response from the Digital Twin."""
+
     success: bool
     result: Optional[Any] = None
     confidence: float = 0.0
@@ -138,38 +150,40 @@ class DigitalTwinInterface(ABC):
     async def diagnose(self, diagnosis: DTDiagnosis) -> Optional[DTResponse]:
         """Request a diagnosis from the Digital Twin."""
         pass
-    
+
     @abstractmethod
     async def connect(self):
         """Connect to the Digital Twin service."""
         pass
-        
+
     @abstractmethod
     async def disconnect(self):
         """Disconnect from the Digital Twin service."""
         pass
 
+
 # ===============================================================
 # == REASONING AND KNOWLEDGE BASE INTERFACES
 # ===============================================================
 
+
 class ReasoningInterface(ABC):
     """Interface for reasoning implementations."""
-    
+
     @abstractmethod
-    async def reason(self, 
-                    context: ReasoningContext, 
-                    knowledge: Optional[List[Dict[str, Any]]] = None) -> ReasoningResult:
+    async def reason(
+        self, context: ReasoningContext, knowledge: Optional[List[Dict[str, Any]]] = None
+    ) -> ReasoningResult:
         pass
-    
+
     @abstractmethod
     async def validate_input(self, context: ReasoningContext) -> bool:
         pass
-    
+
     @abstractmethod
     def get_required_knowledge_types(self, context: ReasoningContext) -> List[str]:
         pass
-    
+
     @abstractmethod
     def extract_search_terms(self, context: ReasoningContext) -> List[str]:
         pass
@@ -179,17 +193,19 @@ class KnowledgeQueryInterface(ABC):
     """Interface for knowledge base query operations."""
 
     @abstractmethod
-    async def query_structured(self, 
-                              data_types: List[str],
-                              filters: Optional[Dict[str, Any]] = None,
-                              limit: int = 10,
-                              min_score: float = 0.0) -> Optional[List[Dict[str, Any]]]:
+    async def query_structured(
+        self,
+        data_types: List[str],
+        filters: Optional[Dict[str, Any]] = None,
+        limit: int = 10,
+        min_score: float = 0.0,
+    ) -> Optional[List[Dict[str, Any]]]:
         pass
 
     @abstractmethod
-    async def query_natural_language(self, 
-                                    query_text: str,
-                                    limit: int = 10) -> Optional[List[Dict[str, Any]]]:
+    async def query_natural_language(
+        self, query_text: str, limit: int = 10
+    ) -> Optional[List[Dict[str, Any]]]:
         pass
 
     @abstractmethod
@@ -201,10 +217,9 @@ class KnowledgeQueryInterface(ABC):
         pass
 
     @abstractmethod
-    async def store_reasoning_result(self, 
-                                    context: ReasoningContext,
-                                    result: Any,
-                                    confidence: float) -> bool:
+    async def store_reasoning_result(
+        self, context: ReasoningContext, result: Any, confidence: float
+    ) -> bool:
         pass
 
 
@@ -236,13 +251,13 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
         if not self.stub:
             self.logger.error("Digital Twin client not connected.")
             return None
-        
+
         request_pb = digital_twin_pb2.QueryRequest(
             query_id=query.query_id,
             query_type=query.query_type,
             query_content=query.query_content,
             parameters={k: str(v) for k, v in (query.parameters or {}).items()},
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
         try:
             response_pb = await self.stub.Query(request_pb, timeout=10.0)
@@ -251,7 +266,7 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
                 result=json.loads(response_pb.result) if response_pb.result else None,
                 confidence=response_pb.confidence,
                 explanation=response_pb.explanation,
-                metadata=dict(response_pb.metadata)
+                metadata=dict(response_pb.metadata),
             )
         except grpc.aio.AioRpcError as e:
             self.logger.error(f"gRPC Query call failed: {e.details()}", extra={"code": e.code()})
@@ -281,7 +296,7 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
             actions=pb_actions,
             horizon_minutes=simulation.horizon_minutes,
             parameters={k: str(v) for k, v in (simulation.parameters or {}).items()},
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
         try:
             response_pb = await self.stub.Simulate(request_pb, timeout=30.0)
@@ -291,7 +306,7 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
                 confidence=response_pb.confidence,
                 explanation=response_pb.explanation,
                 metadata=dict(response_pb.metadata),
-                future_states=future_states
+                future_states=future_states,
             )
         except grpc.aio.AioRpcError as e:
             self.logger.error(f"gRPC Simulate call failed: {e.details()}", extra={"code": e.code()})
@@ -309,14 +324,16 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
             diagnosis_id=diagnosis.diagnosis_id,
             anomaly_description=diagnosis.anomaly_description,
             context={k: str(v) for k, v in (diagnosis.context or {}).items()},
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
         try:
             response_pb = await self.stub.Diagnose(request_pb, timeout=20.0)
             hypotheses = [
                 {
-                    "hypothesis": h.hypothesis, "probability": h.probability,
-                    "reasoning": h.reasoning, "evidence": list(h.evidence)
+                    "hypothesis": h.hypothesis,
+                    "probability": h.probability,
+                    "reasoning": h.reasoning,
+                    "evidence": list(h.evidence),
                 }
                 for h in response_pb.hypotheses
             ]
@@ -325,7 +342,7 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
                 confidence=response_pb.confidence,
                 explanation=response_pb.explanation,
                 metadata=dict(response_pb.metadata),
-                hypotheses=hypotheses
+                hypotheses=hypotheses,
             )
         except grpc.aio.AioRpcError as e:
             self.logger.error(f"gRPC Diagnose call failed: {e.details()}", extra={"code": e.code()})
@@ -337,14 +354,15 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
 
 class NATSReasonerBase(ABC):
     """Base class providing NATS communication functionality for reasoner agents."""
-    
-    def __init__(self, 
-                 agent_id: str,
-                 config_path: str,
-                 nats_url: Optional[str] = None,
-                 kb_request_timeout: float = 30.0,
-                 logger: Optional[logging.Logger] = None,
-                 ):
+
+    def __init__(
+        self,
+        agent_id: str,
+        config_path: str,
+        nats_url: Optional[str] = None,
+        kb_request_timeout: float = 30.0,
+        logger: Optional[logging.Logger] = None,
+    ):
         self.agent_id = agent_id
         self.kb_request_timeout = kb_request_timeout
         self.nc: Optional[nats.NATS] = None
@@ -359,19 +377,26 @@ class NATSReasonerBase(ABC):
         self._apply_env_overrides(self.config)
 
         # NATS URL (config > arg > default)
-        self.nats_url = (
-            nats_url or
-            self.config.get("nats", {}).get("url", "nats://localhost:4222")
-        )
+        self.nats_url = nats_url or self.config.get("nats", {}).get("url", "nats://localhost:4222")
 
         # Subjects from config
-        self.telemetry_subject = self.config.get("telemetry", {}).get("stream_subject", "polaris.telemetry.events.stream")
-        self.execution_action_subject = self.config.get("execution", {}).get("action_subject", "polaris.execution.actions")
-        self.reasoner_kernel_subject = self.config.get("reasoner", {}).get("kernel_request_subject", "polaris.reasoner.kernel.requests")
+        self.telemetry_subject = self.config.get("telemetry", {}).get(
+            "stream_subject", "polaris.telemetry.events.stream"
+        )
+        self.execution_action_subject = self.config.get("execution", {}).get(
+            "action_subject", "polaris.execution.actions"
+        )
+        self.reasoner_kernel_subject = self.config.get("reasoner", {}).get(
+            "kernel_request_subject", "polaris.reasoner.kernel.requests"
+        )
 
         # Telemetry KB config
-        self.telemetry_kb_enabled = self.config.get("telemetry", {}).get("knowledge_base", {}).get("enabled", False)
-        self.telemetry_kb_buffer_size = self.config.get("telemetry", {}).get("knowledge_base", {}).get("buffer_size", 100)
+        self.telemetry_kb_enabled = (
+            self.config.get("telemetry", {}).get("knowledge_base", {}).get("enabled", False)
+        )
+        self.telemetry_kb_buffer_size = (
+            self.config.get("telemetry", {}).get("knowledge_base", {}).get("buffer_size", 100)
+        )
 
         # Setup logger
         if logger is None:
@@ -381,14 +406,20 @@ class NATSReasonerBase(ABC):
                 handler = logging.StreamHandler()
                 fmt = self.config.get("logger", {}).get("format", "pretty")
                 if fmt == "json":
-                    formatter = logging.Formatter(json.dumps({
-                        "time": "%(asctime)s",
-                        "name": "%(name)s",
-                        "level": "%(levelname)s",
-                        "msg": "%(message)s"
-                    }))
+                    formatter = logging.Formatter(
+                        json.dumps(
+                            {
+                                "time": "%(asctime)s",
+                                "name": "%(name)s",
+                                "level": "%(levelname)s",
+                                "msg": "%(message)s",
+                            }
+                        )
+                    )
                 else:
-                    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+                    formatter = logging.Formatter(
+                        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                    )
                 handler.setFormatter(formatter)
                 self.logger.addHandler(handler)
 
@@ -453,18 +484,35 @@ class NATSReasonerBase(ABC):
                 timestamp=time.time(),
                 input_data=data,
                 reasoning_type=ReasoningType(data.get("reasoning_type", "inference")),
-                metadata=data.get("metadata", {})
+                metadata=data.get("metadata", {}),
             )
 
             # self.logger.info(f"Starting reasoning session {context.session_id} with input: {context.input_data}")
 
             result = await self.perform_reasoning(context)
-            result= result.to_dict()
-            self.logger.info(f"Reasoning session {context.session_id} completed with result: {result['result']}")
+
+            # Handle case where result might already be a dict (e.g., from meta-learner)
+            if hasattr(result, "to_dict"):
+                result = result.to_dict()
+            elif isinstance(result, dict):
+                # Result is already a dict, wrap it in the expected format
+                result = {
+                    "result": result,
+                    "confidence": 0.5,
+                    "reasoning_steps": ["Meta-learner operation"],
+                    "context": context.to_dict() if hasattr(context, "to_dict") else str(context),
+                    "execution_time": 0.0,
+                }
+
+            self.logger.info(
+                f"Reasoning session {context.session_id} completed with result: {result['result']}"
+            )
             # Placeholder for action generation logic
-            action_message = result['result']
-            
-            self.logger.info(f"Publishing reasoning action to execution layer", extra={"action": action_message})
+            action_message = result["result"]
+
+            self.logger.info(
+                f"Publishing reasoning action to execution layer", extra={"action": action_message}
+            )
             await self.publish(self.execution_action_subject, action_message)
             await msg.respond(json.dumps({"success": True, "result": result}).encode())
 
@@ -472,14 +520,13 @@ class NATSReasonerBase(ABC):
             self.logger.error(f"Kernel request failed: {e}", exc_info=True)
             await msg.respond(json.dumps({"success": False, "error": str(e)}).encode())
 
-    
     async def query_knowledge_base(self, query_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Send a query to the knowledge base and return the response."""
         try:
             response = await self.nc.request(
                 "polaris.knowledge.query",
                 json.dumps(query_data).encode(),
-                timeout=self.kb_request_timeout
+                timeout=self.kb_request_timeout,
             )
             response_data = json.loads(response.data.decode())
             return response_data if response_data.get("success") else None
@@ -489,14 +536,12 @@ class NATSReasonerBase(ABC):
         except Exception as e:
             self.logger.error(f"KB query error: {e}", exc_info=True)
             return None
-    
+
     async def get_kb_stats(self) -> Optional[Dict[str, Any]]:
         """Get knowledge base statistics."""
         try:
             response = await self.nc.request(
-                "polaris.knowledge.stats",
-                b"",
-                timeout=self.kb_request_timeout
+                "polaris.knowledge.stats", b"", timeout=self.kb_request_timeout
             )
             return json.loads(response.data.decode())
         except TimeoutError:
@@ -505,7 +550,6 @@ class NATSReasonerBase(ABC):
         except Exception as e:
             self.logger.error(f"KB stats error: {e}", exc_info=True)
             return None
-    
 
     async def _handle_system_notification(self, data: Dict[str, Any], msg) -> None:
         """Handle system notifications."""
@@ -514,19 +558,25 @@ class NATSReasonerBase(ABC):
             self.logger.info(f"Reasoner {self.agent_id} received shutdown notification")
             await self.disconnect()
         elif notification_type == "health_check":
-            await self.publish("system.health_responses", {
-                "agent_id": self.agent_id,
-                "status": "healthy",
-                "active_sessions": len(self.active_sessions),
-                "reasoning_history_size": len(self.reasoning_history)
-            })
-    
+            await self.publish(
+                "system.health_responses",
+                {
+                    "agent_id": self.agent_id,
+                    "status": "healthy",
+                    "active_sessions": len(self.active_sessions),
+                    "reasoning_history_size": len(self.reasoning_history),
+                },
+            )
+
     def get_reasoning_history(self) -> List[Dict[str, Any]]:
-        return [result.to_dict() for result in self.reasoning_history]
-    
+        return [
+            result.to_dict() if hasattr(result, "to_dict") else result
+            for result in self.reasoning_history
+        ]
+
     def clear_reasoning_history(self) -> None:
         self.reasoning_history.clear()
-    
+
     @abstractmethod
     async def perform_reasoning(self, context: ReasoningContext) -> ReasoningResult:
         pass
@@ -534,31 +584,31 @@ class NATSReasonerBase(ABC):
 
 class DefaultKnowledgeQuery(KnowledgeQueryInterface):
     """Default implementation of knowledge base query operations using NATS."""
-    
+
     def __init__(self, nats_base: NATSReasonerBase, logger: Optional[logging.Logger] = None):
         self.nats_base = nats_base
         self.logger = logger or logging.getLogger(f"KBQuery.{nats_base.agent_id}")
 
-    async def query_structured(self, 
-                              data_types: List[str],
-                              filters: Optional[Dict[str, Any]] = None,
-                              limit: int = 10,
-                              min_score: float = 0.0) -> Optional[List[Dict[str, Any]]]:
+    async def query_structured(
+        self,
+        data_types: List[str],
+        filters: Optional[Dict[str, Any]] = None,
+        limit: int = 10,
+        min_score: float = 0.0,
+    ) -> Optional[List[Dict[str, Any]]]:
         query_data = {
             "query_type": "structured",
             "data_types": data_types,
             "filters": filters or {},
             "limit": limit,
-            "min_score": min_score
+            "min_score": min_score,
         }
         return await self._execute_query(query_data)
 
-    async def query_natural_language(self, query_text: str, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
-        query_data = {
-            "query_type": "natural_language",
-            "query_text": query_text,
-            "limit": limit
-        }
+    async def query_natural_language(
+        self, query_text: str, limit: int = 10
+    ) -> Optional[List[Dict[str, Any]]]:
+        query_data = {"query_type": "natural_language", "query_text": query_text, "limit": limit}
         return await self._execute_query(query_data)
 
     async def query_recent_observations(self, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
@@ -577,11 +627,9 @@ class DefaultKnowledgeQuery(KnowledgeQueryInterface):
             self.logger.error(f"KB query failed: {e}", exc_info=True)
             return None
 
-    
-    async def store_reasoning_result(self, 
-                                   context: ReasoningContext,
-                                   result: Any,
-                                   confidence: float) -> bool:
+    async def store_reasoning_result(
+        self, context: ReasoningContext, result: Any, confidence: float
+    ) -> bool:
         try:
             telemetry_event = {
                 "name": f"reasoning_{context.reasoning_type.value}",
@@ -593,38 +641,37 @@ class DefaultKnowledgeQuery(KnowledgeQueryInterface):
                     "session_id": context.session_id,
                     "reasoning_type": context.reasoning_type.value,
                     "result_summary": str(result)[:200],
-                    "input_summary": self._summarize_input(context.input_data)
-                }
+                    "input_summary": self._summarize_input(context.input_data),
+                },
             }
             # Publish reasoning result as a telemetry event for monitoring
-            await self.nats_base.publish(
-                 self.nats_base.telemetry_subject,
-                 telemetry_event
-            )
+            await self.nats_base.publish(self.nats_base.telemetry_subject, telemetry_event)
             return True
         except Exception as e:
             self.logger.error(f"Error storing reasoning result: {e}", exc_info=True)
             return False
-    
+
     def _summarize_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "keys_count": len(input_data.keys()),
             "data_types": {k: type(v).__name__ for k, v in input_data.items()},
             "has_numerical_data": any(isinstance(v, (int, float)) for v in input_data.values()),
-            "has_text_data": any(isinstance(v, str) for v in input_data.values())
+            "has_text_data": any(isinstance(v, str) for v in input_data.values()),
         }
 
 
 class ReasonerAgent(NATSReasonerBase):
     """Main reasoner agent that combines NATS communication with pluggable reasoning implementations."""
-    
-    def __init__(self, 
-                 agent_id: str,
-                 reasoning_implementations: Dict[ReasoningType, ReasoningInterface],
-                 config_path: str,
-                 nats_url: Optional[str] = None,
-                 kb_request_timeout: float = 30.0,
-                 logger: Optional[logging.Logger] = None):
+
+    def __init__(
+        self,
+        agent_id: str,
+        reasoning_implementations: Dict[ReasoningType, ReasoningInterface],
+        config_path: str,
+        nats_url: Optional[str] = None,
+        kb_request_timeout: float = 30.0,
+        logger: Optional[logging.Logger] = None,
+    ):
         super().__init__(agent_id, config_path, nats_url, kb_request_timeout, logger)
         self.reasoning_implementations = reasoning_implementations
         self.kb_query = DefaultKnowledgeQuery(self, self.logger)
@@ -638,11 +685,15 @@ class ReasonerAgent(NATSReasonerBase):
 
         if host and port:
             dt_grpc_address = f"{host}:{port}"
-            self.dt_query: Optional[DigitalTwinInterface] = GRPCDigitalTwinClient(dt_grpc_address, self.logger)
+            self.dt_query: Optional[DigitalTwinInterface] = GRPCDigitalTwinClient(
+                dt_grpc_address, self.logger
+            )
         else:
             self.dt_query = None
-            self.logger.warning("Digital Twin gRPC host and/or port not configured. DT queries will be disabled.")
-    
+            self.logger.warning(
+                "Digital Twin gRPC host and/or port not configured. DT queries will be disabled."
+            )
+
     async def connect(self) -> None:
         """Connect NATS client and Digital Twin gRPC client."""
         await super().connect()
@@ -656,10 +707,9 @@ class ReasonerAgent(NATSReasonerBase):
         """Subscribe to threshold update notifications."""
         try:
             await self.nc.subscribe(
-                "polaris.meta_learner.threshold_update",
-                cb=self._handle_threshold_update
+                "polaris.meta_learner.update", cb=self._handle_threshold_update
             )
-            self.logger.info("Subscribed to polaris.meta_learner.threshold_update")
+            self.logger.info("Subscribed to polaris.meta_learner.update")
         except Exception as e:
             self.logger.error(f"Failed to subscribe to threshold updates: {e}")
 
@@ -671,12 +721,14 @@ class ReasonerAgent(NATSReasonerBase):
 
             # Reload config for all LLM reasoning implementations
             for reasoning_type, impl in self.reasoning_implementations.items():
-                if hasattr(impl, 'reload_prompt_config'):
+                if hasattr(impl, "reload_prompt_config"):
                     success = impl.reload_prompt_config()
                     if success:
                         self.logger.info(f"✅ Reloaded prompt config for {reasoning_type.value}")
                     else:
-                        self.logger.warning(f"⚠️  Failed to reload prompt config for {reasoning_type.value}")
+                        self.logger.warning(
+                            f"⚠️  Failed to reload prompt config for {reasoning_type.value}"
+                        )
 
         except Exception as e:
             self.logger.error(f"Error handling threshold update: {e}", exc_info=True)
@@ -693,21 +745,20 @@ class ReasonerAgent(NATSReasonerBase):
         kb_queries = 0
         dt_queries = 0
 
-
         ##short circuit for testing
-        self.dt_query = None 
-        # self.kb_query = None 
-        
+        self.dt_query = None
+        # self.kb_query = None
+
         try:
             self.active_sessions[context.session_id] = context
             reasoning_steps.append(f"Started reasoning session: {context.session_id}")
-            
+
             if context.reasoning_type not in self.reasoning_implementations:
                 raise ValueError(f"No implementation for reasoning type: {context.reasoning_type}")
-            
+
             reasoning_impl = self.reasoning_implementations[context.reasoning_type]
             reasoning_steps.append(f"Using {context.reasoning_type.value} reasoning implementation")
-            
+
             if not await reasoning_impl.validate_input(context):
                 raise ValueError("Input validation failed")
             reasoning_steps.append("Input validation passed")
@@ -719,32 +770,37 @@ class ReasonerAgent(NATSReasonerBase):
                 )
                 dt_queries += 1
                 if dt_response and dt_response.success:
-                    reasoning_steps.append(f"DT response received with confidence {dt_response.confidence}")
+                    reasoning_steps.append(
+                        f"DT response received with confidence {dt_response.confidence}"
+                    )
                     context.metadata = context.metadata or {}
                     context.metadata["digital_twin_state"] = dt_response.result
                 else:
                     reasoning_steps.append("Failed to get response from Digital Twin.")
-            
-            
+
             reasoning_steps.append(f"Executing {context.reasoning_type.value} reasoning logic")
             result = await reasoning_impl.reason(context, None)
-            
+
             reasoning_steps.append("Storing reasoning result")
             if self.kb_query:
-                await self.kb_query.store_reasoning_result(context, result.result, result.confidence)
-            
+                await self.kb_query.store_reasoning_result(
+                    context, result.result, result.confidence
+                )
+
             result.execution_time = time.time() - start_time
             result.kb_queries_made = kb_queries
             result.dt_queries_made = dt_queries
             result.reasoning_steps = reasoning_steps + result.reasoning_steps
-            
+
             self.reasoning_history.append(result)
             return result
         except Exception as e:
             execution_time = time.time() - start_time
             reasoning_steps.append(f"Error occurred: {str(e)}")
-            self.logger.error(f"Reasoning failed in session {context.session_id}: {e}", exc_info=True)
-            
+            self.logger.error(
+                f"Reasoning failed in session {context.session_id}: {e}", exc_info=True
+            )
+
             return ReasoningResult(
                 result={"error": str(e)},
                 confidence=0.0,
@@ -752,58 +808,59 @@ class ReasonerAgent(NATSReasonerBase):
                 context=context,
                 execution_time=execution_time,
                 kb_queries_made=kb_queries,
-                dt_queries_made=dt_queries
+                dt_queries_made=dt_queries,
             )
         finally:
             self.active_sessions.pop(context.session_id, None)
 
-    def add_reasoning_implementation(self, reasoning_type: ReasoningType, implementation: ReasoningInterface):
+    def add_reasoning_implementation(
+        self, reasoning_type: ReasoningType, implementation: ReasoningInterface
+    ):
         self.reasoning_implementations[reasoning_type] = implementation
-    
+
     def remove_reasoning_implementation(self, reasoning_type: ReasoningType):
         self.reasoning_implementations.pop(reasoning_type, None)
-    
+
     def get_supported_reasoning_types(self) -> List[ReasoningType]:
         return list(self.reasoning_implementations.keys())
-    
+
     async def predict(self, input_data: dict) -> dict:
         context = ReasoningContext(
             session_id=str(uuid.uuid4()),
             timestamp=time.time(),
             input_data=input_data,
-            reasoning_type=ReasoningType.PREDICTION
+            reasoning_type=ReasoningType.PREDICTION,
         )
         result = await self.perform_reasoning(context)
-        return result.to_dict()
+        return result.to_dict() if hasattr(result, "to_dict") else result
 
 
 class SkeletonReasoningImplementation(ReasoningInterface):
     """Skeleton implementation for reference - replace with actual implementations."""
-    
-    async def reason(self, 
-                    context: ReasoningContext, 
-                    knowledge: Optional[List[Dict[str, Any]]] = None) -> ReasoningResult:
-        
+
+    async def reason(
+        self, context: ReasoningContext, knowledge: Optional[List[Dict[str, Any]]] = None
+    ) -> ReasoningResult:
+
         dt_state = context.metadata.get("digital_twin_state", "not available")
 
         return ReasoningResult(
             result={
                 "message": f"Skeleton {context.reasoning_type.value} reasoning complete.",
-                "digital_twin_state": dt_state
-                },
+                "digital_twin_state": dt_state,
+            },
             confidence=0.5,
             reasoning_steps=[f"Skeleton {context.reasoning_type.value} reasoning called"],
             context=context,
-            execution_time=0.001
+            execution_time=0.001,
         )
-    
+
     async def validate_input(self, context: ReasoningContext) -> bool:
         return True
-    
+
     def get_required_knowledge_types(self, context: ReasoningContext) -> List[str]:
         return ["observation", "adaptation_decision", "system_goal"]
 
-    
     def extract_search_terms(self, context: ReasoningContext) -> List[str]:
         terms = []
         for key, value in context.input_data.items():
@@ -812,16 +869,18 @@ class SkeletonReasoningImplementation(ReasoningInterface):
         return list(set(terms))[:10]
 
 
-def create_reasoner_agent(agent_id: str,
-                          config_path: str,
-                         reasoning_implementations: Optional[Dict[ReasoningType, ReasoningInterface]] = None,
-                         nats_url: Optional[str] = None,
-                         kb_timeout: float = 30.0,
-                         logger: Optional[logging.Logger] = None,
-                         gemini_api_key: Optional[str] = None) -> 'ReasonerAgent':
+def create_reasoner_agent(
+    agent_id: str,
+    config_path: str,
+    reasoning_implementations: Optional[Dict[ReasoningType, ReasoningInterface]] = None,
+    nats_url: Optional[str] = None,
+    kb_timeout: float = 30.0,
+    logger: Optional[logging.Logger] = None,
+    gemini_api_key: Optional[str] = None,
+) -> "ReasonerAgent":
     """
     Create a reasoner agent with optional LLM-based reasoning implementations.
-    
+
     Args:
         agent_id: Unique identifier for the agent
         config_path: Path to YAML configuration file
@@ -830,34 +889,27 @@ def create_reasoner_agent(agent_id: str,
         kb_timeout: Timeout for knowledge base queries
         logger: Optional logger instance
         gemini_api_key: Gemini API key for LLM reasoning (if None, uses skeleton implementation)
-    
+
     Returns:
         ReasonerAgent configured with reasoning implementations
     """
     from .reasoner_agent import ReasonerAgent, ReasoningType, SkeletonReasoningImplementation
     from .llm_reasoner import LLMReasoningImplementation
-    
+
     if reasoning_implementations is None:
         reasoning_implementations = {}
-        
+
         # Use LLM reasoner only
         if gemini_api_key:
             for reasoning_type in ReasoningType:
                 llm_reasoner = LLMReasoningImplementation(
-                    api_key=gemini_api_key,
-                    reasoning_type=reasoning_type,
-                    logger=logger
+                    api_key=gemini_api_key, reasoning_type=reasoning_type, logger=logger
                 )
                 llm_reasoner.configure_basic()
                 reasoning_implementations[reasoning_type] = llm_reasoner
         else:
             raise ValueError("Gemini API key must be provided to use LLM reasoning.")
-    
+
     return ReasonerAgent(
-        agent_id,
-        reasoning_implementations,
-        config_path,
-        nats_url,
-        kb_timeout,
-        logger
+        agent_id, reasoning_implementations, config_path, nats_url, kb_timeout, logger
     )

@@ -709,7 +709,7 @@ async def start_meta_learner(args, config_path: Path):
         return
 
     # Import meta-learner
-    from polaris.agents.meta_learner_llm import create_meta_learner_agent
+    from polaris.agents.meta_learner_llm import MetaLearnerLLM
 
     # Resolve prompt config path (relative to src/polaris/agents)
     script_dir = Path(__file__).parent
@@ -720,8 +720,8 @@ async def start_meta_learner(args, config_path: Path):
         logger.error(f"Prompt config not found: {prompt_config_path}")
         return
 
-    # Build Meta-Learner
-    agent = create_meta_learner_agent(
+    # Build Meta-Learner (not as a reasoner agent)
+    agent = MetaLearnerLLM(
         agent_id="polaris_meta_learner_001",
         api_key=API_KEY,
         prompt_config_path=str(prompt_config_path),
