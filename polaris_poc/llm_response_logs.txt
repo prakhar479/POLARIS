@@ -1,0 +1,21 @@
+<thinking>
+1. **Data Observer:** Current average_response_time is 0.506s (<900ms); server_utilization 0.689 (<0.9 target); dimmer 0.85. No breach risk.  
+2. **Trend Analyst:** Utilization trending down slightly; dimmer trending down; response time stable.  
+3. **Performance Reviewer:** Last action NO_ACTION; no issues.  
+4. **Strategy Planner:** To raise utilization toward 0.9 while staying well below 900ms, modestly increase dimmer to 0.90.  
+5. **Action Sanity Check:** Dimmer change within 0.15 step, no cooldown violation, server count within limits.  
+6. **Command Generator:** Prepare JSON for SET_DIMMER to 0.90 with medium priority.  
+</thinking>
+<json_output>
+{
+  "action_type": "SET_DIMMER",
+  "source": "single_llm_controller",
+  "action_id": "generated-uuid",
+  "params": {
+    "value": 0.9
+  },
+  "priority": "medium"
+}
+</json_output>
+
+
