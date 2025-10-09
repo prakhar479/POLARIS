@@ -466,9 +466,10 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
         return """You are an expert systems performance engineer and parameter optimization specialist. Your primary role is to fine-tune system thresholds and performance parameters based on operational data and evidence.
 
 **PRIMARY FOCUS:**
-- Adaptive thresholds: Response times, utilization targets, scaling triggers, dimmer controls
+- Adaptive thresholds: Response times, utilization targets, scaling triggers, dimmer controls, cooldown timings
 - Performance parameter optimization through data-driven adjustments
 - System efficiency improvements via precise threshold calibration
+- Intelligent template phrase evolution (add/remove ONE short phrase per cycle)
 
 **SECONDARY (RARE) FOCUS:**
 - Minor template wording improvements (only when adaptation success rates consistently fail)
@@ -485,10 +486,11 @@ Templates: {current_template_parts}
 - Utilization scaling thresholds and targets
 - Dimmer adjustment parameters and step sizes
 - Performance variance and tolerance settings
+- Cooldown timings for smarter adaptation cadence
 
 **INCREMENTAL CHANGE RULES:**
-1. **Threshold Priority**: Prefer threshold adjustments over template changes (90% of updates should be thresholds)
-2. **Single Parameter**: Change only ONE threshold per update cycle
+1. **Threshold Priority**: Prefer threshold adjustments over template changes (80% of updates should be thresholds)
+2. **Single Parameter**: Change only ONE threshold OR add/remove ONE adaptive phrase per cycle
 3. **Conservative Limits**: Numerical changes limited to {max_change_percent}% maximum
 4. **Evidence-Based**: Require 3+ cycles of data showing parameter issues
 5. **YAML Validity**: Ensure all JSON is properly formatted and valid
@@ -504,7 +506,14 @@ Templates: {current_template_parts}
 - Utilization thresholds: Adjust based on actual scaling patterns and efficiency
 - Dimmer reduction points: Modify based on response time vs user experience trade-offs
 - Target values: Calibrate based on observed system behavior patterns
+- Cooldown adjustments: Reduce for faster response, increase for stability
 - Add/modify cooldown to thresholds if needed for stability
+
+**ADAPTIVE PHRASE EVOLUTION (Smart Template Enhancement):**
+- Add ONE short phrase when patterns show need for proactive behavior
+- Remove outdated phrases when system behavior changes
+- Example additions: "Anticipate load spikes." "Monitor cascade effects." "Prioritize user experience."
+- Example removals: Remove phrases that no longer match system patterns
 
 **TEMPLATE CHANGES (RARE - Only if adaptation success <70%):**
 - Minor wording clarifications in system_role
@@ -540,7 +549,25 @@ Example 3 - Dimmer Control Refinement:
 }}
 ```
 
-Example 4 - Minor Template Wording (RARE - only if needed):
+Example 4 - Cooldown Timing Optimization:
+```json
+{{
+  "thresholds": {{
+    "cooldown_period_minutes": 3
+  }}
+}}
+```
+
+Example 5 - Add Adaptive Phrase for Proactivity:
+```json
+{{
+  "template_parts": {{
+    "adaptive_phrases": "Monitor for early warning signs. Anticipate system load patterns."
+  }}
+}}
+```
+
+Example 6 - Minor Template Wording (RARE - only if needed):
 ```json
 {{
   "template_parts": {{
@@ -550,15 +577,15 @@ Example 4 - Minor Template Wording (RARE - only if needed):
 ```
 
 **OUTPUT REQUIREMENTS:**
-- **Threshold Priority**: Prefer threshold adjustments (90% of changes should be thresholds)
-- Return {{}} unless clear evidence warrants a single, targeted threshold change
+- **Threshold Priority**: Prefer threshold adjustments (80% of changes should be thresholds)
+- Return {{}} unless clear evidence warrants a single, targeted change
 - JSON must be valid and properly escaped
-- Only use existing threshold parameter names
+- Only use existing threshold parameter names OR add ONE adaptive phrase
 - Template changes only if adaptation success rates consistently fail
 - Provide clear but brief justification focused on performance impact
 
 **DECISION APPROACH:**
-Focus on threshold optimization for measurable performance improvements. Avoid template changes unless absolutely necessary. System stability through parameter tuning is more valuable than prompt modifications."""
+Focus on threshold optimization for measurable performance improvements. Add adaptive phrases to make the reasoner more proactive when patterns show gaps in behavior. Avoid major template changes unless absolutely necessary. System intelligence through parameter tuning and phrase evolution is more valuable than prompt overhauls."""
 
     def _build_user_prompt(self, telemetry_summary: Dict[str, Any]) -> str:
         """Build user prompt with telemetry context."""
@@ -630,10 +657,17 @@ Focus on threshold optimization for measurable performance improvements. Avoid t
 **PREFERRED ACTIONS (in priority order):**
 1. Adjust response time thresholds (target_response_time_ms, dimmer_reduction_threshold_s)
 2. Calibrate utilization targets (target_server_utilization)
-3. Fine-tune dimmer parameters (dimmer_max_step)
-4. Return {{}} if no clear threshold optimization opportunity exists
+3. Fine-tune cooldown parameters (cooldown_period_minutes)
+4. Add/remove adaptive phrases to enhance reasoner intelligence
+5. Return {{}} if no clear optimization opportunity exists
 
-Analyze performance data for threshold optimization opportunities with clear measurable impact."""
+**ADAPTIVE PHRASE INTELLIGENCE:**
+- Add phrases when system shows reactive patterns: "Anticipate load spikes." "Monitor cascade effects."
+- Remove phrases when system behavior changes or phrases become obsolete
+- Keep phrases short and actionable (max 10 words each)
+- Focus on making the reasoner more proactive and pattern-aware
+
+Analyze performance data for threshold optimization and reasoner intelligence enhancement opportunities with clear measurable impact."""
 
         return prompt
 
@@ -686,17 +720,12 @@ Analyze performance data for threshold optimization opportunities with clear mea
                 "utilization_scale_down_target_percent": (30, 70),
                 "utilization_optimal_range_min": (40, 70),
                 "utilization_optimal_range_max": (60, 85),
-                "server_action_cooldown_seconds": (30, 300),
+                "cooldown_period_minutes": (1, 15),
             }
 
-            # Cooldown parameters that should not be modified (for stability)
+            # Cooldown parameters (now adjustable for smarter timing)
             cooldown_params = {
-                "server_action_cooldown_seconds",
-                "scale_up_cooldown_s",
-                "scale_down_cooldown_s",
-                "action_cooldown_sec",
-                "scale_up_cooldown_sec",
-                "scale_down_cooldown_sec",
+                "cooldown_period_minutes",
             }
 
             for key, new_value in updates["thresholds"].items():
@@ -708,12 +737,12 @@ Analyze performance data for threshold optimization opportunities with clear mea
                     )
                     continue
 
-                # Check if this is a cooldown parameter
+                # Check if this is a cooldown parameter (now adjustable)
                 if key in cooldown_params:
-                    self.logger.warning(
-                        f"Ignoring cooldown parameter update: {key} (stability policy)"
+                    # Allow cooldown adjustments based on adaptation patterns
+                    self.logger.info(
+                        f"Adjusting cooldown parameter: {key} for smarter timing adaptation"
                     )
-                    continue
 
                 # Skip any removal attempts - not allowed
                 if new_value is None or new_value == "__REMOVE__":
@@ -769,7 +798,12 @@ Analyze performance data for threshold optimization opportunities with clear mea
         if "template_parts" in updates:
             valid_template_parts = {}
 
-            allowed_parts = {"system_role", "reasoning_structure", "constraints"}
+            allowed_parts = {
+                "system_role",
+                "reasoning_structure",
+                "constraints",
+                "adaptive_phrases",
+            }
 
             for key, new_text in updates["template_parts"].items():
                 if key not in allowed_parts:
@@ -808,6 +842,28 @@ Analyze performance data for threshold optimization opportunities with clear mea
                             self.logger.warning(
                                 f"Reasoning structure appears to have major structural changes "
                                 f"(length ratio: {length_ratio:.2f}). Only minor refinements allowed."
+                            )
+                            continue
+
+                # Handle adaptive_phrases for intelligent template evolution
+                if key == "adaptive_phrases":
+                    current_phrases = self.current_template_parts.get("adaptive_phrases", "")
+
+                    # Allow adding/removing ONE short phrase per cycle
+                    if isinstance(new_text, str) and len(new_text.strip()) > 0:
+                        phrase_count = len([p for p in new_text.split(".") if p.strip()])
+                        current_count = (
+                            len([p for p in current_phrases.split(".") if p.strip()])
+                            if current_phrases
+                            else 0
+                        )
+
+                        # Allow only small incremental changes (+/- 1 phrase)
+                        if abs(phrase_count - current_count) <= 1:
+                            self.logger.info(f"Evolving adaptive phrases: {phrase_count} phrases")
+                        else:
+                            self.logger.warning(
+                                f"Too many phrase changes ({phrase_count} vs {current_count}), limiting to incremental"
                             )
                             continue
 

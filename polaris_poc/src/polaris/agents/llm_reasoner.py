@@ -67,7 +67,7 @@ class LLMReasoningImplementation(ReasoningInterface):
 
         self.last_action_memory: Optional[Dict[str, Any]] = None
         self.kb_query = kb_query_interface
-        self.context_builder = ContextBuilder(self.logger)
+        self.context_builder = ContextBuilder(self.logger, prompt_config)
 
         # Load prompt template and thresholds from the config dictionary
         try:
@@ -562,8 +562,9 @@ class ContextBuilder:
     rich context payload required by the LLM.
     """
 
-    def __init__(self, logger) -> None:
+    def __init__(self, logger, prompt_config: Optional[Dict[str, Any]] = None) -> None:
         self.logger = logger or logging.getLogger("ContextBuilder")
+        self.prompt_config = prompt_config or {}
 
     def calculate_ewma(self, data: List[float], alpha: float = 0.5) -> Optional[float]:
         if not data:
@@ -717,23 +718,20 @@ class ContextBuilder:
                 }
                 self.logger.info(f"Generated feedback for last action: {feedback_on_last_action}")
 
-        # MODIFIED: Goals are now more specific and quantitative
+        # 4. Define Goals and Constraints from prompt configuration
+        fixed_constraints = self.prompt_config.get("fixed_constraints", {})
+        thresholds = self.prompt_config.get("thresholds", {})
+
         system_goals_and_constraints = {
             "goals": {
-                "target_response_time_ms_weighted": 100.0,
-                "target_utilization_min_for_scale_down": 0.50,
+                "target_response_time_ms_weighted": thresholds.get("target_response_time_ms", 742),
+                "target_utilization": thresholds.get("target_server_utilization", 0.7),
             },
             "constraints": {
-                "max_servers": 3,
-                "min_servers": 1,
-                "cooldown_period_minutes": 2,
+                "max_servers": fixed_constraints.get("max_servers", 3),
+                "min_servers": fixed_constraints.get("min_servers", 1),
+                "cooldown_period_minutes": thresholds.get("cooldown_period_minutes", 2),
             },
-        }
-
-        # 4. Define Goals and Constraints (can be loaded from config)
-        system_goals_and_constraints = {
-            "goals": {"target_utilization": 0.9},
-            "constraints": {"max_servers": 3, "cooldown_period_minutes": 5},
         }
 
         return {
