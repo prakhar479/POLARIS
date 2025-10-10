@@ -487,8 +487,7 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
 **OBSERVATION STORAGE (when new patterns emerge):**
 Store insights in `adaptive_phrases` when you discover:
 - Performance correlations: "Response degrades when CPU > 85%"
-- Operational patterns: "Morning traffic spikes need proactive scaling"  
-- User behavior insights: "Users abandon after 2s delay"
+- Operational patterns: "traffic spikes need proactive scaling"  
 - Adaptation learnings: "Gradual dimmer more effective than sudden"
 
 **THRESHOLD TUNING (when parameters are clearly wrong):**
@@ -502,8 +501,18 @@ Look for these signs that thresholds need adjustment:
 **FIXED CONSTRAINTS (NEVER CHANGE):**
 {', '.join(self.FIXED_CONSTRAINTS)}
 
-**CLEAR EXAMPLES:**
-
+**EXAMPLES:**
+Both Threshold Adjustment AND Pattern Storage (data shows misaligned parameter + new insight):
+```json
+{{
+  "thresholds": {{
+    "utilization_scale_up_threshold_percent": 75
+  }},
+  "template_parts": {{
+    "adaptive_phrases": "Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience. Memory pressure correlates with response time degradation."
+  }}
+}}
+```
 Threshold Too High (Response time target 800ms but system averages 600ms):
 ```json
 {{
@@ -513,26 +522,18 @@ Threshold Too High (Response time target 800ms but system averages 600ms):
 }}
 ```
 
-New Pattern Discovered (CPU correlation found in data):
-```json
-{{
-  "template_parts": {{
-    "adaptive_phrases": "Monitor response time spikes when CPU > 80%. Scale proactively when memory exceeds 70%."
-  }}
-}}
-```
 
 **DECISION CRITERIA:**
 - **Tune Thresholds**: If current parameters clearly don't match system behavior patterns (too high/low/never triggered)
 - **Store Patterns**: If you discover new correlations, behaviors, or insights not yet captured
-- **Both Valid**: CGive both changes if they are strongly supported by data
+- **Both Valid**: Make both changes if they are independently supported by strong evidence
 - **Return {{}}**: Only when parameters seem well-calibrated AND no new patterns emerge
 
 **OUTPUT REQUIREMENTS:**
 - JSON must be valid and properly formatted  
-- Focus on ONE change with strongest evidence
-- **PREFER pattern storage** - look for insights to capture first
-- Only tune thresholds when there's obvious misalignment
+- Focus on changes with strongest evidence (threshold, pattern, or both)
+- Give equal consideration to both threshold optimization and pattern storage
+- Only make changes when clearly justified by the data
 - Justify your choice based on what the data clearly shows"""
 
     def _build_user_prompt(self, telemetry_summary: Dict[str, Any]) -> str:
@@ -592,7 +593,7 @@ Only when patterns are already well-captured, examine if current thresholds matc
 **DECISION PRIORITY:**
 1. **Capture New Patterns**: If you discover insights not yet stored, add them to adaptive_phrases  
 2. **Fix Parameter Misalignment**: If thresholds clearly don't match system behavior, adjust them
-You may make BOTH changes if strongly supported by data
+You should make BOTH changes if strongly supported by data
 3. **No Changes**: Return {{}} only if parameters are well-aligned AND no new patterns are evident
 
 **EXAMPLES OF CLEAR THRESHOLD ISSUES:**
