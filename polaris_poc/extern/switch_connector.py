@@ -87,6 +87,10 @@ class SwitchSystemConnector(ManagedSystemConnector):
         
         Creates an aiohttp session and tests connectivity.
         """
+        if self._connected:
+            self.logger.info("Already connected.")
+            return
+
         try:
             # Create aiohttp session
             timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -123,6 +127,10 @@ class SwitchSystemConnector(ManagedSystemConnector):
     
     async def disconnect(self) -> None:
         """Disconnect from Switch system."""
+        if not self._connected or not self._session:
+            self.logger.info("Already disconnected.")
+            return
+            
         if self._session:
             await self._session.close()
             self._session = None
@@ -543,6 +551,10 @@ class SwitchSystemConnector(ManagedSystemConnector):
         """
         try:
             metrics = await self._get_latest_metrics()
+
+            print("-"*50)
+            print(metrics)
+            print("-"*50)
             
             # Extract key metrics based on the Switch system's metric structure
             performance = {
