@@ -1,15 +1,15 @@
 """
-Expert Agentic Prompt Engineering Meta-Learner Agent Implementation
+Expert Agentic Meta-Learner Agent Implementation
 
-A conservative, expert-driven meta-learner that:
-- Acts as an expert agentic prompt engineer and autonomous systems specialist
+A balanced, intelligent meta-learner that:
+- Acts as an expert systems engineer and pattern recognition specialist
 - Queries the Knowledge Base for comprehensive telemetry analysis
-- Analyzes patterns using Gemini API with conservative decision-making criteria
-- Updates STRATEGIC parameters (thresholds, agent reasoning patterns) only when clearly justified
+- Analyzes patterns using Gemini API for balanced optimization decisions
+- Updates BOTH threshold parameters AND stores valuable observations in adaptive_phrases
 - Keeps FIXED CONSTRAINTS unchanged (min/max servers, dimmer bounds)
-- Makes minimal, evidence-based changes with stability prioritized over optimization
-- Operates on conservative 10-minute intervals with strict change frequency controls
-- Requires multiple confirmation cycles before implementing template modifications
+- Makes evidence-based changes with equal focus on optimization and pattern storage
+- Operates on 10-minute intervals with intelligent change management
+- Stores system insights, patterns, and behaviors to make the reasoner more intelligent
 """
 
 import asyncio
@@ -46,7 +46,7 @@ from .meta_learner_agent import (
 
 
 class MetaLearnerLLM(BaseMetaLearnerAgent):
-    """Incremental LLM-based meta-learner for strategic adaptation."""
+    """Balanced LLM-based meta-learner for threshold optimization and observation storage."""
 
     # Define immutable system constraints
     FIXED_CONSTRAINTS = {"min_servers", "max_servers", "dimmer_min_value", "dimmer_max_value"}
@@ -95,15 +95,15 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
         self.current_thresholds = self.prompt_config.get("thresholds", {})
         self.current_template_parts = self.prompt_config.get("template_parts", {})
 
-        self.logger.info(f"Conservative update interval: {update_interval_seconds}s")
-        self.logger.info(f"Conservative max change per update: {max_change_percent}%")
+        self.logger.info(f"Update interval: {update_interval_seconds}s")
+        self.logger.info(f"Max change per update: {max_change_percent}%")
         self.logger.info(f"Prompt config: {self.prompt_config_path}")
         self.logger.info(
             f"Loaded {len(self.current_thresholds)} threshold parameters for optimization"
         )
         self.logger.info(f"Fixed constraints: {self.FIXED_CONSTRAINTS}")
         self.logger.info(
-            f"Operating in threshold-focused optimization mode with 90% preference for parameter tuning"
+            f"Operating in balanced mode: 50% threshold optimization + 50% observation storage"
         )
 
     def _load_prompt_config(self) -> Dict[str, Any]:
@@ -302,6 +302,7 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
                 if thinking_end > thinking_start:
                     thinking = response[thinking_start:thinking_end].strip()
                     self.logger.info(f"LLM Reasoning:\n{thinking}")
+            print(f"LLM full response:\n{response}")
 
             # Extract JSON
             json_str = None
@@ -430,16 +431,26 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
                     threshold_count = len(valid_updates.get("thresholds", {}))
                     template_count = len(valid_updates.get("template_parts", {}))
 
-                    if threshold_count > 0:
+                    if threshold_count > 0 and template_count > 0:
                         self.logger.info(
-                            f"Threshold optimization completed successfully. "
-                            f"Updated {threshold_count} performance parameter(s)."
+                            f"System optimization completed: {threshold_count} threshold(s) + {template_count} observation(s) stored."
+                        )
+                    elif threshold_count > 0:
+                        self.logger.info(
+                            f"Threshold optimization completed: Updated {threshold_count} performance parameter(s)."
                         )
                     elif template_count > 0:
-                        self.logger.info(
-                            f"Template refinement completed. "
-                            f"Updated {template_count} template component(s)."
+                        adaptive_phrases_updated = "adaptive_phrases" in valid_updates.get(
+                            "template_parts", {}
                         )
+                        if adaptive_phrases_updated:
+                            self.logger.info(
+                                f"Observation storage completed: Stored system patterns for reasoner intelligence."
+                            )
+                        else:
+                            self.logger.info(
+                                f"Template refinement completed: Updated {template_count} template component(s)."
+                            )
                     else:
                         self.logger.info("Meta-learning cycle completed successfully.")
 
@@ -462,67 +473,38 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
         """Build system prompt emphasizing balanced, data-driven changes."""
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt emphasizing balanced, data-driven changes."""
-        return """You are an expert systems performance engineer and parameter optimization specialist. Your primary role is to fine-tune system thresholds and performance parameters based on operational data and evidence.
+        """Build system prompt emphasizing balanced optimization and observation storage."""
+        return f"""You are an expert systems engineer specializing in adaptive system optimization and pattern recognition. Your role is to improve system performance through both parameter tuning and intelligent observation storage.
 
-**PRIMARY FOCUS:**
-- Adaptive thresholds: Response times, utilization targets, scaling triggers, dimmer controls, cooldown timings
-- Performance parameter optimization through data-driven adjustments
-- System efficiency improvements via precise threshold calibration
-- Intelligent template phrase evolution (add/remove ONE short phrase per cycle)
+**DECISION FRAMEWORK:**
+1. **OBSERVATION STORAGE** - When you identify new patterns or insights that aren't captured yet
+2. **THRESHOLD TUNING** - When numerical parameters are clearly misaligned with actual system behavior
 
-**SECONDARY (RARE) FOCUS:**
-- Minor template wording improvements (only when adaptation success rates consistently fail)
+**CURRENT STATE:**
+- Thresholds: {self.current_thresholds}
+- Templates: {self.current_template_parts}
 
-**IMMUTABLE CONSTRAINTS (NEVER MODIFY):**
-- min_servers, max_servers, dimmer_min_value, dimmer_max_value
+**OBSERVATION STORAGE (when new patterns emerge):**
+Store insights in `adaptive_phrases` when you discover:
+- Performance correlations: "Response degrades when CPU > 85%"
+- Operational patterns: "Morning traffic spikes need proactive scaling"  
+- User behavior insights: "Users abandon after 2s delay"
+- Adaptation learnings: "Gradual dimmer more effective than sudden"
 
-**CURRENT PARAMETERS:**
-Thresholds: {current_thresholds}
-Templates: {current_template_parts}
+**THRESHOLD TUNING (when parameters are clearly wrong):**
+Look for these signs that thresholds need adjustment:
+- Response time targets consistently exceeded or never approached
+- Utilization thresholds causing unnecessary scaling or failing to scale
+- Dimmer controls not matching performance vs user experience trade-offs
+- Cooldown timings causing delays or instability
+- Change by max {self.max_change_percent}% per cycle
 
-**THRESHOLD OPTIMIZATION OPPORTUNITIES:**
-- Response time targets and reduction thresholds
-- Utilization scaling thresholds and targets
-- Dimmer adjustment parameters and step sizes
-- Performance variance and tolerance settings
-- Cooldown timings for smarter adaptation cadence
+**FIXED CONSTRAINTS (NEVER CHANGE):**
+{', '.join(self.FIXED_CONSTRAINTS)}
 
-**INCREMENTAL CHANGE RULES:**
-1. **Threshold Priority**: Prefer threshold adjustments over template changes (80% of updates should be thresholds)
-2. **Single Parameter**: Change only ONE threshold OR add/remove ONE adaptive phrase per cycle
-3. **Conservative Limits**: Numerical changes limited to {max_change_percent}% maximum
-4. **Evidence-Based**: Require 3+ cycles of data showing parameter issues
-5. **YAML Validity**: Ensure all JSON is properly formatted and valid
+**CLEAR EXAMPLES:**
 
-**THRESHOLD CHANGE CRITERIA:**
-- Parameter consistently violated or never triggered (3+ observation periods)
-- Clear performance impact measurable in metrics
-- >80% confidence that threshold adjustment will improve system behavior
-- No recent changes to the same threshold
-
-**COMMON THRESHOLD ADJUSTMENTS:**
-- Response time targets: Tighten if consistently exceeded, relax if never approached
-- Utilization thresholds: Adjust based on actual scaling patterns and efficiency
-- Dimmer reduction points: Modify based on response time vs user experience trade-offs
-- Target values: Calibrate based on observed system behavior patterns
-- Cooldown adjustments: Reduce for faster response, increase for stability
-- Add/modify cooldown to thresholds if needed for stability
-
-**ADAPTIVE PHRASE EVOLUTION (Smart Template Enhancement):**
-- Add ONE short phrase when patterns show need for proactive behavior
-- Remove outdated phrases when system behavior changes
-- Example additions: "Anticipate load spikes." "Monitor cascade effects." "Prioritize user experience."
-- Example removals: Remove phrases that no longer match system patterns
-
-**TEMPLATE CHANGES (RARE - Only if adaptation success <70%):**
-- Minor wording clarifications in system_role
-- Small instruction improvements in constraints description or additional instructions
-- Never drastically modify reasoning_structure (protected cognitive architecture)
-
-**EXAMPLES OF VALID CHANGES:**
-
-Example 1 - Response Time Threshold Adjustment:
+Threshold Too High (Response time target 800ms but system averages 600ms):
 ```json
 {{
   "thresholds": {{
@@ -531,61 +513,27 @@ Example 1 - Response Time Threshold Adjustment:
 }}
 ```
 
-Example 2 - Utilization Target Optimization:
-```json
-{{
-  "thresholds": {{
-    "target_server_utilization": 0.75
-  }}
-}}
-```
-
-Example 3 - Dimmer Control Refinement:
-```json
-{{
-  "thresholds": {{
-    "dimmer_reduction_threshold_s": 0.6
-  }}
-}}
-```
-
-Example 4 - Cooldown Timing Optimization:
-```json
-{{
-  "thresholds": {{
-    "cooldown_period_minutes": 3
-  }}
-}}
-```
-
-Example 5 - Add Adaptive Phrase for Proactivity:
+New Pattern Discovered (CPU correlation found in data):
 ```json
 {{
   "template_parts": {{
-    "adaptive_phrases": "Monitor for early warning signs. Anticipate system load patterns."
+    "adaptive_phrases": "Monitor response time spikes when CPU > 80%. Scale proactively when memory exceeds 70%."
   }}
 }}
 ```
 
-Example 6 - Minor Template Wording (RARE - only if needed):
-```json
-{{
-  "template_parts": {{
-    "system_role": "You are an integrated, autonomous system controller focused on maintaining optimal performance and efficiency."
-  }}
-}}
-```
+**DECISION CRITERIA:**
+- **Tune Thresholds**: If current parameters clearly don't match system behavior patterns (too high/low/never triggered)
+- **Store Patterns**: If you discover new correlations, behaviors, or insights not yet captured
+- **Both Valid**: CGive both changes if they are strongly supported by data
+- **Return {{}}**: Only when parameters seem well-calibrated AND no new patterns emerge
 
 **OUTPUT REQUIREMENTS:**
-- **Threshold Priority**: Prefer threshold adjustments (80% of changes should be thresholds)
-- Return {{}} unless clear evidence warrants a single, targeted change
-- JSON must be valid and properly escaped
-- Only use existing threshold parameter names OR add ONE adaptive phrase
-- Template changes only if adaptation success rates consistently fail
-- Provide clear but brief justification focused on performance impact
-
-**DECISION APPROACH:**
-Focus on threshold optimization for measurable performance improvements. Add adaptive phrases to make the reasoner more proactive when patterns show gaps in behavior. Avoid major template changes unless absolutely necessary. System intelligence through parameter tuning and phrase evolution is more valuable than prompt overhauls."""
+- JSON must be valid and properly formatted  
+- Focus on ONE change with strongest evidence
+- **PREFER pattern storage** - look for insights to capture first
+- Only tune thresholds when there's obvious misalignment
+- Justify your choice based on what the data clearly shows"""
 
     def _build_user_prompt(self, telemetry_summary: Dict[str, Any]) -> str:
         """Build user prompt with telemetry context."""
@@ -618,56 +566,45 @@ Focus on threshold optimization for measurable performance improvements. Add ada
         prompt = f"""**SYSTEM DATA ANALYSIS:**
 
 **Time Period:** {telemetry_summary.get('time_range', {}).get('start', 'N/A')} to {telemetry_summary.get('time_range', {}).get('end', 'N/A')}
-
-**Activity Summary:**
-- Snapshots: {telemetry_summary.get('snapshot_count', 0)}
-- Observations: {telemetry_summary.get('other_observation_count', 0)}  
-- Adaptations: {telemetry_summary.get('adaptation_decision_count', 0)}
+**Data Points:** {telemetry_summary.get('snapshot_count', 0)} snapshots, {telemetry_summary.get('other_observation_count', 0)} observations, {telemetry_summary.get('adaptation_decision_count', 0)} adaptations
 
 **Adaptation Performance:**
 {json.dumps(decision_summary, indent=2)}
 
-**Recent Changes:**
-{json.dumps(recent_updates, indent=2) if recent_updates else "No recent changes"}
+**Recent Changes:** {json.dumps(recent_updates, indent=2) if recent_updates else "None"}
 
-**THRESHOLD OPTIMIZATION ANALYSIS:**
+**ANALYSIS FOCUS:**
 
-**Time Period:** {telemetry_summary.get('time_range', {}).get('start', 'N/A')} to {telemetry_summary.get('time_range', {}).get('end', 'N/A')}
-**Snapshots:** {telemetry_summary.get('snapshot_count', 0)} | **Adaptations:** {telemetry_summary.get('adaptation_decision_count', 0)}
+**PATTERN DISCOVERY CHECK:**  
+Look for new insights not yet captured in adaptive_phrases:
+- Performance correlations (CPU, memory, response time relationships)
+- User behavior patterns (abandonment, tolerance thresholds)
+- Operational patterns (time-based load, cascade effects)
+- Successful adaptation strategies under specific conditions
 
-**Adaptation Success Rates:**
-{json.dumps(decision_summary, indent=2)}
+**THRESHOLD MISALIGNMENT CHECK:**
+Only when patterns are already well-captured, examine if current thresholds match actual system behavior:
+- Are response time targets appropriate for observed performance?
+- Do utilization thresholds trigger scaling at right times?  
+- Are dimmer controls calibrated for performance vs user experience?
+- Do cooldown periods cause delays or allow instability?
 
-**Recent Updates:** {json.dumps(recent_updates, indent=2) if recent_updates else "None"}
+**DECISION PRIORITY:**
+1. **Capture New Patterns**: If you discover insights not yet stored, add them to adaptive_phrases  
+2. **Fix Parameter Misalignment**: If thresholds clearly don't match system behavior, adjust them
+You may make BOTH changes if strongly supported by data
+3. **No Changes**: Return {{}} only if parameters are well-aligned AND no new patterns are evident
 
-**THRESHOLD ANALYSIS QUESTIONS:**
-1. Which thresholds are consistently violated or never triggered?
-2. Are response time targets appropriate for actual system performance?
-3. Do utilization thresholds match observed scaling patterns?
-4. Are dimmer controls optimally calibrated for performance vs user experience?
-5. Do any parameters show persistent misalignment with system behavior?
+**EXAMPLES OF CLEAR THRESHOLD ISSUES:**
+- Target response time 1000ms but system consistently runs at 400ms → Lower target
+- Utilization threshold 90% but scaling happens at 60% → Adjust threshold
+- Dimmer reduction at 2s but users tolerate 1s → Reduce threshold
 
-**PARAMETER OPTIMIZATION DECISION:**
-- Focus on ONE threshold that shows clear misalignment with system behavior
-- Prioritize response time, utilization, and dimmer thresholds
-- Avoid template changes unless adaptation success rates are critically low (<70%)
-- Ensure JSON is valid with proper escaping
-- Return {{}} if thresholds appear well-calibrated
-
-**PREFERRED ACTIONS (in priority order):**
-1. Adjust response time thresholds (target_response_time_ms, dimmer_reduction_threshold_s)
-2. Calibrate utilization targets (target_server_utilization)
-3. Fine-tune cooldown parameters (cooldown_period_minutes)
-4. Add/remove adaptive phrases to enhance reasoner intelligence
-5. Return {{}} if no clear optimization opportunity exists
-
-**ADAPTIVE PHRASE INTELLIGENCE:**
-- Add phrases when system shows reactive patterns: "Anticipate load spikes." "Monitor cascade effects."
-- Remove phrases when system behavior changes or phrases become obsolete
-- Keep phrases short and actionable (max 10 words each)
-- Focus on making the reasoner more proactive and pattern-aware
-
-Analyze performance data for threshold optimization and reasoner intelligence enhancement opportunities with clear measurable impact."""
+**EXAMPLES OF PATTERN INSIGHTS:**
+- "Response time spikes correlate with CPU > 85%"
+- "Server additions during spikes improve latency"
+- "Dimmer reduction gives faster recovery than addition of server, but is less impactful"
+"""
 
         return prompt
 
@@ -675,34 +612,37 @@ Analyze performance data for threshold optimization and reasoner intelligence en
         """Validate updates and enforce incremental change constraints."""
         valid_updates = {}
 
-        # STRICT INCREMENTAL RULE: Only allow ONE change at a time, prefer thresholds
-        total_changes = 0
-        if "thresholds" in updates:
-            total_changes += len(updates["thresholds"])
-        if "template_parts" in updates:
-            total_changes += len(updates["template_parts"])
+        # INCREMENTAL RULE: Allow up to 1 change in each category (thresholds and template_parts)
+        threshold_changes = len(updates.get("thresholds", {}))
+        template_changes = len(updates.get("template_parts", {}))
 
-        if total_changes > 1:
+        # Limit thresholds to maximum 1 change
+        if threshold_changes > 1:
             self.logger.warning(
-                f"Too many changes proposed ({total_changes}). Prioritizing threshold changes over template changes."
+                f"Too many threshold changes proposed ({threshold_changes}). Limiting to 1 change."
             )
-            # Strongly prefer threshold changes over template changes
-            if "thresholds" in updates and len(updates["thresholds"]) > 0:
-                first_threshold = list(updates["thresholds"].keys())[0]
-                updates = {"thresholds": {first_threshold: updates["thresholds"][first_threshold]}}
-                self.logger.info(f"Selected threshold change: {first_threshold}")
-            elif "template_parts" in updates and len(updates["template_parts"]) > 0:
-                first_template = list(updates["template_parts"].keys())[0]
-                updates = {
-                    "template_parts": {first_template: updates["template_parts"][first_template]}
-                }
-                self.logger.info(f"Selected template change: {first_template}")
+            first_threshold = list(updates["thresholds"].keys())[0]
+            updates["thresholds"] = {first_threshold: updates["thresholds"][first_threshold]}
+            self.logger.info(f"Selected threshold change: {first_threshold}")
 
-        # Additional check: Discourage template changes unless justified
-        if "template_parts" in updates and "thresholds" not in updates:
+        # Limit template_parts to maximum 1 change
+        if template_changes > 1:
             self.logger.warning(
-                "Template change proposed without threshold alternative. Template changes should be rare."
+                f"Too many template changes proposed ({template_changes}). Limiting to 1 change."
             )
+            first_template = list(updates["template_parts"].keys())[0]
+            updates["template_parts"] = {first_template: updates["template_parts"][first_template]}
+            self.logger.info(f"Selected template change: {first_template}")
+
+        # Log the final change summary
+        final_threshold_changes = len(updates.get("thresholds", {}))
+        final_template_changes = len(updates.get("template_parts", {}))
+        if final_threshold_changes > 0 and final_template_changes > 0:
+            self.logger.info(f"Allowing 1 threshold change and 1 template change in this cycle")
+        elif final_threshold_changes > 0:
+            self.logger.info(f"Allowing 1 threshold change in this cycle")
+        elif final_template_changes > 0:
+            self.logger.info(f"Allowing 1 template change (observation storage) in this cycle")
 
         # Process threshold updates (including additions and removals)
         if "thresholds" in updates:
@@ -858,14 +798,16 @@ Analyze performance data for threshold optimization and reasoner intelligence en
                             else 0
                         )
 
-                        # Allow only small incremental changes (+/- 1 phrase)
-                        if abs(phrase_count - current_count) <= 1:
-                            self.logger.info(f"Evolving adaptive phrases: {phrase_count} phrases")
-                        else:
-                            self.logger.warning(
-                                f"Too many phrase changes ({phrase_count} vs {current_count}), limiting to incremental"
+                        # Allow reasonable changes for observation storage (up to 5 new insights)
+                        if phrase_count <= current_count + 5:
+                            self.logger.info(
+                                f"Storing system observations: {phrase_count} insights total"
                             )
-                            continue
+                        else:
+                            self.logger.info(
+                                f"Large observation update ({phrase_count} vs {current_count}) - allowing for pattern storage"
+                            )
+                            # Still allow it - observations are valuable
 
                 # Check if fixed constraints are mentioned in constraints template
                 if key == "constraints":
@@ -1058,7 +1000,7 @@ def create_meta_learner_agent(
     config_path: str,
     nats_url: Optional[str] = None,
     update_interval_seconds: float = 600.0,  # Conservative 10-minute interval
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-2.5-flash",
     max_change_percent: float = 10.0,  # Conservative 10% max change
     logger: Optional[logging.Logger] = None,
 ) -> MetaLearnerLLM:

@@ -18,6 +18,8 @@ import random
 import uuid  # Import uuid for generating action_id
 import httpx
 import yaml
+from collections import deque
+from datetime import datetime, timezone, timedelta
 
 # Add these imports to the existing reasoner_agent.py file
 from .reasoner_core import (
@@ -43,7 +45,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         prompt_config_path: Optional[str] = None,  # <-- Add path to reload config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         model: str = "gpt-oss:20b",
-        max_tokens: int = 512,
+        max_tokens: int = 2048,
         temperature: float = 0.2,
         timeout: float = 600.0,
         base_url: str = "http://10.10.16.46:11435",
@@ -65,9 +67,15 @@ class LLMReasoningImplementation(ReasoningInterface):
             f"Initializing LLMReasoningImplementation with model {model} at endpoint {self.base_url}"
         )
 
-        self.last_action_memory: Optional[Dict[str, Any]] = None
+        # In-memory storage for the action history using a deque
+        self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
+
+        # self.last_action_memory: Optional[Dict[str, Any]] = None
         self.kb_query = kb_query_interface
         self.context_builder = ContextBuilder(self.logger, prompt_config)
+        self.last_inference_snapshots: Optional[List[Dict[str, Any]]] = None
+        self.last_inference_action: Optional[Dict[str, Any]] = None
+        self.last_inference_timestamp: Optional[str] = None
 
         # Load prompt template and thresholds from the config dictionary
         try:
@@ -180,13 +188,30 @@ class LLMReasoningImplementation(ReasoningInterface):
                 filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
                 limit=120,
             )
-            reasoning_steps.append("Retrieving last action from internal memory to critique.")
-            last_action = self.last_action_memory
+            reasoning_steps.append(f"Fetched {len(snapshots)} KB snapshots")
+            # === Filter to only snapshots newer than last inference ===
+            filtered_snapshots = snapshots
 
-            # 2. Build the rich context
-            reasoning_steps.append("Processing KB results with ContextBuilder.")
+            # === Compute feedback on previous action ===
+            if self.last_inference_action and self.last_inference_action.get("action_type") not in [
+                "NO_ACTION",
+                "NO_OP",
+            ]:
+                feedback = self._evaluate_action_from_snapshot_shift(
+                    self.last_inference_action,
+                    self.last_inference_snapshots or [],
+                    filtered_snapshots or [],
+                )
+                if feedback:
+                    reasoning_steps.append(f"Evaluated previous action feedback: {feedback}")
+                    # Only append feedback if there's an action history
+                    if self.action_history:
+                        self.action_history[-1]["content"]["feedback"] = feedback
+            # === Use filtered snapshots for current reasoning ===
+            current_snapshots = filtered_snapshots or snapshots
+            action_history_list = list(self.action_history)
             enriched_context_data = self.context_builder.build_context_from_kb_results(
-                snapshots or [], last_action
+                current_snapshots, action_history_list
             )
 
             # 3. Prepare prompts
@@ -197,20 +222,32 @@ class LLMReasoningImplementation(ReasoningInterface):
             # 4. Call the LLM
             llm_response = await self._call_llm(system_prompt, user_prompt)
             reasoning_steps.append("Received LLM response")
+            with open("./llm_responses.txt", "a") as f:
+                f.write(
+                    f"---\nTimestamp: {datetime.now(timezone.utc).isoformat()}\nSystem Prompt:\n{system_prompt}\nUser Prompt:\n{user_prompt}\nLLM Response:\n{llm_response}\n"
+                )
 
             # 5. Parse and return the result
             action_result = self._parse_llm_response(llm_response)
             reasoning_steps.append("Parsed and validated LLM output")
 
-            if "error" not in action_result and action_result.get("action_type") != "ALERT":
+            self.last_inference_snapshots = snapshots
+            self.last_inference_action = action_result
+            self.last_inference_timestamp = datetime.now(timezone.utc).isoformat()
+
+            # Append to history if it's a significant action
+            if "error" not in action_result and action_result.get("action_type") not in [
+                "ALERT",
+                "NO_ACTION",
+            ]:
                 reasoning_steps.append(
                     "Storing generated action in internal memory for future reflection."
                 )
                 action_to_store = {"content": action_result.copy()}
                 action_to_store["content"]["timestamp"] = datetime.now(timezone.utc).isoformat()
-                self.last_action_memory = action_to_store
+                self.action_history.append(action_to_store)
                 self.logger.info(
-                    f"Successfully stored action '{action_result['action_type']}' in internal memory."
+                    f"Successfully stored action '{action_result['action_type']}' in history. History size: {len(self.action_history)}."
                 )
 
             self._store_call_history(
@@ -245,6 +282,98 @@ class LLMReasoningImplementation(ReasoningInterface):
                 execution_time=execution_time,
             )
 
+    def _evaluate_action_from_snapshot_shift(
+        self,
+        last_action: Dict[str, Any],
+        prev_snapshots: List[Dict[str, Any]],
+        new_snapshots: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Compare average_response_time and server_utilization between consecutive inference snapshots."""
+
+        if not prev_snapshots or not new_snapshots:
+            return {
+                "evaluation": "UNKNOWN",
+                "details": "Missing snapshot data from one of the runs.",
+            }
+
+        def extract_metric(snapshot, metric):
+            """Safely extract a metric from nested snapshot structure."""
+            try:
+                return snapshot["content"]["content"]["current_state"].get(metric)
+            except (KeyError, TypeError):
+                return None
+
+        def avg_metric(snapshots, metric):
+            vals = []
+            for s in snapshots:
+                val = extract_metric(s, metric)
+                if isinstance(val, (int, float)):
+                    vals.append(val)
+            return sum(vals) / len(vals) if vals else None
+
+            # DEBUG: inspect one example snapshot to confirm structure
+
+        if new_snapshots and "DEBUG_PRINTED" not in self.__dict__:
+            self.__dict__["DEBUG_PRINTED"] = True
+            example = new_snapshots[-1]["content"]["content"]["current_state"]
+            # logging.warning(f"[DEBUG] Example snapshot current_state = {json.dumps(example, indent=2)}")
+
+        # logging.warning(f"[DEBUG] Prev snapshots count={len(prev_snapshots)}, New snapshots count={len(new_snapshots)}")
+        # logging.warning(f"[DEBUG] First prev timestamp={prev_snapshots[0]['content']['timestamp']} | First new timestamp={new_snapshots[0]['content']['timestamp']}")
+        # logging.warning(f"[DEBUG] Last prev timestamp={prev_snapshots[-1]['content']['timestamp']} | Last new timestamp={new_snapshots[-1]['content']['timestamp']}")
+
+        prev_rt = avg_metric(prev_snapshots, "average_response_time")
+        curr_rt = avg_metric(new_snapshots, "average_response_time")
+        prev_util = avg_metric(prev_snapshots, "server_utilization")
+        curr_util = avg_metric(new_snapshots, "server_utilization")
+
+        self.logger.info(
+            f"Evaluating action feedback: Prev RT={prev_rt}, Curr RT={curr_rt}, Prev Util={prev_util}, Curr Util={curr_util}"
+        )
+
+        if prev_rt is None or curr_rt is None:
+            return {
+                "evaluation": "UNKNOWN",
+                "details": "Metrics missing in one or both snapshot sets.",
+            }
+
+        # Convert RT from seconds to milliseconds for readability
+        rt_change_ms = (curr_rt - prev_rt) * 1000
+        util_change = (
+            curr_util - prev_util if (prev_util is not None and curr_util is not None) else 0.0
+        )
+
+        self.logger.info(
+            f"Action feedback computed: ΔRT={rt_change_ms:+.2f} ms, ΔUtil={util_change:+.4f}"
+        )
+
+        # --- Evaluation rules ---
+        eval_result = "NEUTRAL"
+        action_type = last_action.get("action_type")
+
+        if action_type == "ADD_SERVER":
+            if rt_change_ms < -50:
+                eval_result = "SUCCESSFUL"
+            elif rt_change_ms > 20:
+                eval_result = "FAILED"
+        elif action_type == "REMOVE_SERVER":
+            if util_change > 0.05 and rt_change_ms < 100:
+                eval_result = "SUCCESSFUL"
+            elif rt_change_ms > 200:
+                eval_result = "FAILED"
+        elif action_type == "SET_DIMMER":
+            new_val = last_action.get("params", {}).get("value", 1.0)
+            if rt_change_ms < -10 and new_val < 1.0:
+                eval_result = "SUCCESSFUL"
+            elif rt_change_ms > 10:
+                eval_result = "FAILED"
+
+        return {
+            "action_taken": action_type,
+            "evaluation": eval_result,
+            "details": f"ΔRT={rt_change_ms:+.2f} ms, ΔUtil={util_change:+.4f}",
+        }
+
     def _build_user_prompt(self, context: ReasoningContext, telemetry_data: Dict[str, Any]) -> str:
         """Build the user prompt with the dynamic context data."""
         return self.user_prompt_template.format(context_data=json.dumps(telemetry_data, indent=2))
@@ -255,51 +384,43 @@ class LLMReasoningImplementation(ReasoningInterface):
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Parse the LLM JSON output from within the <json_output> block and extract thinking."""
         try:
-            # Extract and log the thinking process first
-            thinking_content = None
+            thinking_content = "No <thinking> block found."
             if "<thinking>" in response and "</thinking>" in response:
                 thinking_start = response.find("<thinking>") + len("<thinking>")
                 thinking_end = response.find("</thinking>", thinking_start)
                 if thinking_end != -1:
                     thinking_content = response[thinking_start:thinking_end].strip()
-                    self.logger.info(
-                        "LLM Reasoning Process:\n" + thinking_content,
-                        extra={"component": "llm_thinking"},
-                    )
-
-                # # Look for the <json_output> block
-                # if "<json_output>" in response:
-                #     json_start = response.find("<json_output>") + len("<json_output>")
-                #     json_end = response.find("</json_output>", json_start)
-                #     if json_end == -1:
-                #         raise ValueError("Found <json_output> but no closing </json_output> tag.")
-                #     json_str = response[json_start:json_end].strip()
-                # else:
-                # Fallback for cases where the model might forget the tags
-            self.logger.warning(
-                "LLM response did not contain <json_output> tags. Falling back to extracting first JSON object."
+            self.logger.info(
+                f"LLM Reasoning Process:\n{thinking_content}", extra={"component": "llm_thinking"}
             )
-            json_start = response.find("{")
-            json_end = response.rfind("}") + 1
-            if json_start == -1 or json_end == 0:
-                raise ValueError("No JSON object found in response")
-            json_str = response[json_start:json_end]
+
+            json_str = ""
+            if "<json_output>" in response and "</json_output>" in response:
+                json_start = response.find("<json_output>") + len("<json_output>")
+                json_end = response.find("</json_output>", json_start)
+                if json_end != -1:
+                    json_str = response[json_start:json_end].strip()
+            else:
+                self.logger.warning(
+                    "LLM response did not contain <json_output> tags. Falling back to extracting first JSON object."
+                )
+                json_start = response.find("{")
+                json_end = response.rfind("}") + 1
+                if json_start != -1 and json_end != 0:
+                    json_str = response[json_start:json_end]
+
+            if not json_str:
+                raise ValueError("No valid JSON object found in response.")
 
             action = json.loads(json_str)
 
-            # Validate required fields
-            required_fields = ["action_type", "source", "params"]
+            required_fields = ["action_type", "source"]
             for field in required_fields:
                 if field not in action:
                     raise ValueError(f"Missing required field in parsed JSON: {field}")
 
-            # Overwrite action_id with a real UUID for system use
             action["action_id"] = str(uuid.uuid4())
-
-            # Add the thinking content to the action result for debugging/logging
-            # if thinking_content:
-            #     action["_thinking_process"] = thinking_content
-
+            action["_thinking_process"] = thinking_content
             return action
 
         except Exception as e:
@@ -310,11 +431,6 @@ class LLMReasoningImplementation(ReasoningInterface):
                 "params": {"message": f"Failed to parse LLM JSON response: {e}"},
                 "action_id": f"fallback_{int(time.time())}",
             }
-
-    # ==== Unchanged Private & Public Methods ====
-    # The following methods (_call_llm, _store_call_history, create_llm_reasoner_agent, etc.)
-    # and classes (ContextBuilder) remain the same as in your original file.
-    # They are included here for completeness of the single file.
 
     # ==== Private Methods ====
 
@@ -467,21 +583,7 @@ class LLMReasoningImplementation(ReasoningInterface):
 
     def configure_basic(self):
         """Generic safe defaults."""
-        self.set_domain_context(
-            """Proactive adaptive control of SWIM exemplar.
-                                
-                                About SWIM: The system manages servers and content delivery.
-
-                                Actions: Add/remove servers, adjust a dimmer (0.0–1.0 for optional content), or take no action.
-
-                                Metrics: Track dimmer level, active/max servers, utilization, response times (overall, basic, optional), arrival rate, and throughput (basic/optional).
-
-                                Behavior: High utilization → exponential rise in response time; adding servers lowers per-server load but raises cost; lowering dimmer reduces load/response time.
-
-                                Thresholds: Critical utilization = 1.0, normal response time = 1.0s, recommended servers ≈ arrival_rate/10.
-                                
-                                """
-        )
+        self.set_domain_context("Proactive adaptive control of SWIM exemplar.")
         self.set_safety_constraints(
             [
                 "Only use: ADD_SERVER, REMOVE_SERVER, SET_DIMMER",
@@ -619,124 +721,208 @@ class ContextBuilder:
         return f"{rate_per_minute:+.2f}/min"
 
     def build_context_from_kb_results(
-        self, snapshots: List[Dict[str, Any]], last_action: Optional[Dict[str, Any]]
+        self, snapshots: List[Dict[str, Any]], action_history: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """
-        The main method to transform raw KB results into the final context payload.
-        """
+        """The main method to transform raw KB results into the final context payload."""
         if not snapshots:
             return {"error": "No recent snapshots found in the Knowledge Base."}
 
-        # Sort snapshots by timestamp just in case they are out of order
         sorted_snapshots = sorted(snapshots, key=lambda s: s["timestamp"])
         latest_snapshot = sorted_snapshots[-1]["content"]["content"]
-
-        # 1. Get the Current State from the latest snapshot
         current_state = latest_snapshot.get("current_state", {})
 
-        # 2. Calculate Historical Trends across all snapshots
         historical_trends = {}
-
-        # Identify all unique metrics across the snapshots to calculate trends for
-
         all_metrics = set(
             k
             for s in sorted_snapshots
             for k in s.get("content", {}).get("content", {}).get("current_state", {}).keys()
         )
-
         for metric in all_metrics:
-            # Create a time series of values for the current metric
             values = [
                 s["content"]["content"]["current_state"][metric]
                 for s in sorted_snapshots
-                if "content" in s
-                and "content" in s["content"]
-                and metric in s["content"]["content"].get("current_state", {})
+                if metric in s.get("content", {}).get("content", {}).get("current_state", {})
             ]
-
             ewma = self.calculate_ewma(values)
             roc = self.calculate_rate_of_change(sorted_snapshots, metric)
-
             historical_trends[metric] = {
                 "5min_avg_ewma": round(ewma, 4) if ewma is not None else None,
                 "5min_rate_of_change": roc,
             }
 
-        # 3. Process the Controller State from the last action
-        controller_state = {}
-        if last_action:
-            action_content = last_action["content"]
-            action_time = datetime.fromisoformat(action_content["timestamp"])
-            minutes_since = (datetime.now(timezone.utc) - action_time).total_seconds() / 60
-            controller_state = {
-                "last_action": {
-                    "timestamp": action_content["timestamp"],
-                    "action_type": action_content["action_type"],
-                },
-                "minutes_since_last_action": round(minutes_since, 2),
-            }
-        else:
-            controller_state = {"last_action": None, "minutes_since_last_action": 9999}
-
-        # NEW: Feedback loop logic
-        feedback_on_last_action = {"evaluation": "No recent action to evaluate."}
-        if last_action and len(sorted_snapshots) > 1:
-            action_time_ts = datetime.fromisoformat(last_action["content"]["timestamp"]).timestamp()
-            pre_action_snapshot = next(
-                (
-                    s
-                    for s in reversed(sorted_snapshots)
-                    if datetime.fromisoformat(s["timestamp"]).timestamp() < action_time_ts
-                ),
-                None,
-            )
-
-            if pre_action_snapshot:
-                pre_state = pre_action_snapshot["content"]["content"]["current_state"]
-
-                rt_before = pre_state.get("average_response_time", 0)
-                rt_after = current_state.get("average_response_time", 0)
-                # convert to ms
-                rt_before = rt_before * 1000
-                rt_after = rt_after * 1000
-                rt_change = rt_after - rt_before
-
-                # Define simple evaluation criteria
-                evaluation = "NEUTRAL"
-                rt_improvement_threshold = -10.0  # Must decrease by at least 10ms
-                if rt_change < rt_improvement_threshold:
-                    evaluation = "SUCCESSFUL"
-                elif rt_change > abs(rt_improvement_threshold):
-                    evaluation = "FAILED"
-
-                feedback_on_last_action = {
-                    "action_taken": last_action["content"]["action_type"],
-                    "params": last_action["content"].get("params", {}),
-                    "evaluation": evaluation,
-                    "outcome_details": f"Response time changed by {rt_change:+.2f}ms (from {rt_before:.2f} to {rt_after:.2f}).",
-                }
-                self.logger.info(f"Generated feedback for last action: {feedback_on_last_action}")
-
-        # 4. Define Goals and Constraints from prompt configuration
-        fixed_constraints = self.prompt_config.get("fixed_constraints", {})
-        thresholds = self.prompt_config.get("thresholds", {})
+        historical_actions_context = self.build_historical_actions_context(
+            action_history, sorted_snapshots
+        )
 
         system_goals_and_constraints = {
-            "goals": {
-                "target_response_time_ms_weighted": thresholds.get("target_response_time_ms", 742),
-                "target_utilization": thresholds.get("target_server_utilization", 0.7),
-            },
-            "constraints": {
-                "max_servers": fixed_constraints.get("max_servers", 3),
-                "min_servers": fixed_constraints.get("min_servers", 1),
-                "cooldown_period_minutes": thresholds.get("cooldown_period_minutes", 2),
-            },
+            "goals": {"target_utilization": 1, "target_response_time_ms_weighted": 900.0},
+            "constraints": {"max_servers": 3, "min_servers": 1, "cooldown_period_minutes": 2},
         }
 
         return {
             "current_state": current_state,
             "historical_trends": historical_trends,
-            "controller_state": controller_state,
+            "historical_actions": historical_actions_context,
             "system_goals_and_constraints": system_goals_and_constraints,
+        }
+
+    def build_historical_actions_context(
+        self, action_history: List[Dict[str, Any]], sorted_snapshots: List[Dict[str, Any]]
+    ):
+        """Generates summary view of the last 10 actions and feedback for the most recent ones."""
+        if not action_history:
+            return {"summary_last_10": "No actions recorded.", "recent_actions_with_feedback": []}
+
+        # Consider only the last 10 actions
+        last_10_actions = action_history[-10:] if len(action_history) >= 10 else action_history
+
+        # Initialize counters for known action types
+        summary = {"ADD_SERVER": 0, "REMOVE_SERVER": 0, "SET_DIMMER": 0}
+
+        for action_record in last_10_actions:
+            action_type = action_record["content"].get("action_type")
+            if action_type in summary:
+                summary[action_type] += 1
+
+        # Build readable summary text
+        summary_text = (
+            ", ".join([f"{k}: {v} times" for k, v in summary.items() if v > 0])
+            or "No recognized control actions in the last 10."
+        )
+
+        # Generate feedback for the most recent 3 actions (or fewer if less available)
+        recent_actions_with_feedback = []
+        # Take the last 3 actions from the history for detailed feedback display
+        for action_record in action_history[-3:]:
+            # The feedback is already attached to the content dictionary
+            feedback = action_record["content"].get("feedback")
+
+            if feedback:
+                recent_actions_with_feedback.append(feedback)
+            else:
+                # Fallback if feedback is missing for some reason
+                recent_actions_with_feedback.append(
+                    {
+                        "action_taken": action_record["content"].get(
+                            "action_type", "UNKNOWN_ACTION"
+                        ),
+                        "evaluation": "UNKNOWN",
+                        "details": "Feedback not calculated for this past action.",
+                    }
+                )
+
+        return {
+            "summary_last_10": summary_text,
+            "recent_actions_with_feedback": recent_actions_with_feedback,
+            "current_timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def generate_feedback_for_action(
+        self, action_record: Dict[str, Any], sorted_snapshots: List[Dict[str, Any]]
+    ):
+        """
+        Analyzes snapshots approximately 10 seconds before and after an action
+        to evaluate its outcome.
+        """
+        action_content = action_record["content"]
+        action_timestamp = datetime.fromisoformat(action_content["timestamp"])
+
+        # --- REVISED LOGIC (10-second window) ---
+
+        # 1. Define the target timestamps for our comparison window
+        target_pre_ts = action_timestamp - timedelta(seconds=10)
+        target_post_ts = action_timestamp + timedelta(seconds=10)
+
+        pre_action_snapshot = None
+        post_action_snapshot = None
+
+        # 2. Find the snapshot closest to the T-10s mark from all snapshots BEFORE the action
+        # First, filter to only include valid candidates
+        pre_candidates = [
+            s for s in sorted_snapshots if datetime.fromisoformat(s["timestamp"]) < action_timestamp
+        ]
+        if pre_candidates:
+            pre_action_snapshot = min(
+                pre_candidates,
+                key=lambda s: abs(datetime.fromisoformat(s["timestamp"]) - target_pre_ts),
+            )
+
+        # 3. Find the snapshot closest to the T+10s mark from all snapshots ON OR AFTER the action
+        # First, filter to only include valid candidates
+        post_candidates = [
+            s
+            for s in sorted_snapshots
+            if datetime.fromisoformat(s["timestamp"]) >= action_timestamp
+        ]
+        if post_candidates:
+            post_action_snapshot = min(
+                post_candidates,
+                key=lambda s: abs(datetime.fromisoformat(s["timestamp"]) - target_post_ts),
+            )
+
+        # --- END REVISED LOGIC ---
+
+        # 4. If we couldn't find a valid before/after pair, we cannot evaluate the action.
+        if not pre_action_snapshot or not post_action_snapshot:
+            return {
+                "action_taken": action_content["action_type"],
+                "timestamp": action_content["timestamp"],
+                "evaluation": "UNKNOWN",
+                "outcome_details": "Insufficient data to evaluate outcome (could not find snapshots in the T+/-10s window).",
+            }
+
+        # It's possible we found the same snapshot if data is sparse, so check for that.
+        if pre_action_snapshot["timestamp"] == post_action_snapshot["timestamp"]:
+            return {
+                "action_taken": action_content["action_type"],
+                "timestamp": action_content["timestamp"],
+                "evaluation": "UNKNOWN",
+                "outcome_details": "Pre and post action snapshots are identical. Cannot determine outcome.",
+            }
+
+        pre_state = pre_action_snapshot["content"]["content"]["current_state"]
+        post_state = post_action_snapshot["content"]["content"]["current_state"]
+
+        rt_before = pre_state.get("response_time_ms_weighted", 0)
+        rt_after = post_state.get("response_time_ms_weighted", 0)
+        rt_change = rt_after - rt_before
+
+        util_before = pre_state.get("utilization", 0)
+        util_after = post_state.get("utilization", 0)
+        util_change = util_after - util_before
+
+        evaluation = "NEUTRAL"
+        action_type = action_content["action_type"]
+
+        # Log the actual timestamps used for evaluation for better debugging
+        pre_ts_used = pre_action_snapshot["timestamp"]
+        post_ts_used = post_action_snapshot["timestamp"]
+        self.logger.info(
+            f"Evaluating action {action_type} at {action_content['timestamp']}. "
+            f"Comparing snapshot at {pre_ts_used} with {post_ts_used}. "
+            f"RT change: {rt_change:.2f}, Util change: {util_change:.2f}"
+        )
+
+        # This evaluation logic remains the same
+        if action_type == "ADD_SERVER" and rt_change < -50:
+            evaluation = "SUCCESSFUL"
+        elif action_type == "ADD_SERVER" and rt_change > 20:
+            evaluation = "FAILED"
+        elif action_type == "REMOVE_SERVER" and util_change > 0.05 and rt_change < 100:
+            evaluation = "SUCCESSFUL"
+        elif (
+            action_type == "SET_DIMMER"
+            and action_content.get("params", {}).get("value", 1.0) < pre_state.get("dimmer", 1.0)
+            and rt_change < -20
+        ):
+            evaluation = "SUCCESSFUL"
+        elif action_type == "SET_DIMMER" and rt_change > 20:
+            evaluation = "FAILED"
+
+        return {
+            "action_taken": action_type,
+            "params": action_content.get("params", {}),
+            "timestamp": action_content["timestamp"],
+            "evaluation": evaluation,
+            "outcome_details": f"Response time changed by {rt_change:+.2f}ms. Utilization changed by {util_change:+.2f}.",
         }
