@@ -4,3 +4,4 @@
 .vscode
 .kiro
 .coverage
+node_modules/

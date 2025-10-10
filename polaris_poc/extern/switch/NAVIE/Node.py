@@ -10,7 +10,7 @@ from typing import Dict
 import csv
 from get_data import write_csv, write_json
 
-es = Elasticsearch(['localhost'])
+es = Elasticsearch(["http://localhost:9200"])
 app = FastAPI()
 sys_approch = "NAIVE"
 # Enable CORS for all routes
