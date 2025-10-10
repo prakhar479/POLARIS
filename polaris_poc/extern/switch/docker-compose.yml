@@ -1,0 +1,33 @@
+version: '3.7'
+
+services:
+  elasticsearch:
+    image: elasticsearch:7.9.1
+    ports:
+      - '9200:9200'
+    environment:
+      - discovery.type=single-node
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    networks:
+      - elk
+
+
+  kibana:
+    image: kibana:7.9.1
+    container_name: kibana
+    restart: always
+    ports:
+      - '5601:5601'
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - elk
+      
+networks:
+  elk:
+    name: elk
