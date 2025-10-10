@@ -6,7 +6,7 @@ import time
 from Custom_Logger import logger
 
 # Configure Elasticsearch connection
-es = Elasticsearch(['localhost'])  # Replace with your Elasticsearch host
+es = Elasticsearch("http://localhost:9200")  # Replace with your Elasticsearch host
 
 log_file_path = 'logs/Object_detection.log'  # Replace with the actual path to your log file
 
