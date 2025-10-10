@@ -4,6 +4,7 @@
 .vscode
 .kiro
 .coverage
+node_modules/
 
 coverage.json
 htmlcov
