@@ -4,7 +4,7 @@ import time
 import torch
 import psutil
 import pandas as pd
-import imghdr
+import filetype
 import os
 from Custom_Logger import logger
 import base64
@@ -65,7 +65,12 @@ def process_row(im_bytes, total_time):
     global total_processed
     global global_total_time
 
-    image_format = imghdr.what(None, h=im_bytes)
+    kind = filetype.guess(image_path)
+    if kind is not None and kind.mime.startswith('image/'):
+      image_format = kind.extension
+    else:
+      image_format = None
+
     if image_format is None:
         return
     current_model = get_current()

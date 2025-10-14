@@ -9,8 +9,10 @@ from elasticsearch import Elasticsearch
 from typing import Dict
 import csv
 from get_data import write_csv, write_json
+from werkzeug.utils import secure_filename
 
-es = Elasticsearch(['localhost'])
+
+es = Elasticsearch(["http://localhost:9200"])
 app = FastAPI()
 sys_approch = "NAIVE"
 # Enable CORS for all routes
@@ -123,7 +125,7 @@ async def upload_files(zipFile: UploadFile = File(None), csvFile: UploadFile = F
         shutil.move(csv_path, csv_dest_path)
         print("CSV file saved successfully.")
 
-        CSV_FILE =  "unzipped/" + csvFile.filename
+        CSV_FILE = os.path.join("unzipped", secure_filename(csvFile.filename))
         
         print(CSV_FILE , IMAGES_FOLDER)
 
@@ -251,7 +253,7 @@ async def latest_metrics_data():
             return {'message':last_document}
             
         else:
-            return {'message':'No documrnt found'}
+            return {'message':'No document found'}
             print("No documents found in the index")
 
     except Exception as e:
@@ -284,7 +286,7 @@ async def latest_log_data():
             return {'message':last_document}
             
         else:
-            return {'message':'No documrnt found'}
+            return {'message':'No document found'}
             print("No documents found in the index")
 
     except Exception as e:

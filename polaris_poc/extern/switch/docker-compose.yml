@@ -1,12 +1,19 @@
-version: '3.7'
+# version: '3.8'
 
 services:
   elasticsearch:
-    image: elasticsearch:7.9.1
+    image: elasticsearch:8.11.3
+    container_name: elasticsearch
+    restart: always
     ports:
-      - '9200:9200'
+      - "9200:9200"
     environment:
       - discovery.type=single-node
+      # These four lines are the key to disabling all security and TLS/SSL
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD_HASH_ALGORITHM=noop # Explicitly disable password hashing
     ulimits:
       memlock:
         soft: -1
@@ -14,20 +21,20 @@ services:
     networks:
       - elk
 
-
   kibana:
-    image: kibana:7.9.1
+    image: kibana:8.11.3 # IMPORTANT: Must match the Elasticsearch version
     container_name: kibana
     restart: always
     ports:
-      - '5601:5601'
+      - "5601:5601"
     environment:
+      # This explicitly tells Kibana to use HTTP, not HTTPS
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
       - elasticsearch
     networks:
       - elk
-      
+
 networks:
   elk:
     name: elk

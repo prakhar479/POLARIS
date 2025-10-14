@@ -3,7 +3,7 @@ from elasticsearch import Elasticsearch
 import time
 from Custom_Logger import logger
 # Elasticsearch connection settings
-es = Elasticsearch([{'host': 'localhost', 'port': 9200}])
+es =  Elasticsearch("http://localhost:9200")
 
 # Path to your CSV file
 csv_file_path = 'metrics.csv'
