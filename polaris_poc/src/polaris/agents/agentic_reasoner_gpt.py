@@ -1,9 +1,10 @@
 """
-Agentic LLM Reasoner Implementation with Google Gemini Flash 2.5
+Agentic LLM Reasoner Implementation
 
 An autonomous agentic reasoner that can dynamically decide which tools to use
 (Knowledge Base queries, Digital Twin interactions) and make adaptation decisions
-based on its analysis. Uses Google Gemini Flash 2.5 as the reasoning engine.
+based on its analysis. The LLM acts as the agent's reasoning engine and decides
+when and how to use available tools.
 """
 
 import json
@@ -13,10 +14,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Union, Callable
 import logging
 from datetime import datetime, timezone
+import httpx
 import yaml
-
-from google import genai
-from google.genai import types
 
 from .reasoner_core import (
     ReasoningInterface,
@@ -62,8 +61,10 @@ class KnowledgeBaseTool(AgenticTool):
                     "enum": [
                         "structured",
                         "natural_language",
+                        "recent_observations",
+                        "raw_telemetry",
                     ],
-                    "description": "Type of query to perform (use 'structured' with data_types filter for specific data)",
+                    "description": "Type of query to perform",
                 },
                 "data_types": {
                     "type": "array",
@@ -99,6 +100,10 @@ class KnowledgeBaseTool(AgenticTool):
                 results = await self.kb_query.query_natural_language(
                     query_text=query_text, limit=limit
                 )
+            elif query_type == "recent_observations":
+                results = await self.kb_query.query_recent_observations(limit=limit)
+            elif query_type == "raw_telemetry":
+                results = await self.kb_query.query_raw_telemetry(limit=limit)
             else:
                 return {"success": False, "error": f"Unknown query type: {query_type}"}
 
@@ -174,29 +179,9 @@ class DigitalTwinTool(AgenticTool):
                 )
                 response = await self.dt_interface.query(query)
             elif operation == "simulate":
-                # Format actions properly - convert strings to action dictionaries
-                raw_actions = kwargs.get("actions", [])
-                formatted_actions = []
-
-                for action in raw_actions:
-                    if isinstance(action, str):
-                        # Convert string action to proper action dictionary
-                        action_dict = {
-                            "action_id": str(uuid.uuid4()),
-                            "action_type": action,
-                            "target": "system",
-                            "params": {},
-                        }
-                        formatted_actions.append(action_dict)
-                    elif isinstance(action, dict):
-                        # Already a dictionary, use as-is
-                        formatted_actions.append(action)
-                    else:
-                        self.logger.warning(f"Unknown action format: {action}")
-
                 simulation = DTSimulation(
                     simulation_type=kwargs.get("simulation_type", "forecast"),
-                    actions=formatted_actions,
+                    actions=kwargs.get("actions", []),
                     horizon_minutes=kwargs.get("horizon_minutes", 60),
                     parameters=kwargs.get("parameters", {}),
                 )
@@ -237,7 +222,7 @@ class DigitalTwinTool(AgenticTool):
 class AgenticLLMReasoner(ReasoningInterface):
     """
     Agentic LLM reasoner that can dynamically decide which tools to use
-    and make autonomous adaptation decisions using Google Gemini Flash 2.5.
+    and make autonomous adaptation decisions.
     """
 
     def __init__(
@@ -246,9 +231,11 @@ class AgenticLLMReasoner(ReasoningInterface):
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
-        model: str = "gemini-2.0-flash",
-        max_tokens: int = 8192,
+        model: str = "gpt-oss:20b",
+        max_tokens: int = 1024,
         temperature: float = 0.3,
+        timeout: float = 600.0,
+        base_url: str = "http://10.10.16.46:11435",
         max_tool_calls: int = 5,
         logger: Optional[logging.Logger] = None,
     ):
@@ -257,12 +244,11 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.timeout = timeout
+        self.base_url = base_url
         self.max_tool_calls = max_tool_calls
         self.max_retries = 3
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
-
-        # Initialize Gemini client
-        self.client = genai.Client(api_key="AIzaSyBJ7xvmAkdrd4LFD4IWYBNMb8v4CD-lCuE")
 
         # Initialize tools
         self.tools = {}
@@ -285,9 +271,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         # System prompt for the agentic reasoner
         self.system_prompt = self._build_system_prompt()
 
-        self.logger.info(
-            f"Initialized AgenticLLMReasoner with Gemini Flash 2.5 and {len(self.tools)} tools available"
-        )
+        self.logger.info(f"Initialized AgenticLLMReasoner with {len(self.tools)} tools available")
 
     def _build_system_prompt(self) -> str:
         """Build the system prompt for the agentic reasoner."""
@@ -310,29 +294,6 @@ Your role is to:
 
 {tools_description}
 
-KNOWLEDGE BASE QUERY GUIDELINES:
-When using query_knowledge_base tool, follow these patterns:
-
-1. **For recent observations/aggregated telemetry**:
-   - query_type: "structured"
-   - data_types: ["observation"]
-   - Optional filters for specific metrics
-
-2. **For raw telemetry events**:
-   - query_type: "structured" 
-   - data_types: ["raw_telemetry_event"]
-   - Use filters to specify metric_name if needed
-
-3. **For adaptation decisions history**:
-   - query_type: "structured"
-   - data_types: ["adaptation_decision"]
-
-4. **For natural language search**:
-   - query_type: "natural_language"
-   - query_text: "your search terms"
-
-Valid data_types: ["raw_telemetry_event", "adaptation_decision", "system_goal", "learned_pattern", "observation", "system_info", "generic_fact"]
-
 IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
 - If you need additional information to make a good decision, you MUST use the available tools
 - Always try to gather more context before making decisions when tools are available
@@ -343,10 +304,8 @@ Decision Making Process:
 1. First, analyze the input data to understand the current situation
 2. Determine what additional information you need (historical data, simulations, diagnostics)
 3. Use tools to gather that information (this step is CRITICAL)
-4. Wait for tool results and analyze them
-5. Synthesize all information to make an adaptation decision
-6. Generate the appropriate control action
-7. You cannot make server decisions too frequently
+4. Synthesize all information to make an adaptation decision
+5. Generate the appropriate control action
 
 Control Actions Available:
 - ADD_SERVER: Add a server to handle increased load
@@ -360,38 +319,24 @@ System Constraints:
 - Server count should be between 1-10
 - Dimmer value should be between 0.0-1.0
 
-CRITICAL WORKFLOW RULES:
-1. **NEVER provide both tool calls AND action in the same response**
-2. **If you need tools, ONLY provide tool calls - NO action**
-3. **Wait for tool results, then provide your final action**
-4. **Tool calls are processed iteratively - you can make up to 5 tool calls total**
-5. **Each tool call response will be provided back to you before you can make more calls**
-
 MANDATORY OUTPUT FORMAT:
-
-**PHASE 1 - INFORMATION GATHERING (if tools needed):**
-Your response should contain:
+Your response MUST follow this exact structure:
 
 1. **Analysis**: Brief analysis of the current situation
 
 2. **Tool Usage Decision**: 
+   - If tools are available and you need more information, you MUST use them
    - State what information you need and which tools you will use
-   - Be specific about what you hope to learn
 
-3. **Tool Calls**: Use this EXACT format for each tool call:
+3. **Tool Calls** (if needed): Use this EXACT format for each tool call:
    ```
    TOOL_CALL: tool_name
    PARAMETERS: {{"param1": "value1", "param2": "value2"}}
    ```
 
-**PHASE 2 - FINAL DECISION (after tool results received):**
-Your response should contain:
+4. **Final Decision**: Your decision and reasoning after using tools
 
-1. **Analysis**: Analysis of tool results and current situation
-
-2. **Final Decision**: Your decision and reasoning based on all available information
-
-3. **Action**: The control action in JSON format:
+5. **Action**: The control action in JSON format:
    ```json
    {{
      "action_type": "ACTION_TYPE",
@@ -405,25 +350,20 @@ Your response should contain:
 
 EXAMPLES:
 
-**Example 1 - PHASE 1 (Information Gathering):**
+**Example 1 - SET_DIMMER (High utilization, dimmer reduction needed):**
 ```
 **Analysis**: System utilization is at 95% with response time at 850ms, approaching the 1000ms threshold.
 
-**Tool Usage Decision**: I need historical patterns and system diagnostics to make an informed decision about whether to reduce the dimmer.
+**Tool Usage Decision**: I need historical patterns and current system diagnostics to make an informed decision.
 
 **Tool Calls**:
 TOOL_CALL: query_knowledge_base
-PARAMETERS: {{"query_type": "structured", "data_types": ["observation"], "limit": 5}}
+PARAMETERS: {{"query_type": "recent_observations", "limit": 5}}
 
 TOOL_CALL: query_digital_twin
-PARAMETERS: {{"operation": "simulate", "simulation_type": "dimmer_reduction", "actions": [{{"action_type": "SET_DIMMER", "params": {{"value": 0.9}}}}], "horizon_minutes": 30}}
-```
+PARAMETERS: {{"operation": "simulate", "simulation_type": "dimmer_reduction", "actions": ["reduce_dimmer_to_0.7"], "horizon_minutes": 30}}
 
-**Example 1 - PHASE 2 (After receiving tool results):**
-```
-**Analysis**: Tool results show consistent high utilization trend in recent observations. Simulation indicates reducing dimmer to 0.7 will bring response time to 650ms while maintaining acceptable service levels.
-
-**Final Decision**: Based on simulation results showing dimmer reduction will effectively address the performance issue without significant service impact.
+**Final Decision**: Based on simulation results showing dimmer reduction will bring response time to 650ms while maintaining acceptable service levels.
 
 **Action**:
 {{
@@ -436,28 +376,59 @@ PARAMETERS: {{"operation": "simulate", "simulation_type": "dimmer_reduction", "a
 }}
 ```
 
-**Example 2 - Direct Action (when sufficient information available):**
+**Example 2 - ADD_SERVER (System overloaded, scaling needed):**
 ```
-**Analysis**: System has 1 server with 99% utilization and response time of 1200ms, clearly exceeding the 1000ms threshold.
+**Analysis**: Current response time is 1200ms, exceeding the 1000ms threshold. System has 2 active servers with 100% utilization.
 
-**Final Decision**: This is a clear capacity bottleneck requiring immediate scaling. No additional tools needed as the situation is unambiguous.
+**Tool Usage Decision**: Need to check system diagnostics and simulate server addition impact.
+
+**Tool Calls**:
+TOOL_CALL: query_digital_twin
+PARAMETERS: {{"operation": "diagnose", "anomaly_description": "Response time exceeding threshold at 1200ms"}}
+
+TOOL_CALL: query_digital_twin  
+PARAMETERS: {{"operation": "simulate", "simulation_type": "capacity_scaling", "actions": ["add_server"], "horizon_minutes": 60}}
+
+**Final Decision**: Diagnostics confirm capacity bottleneck. Simulation shows adding a server will reduce response time to 750ms.
 
 **Action**:
 {{
   "action_type": "ADD_SERVER",
   "source": "agentic_reasoner",
-  "action_id": "emergency-scale-001", 
+  "action_id": "scale-out-001", 
   "params": {{"server_type": "compute", "count": 1}},
   "priority": "high",
-  "reasoning": "Emergency scaling due to severe capacity bottleneck with response time far exceeding threshold"
+  "reasoning": "Adding server to address capacity bottleneck and bring response time below 1000ms threshold"
 }}
 ```
 
-CRITICAL REMINDERS:
-1. **NEVER provide tool calls AND action in the same response**
-2. **If you use tools, wait for results before providing action**
-3. **Tool results will be provided back to you in subsequent messages**
-4. **You can make multiple rounds of tool calls (up to 5 total) before final action**
+**Example 3 - REMOVE_SERVER (System underutilized, cost optimization):**
+```
+**Analysis**: System is running 3 servers with only 45% utilization and response time stable at 200ms for the past hour.
+
+**Tool Usage Decision**: Need to verify system stability and simulate server removal impact.
+
+**Tool Calls**:
+TOOL_CALL: query_knowledge_base
+PARAMETERS: {{"query_type": "structured", "data_types": ["utilization", "response_time"], "filters": {{"time_range": "last_2_hours"}}, "limit": 20}}
+
+TOOL_CALL: query_digital_twin
+PARAMETERS: {{"operation": "simulate", "simulation_type": "capacity_reduction", "actions": ["remove_server"], "horizon_minutes": 120}}
+
+**Final Decision**: Historical data shows stable low utilization. Simulation indicates removing 1 server will maintain response time under 600ms.
+
+**Action**:
+{{
+  "action_type": "REMOVE_SERVER", 
+  "source": "agentic_reasoner",
+  "action_id": "scale-down-001",
+  "params": {{"server_type": "compute", "count": 1}},
+  "priority": "low",
+  "reasoning": "Removing excess server capacity to optimize costs while maintaining performance well within acceptable limits"
+}}
+```
+
+CRITICAL REMINDER: If tools are available, you should almost always use them to gather more information before making a decision. Only skip tool usage if you have sufficient information for a clear decision.
 """
 
     async def reason(
@@ -465,7 +436,7 @@ CRITICAL REMINDERS:
     ) -> ReasoningResult:
         """Execute agentic reasoning with dynamic tool usage."""
         start_time = time.time()
-        reasoning_steps = ["Starting agentic LLM reasoning with Gemini Flash 2.5"]
+        reasoning_steps = ["Starting agentic LLM reasoning"]
         tool_calls_made = 0
 
         try:
@@ -473,18 +444,10 @@ CRITICAL REMINDERS:
             user_prompt = self._build_initial_prompt(context)
             reasoning_steps.append("Built initial analysis prompt")
 
-            # Start the reasoning loop with chat history
-            chat_history = [
-                types.Content(role="user", parts=[types.Part(text=self.system_prompt)]),
-                types.Content(
-                    role="model",
-                    parts=[
-                        types.Part(
-                            text="Understood. I will analyze system contexts and make adaptation decisions following the structured format with tool usage when needed."
-                        )
-                    ],
-                ),
-                types.Content(role="user", parts=[types.Part(text=user_prompt)]),
+            # Start the reasoning loop
+            conversation_history = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
             ]
 
             final_action = None
@@ -493,26 +456,24 @@ CRITICAL REMINDERS:
                 reasoning_steps.append(f"Reasoning iteration {iteration + 1}")
 
                 # Get LLM response
-                llm_response = await self._call_gemini(chat_history)
-                reasoning_steps.append(f"Received Gemini response (iteration {iteration + 1})")
-                self.logger.debug(f"Gemini Response (iteration {iteration + 1}): {llm_response}")
-
-                # Add assistant response to history
-                chat_history.append(
-                    types.Content(role="model", parts=[types.Part(text=llm_response)])
-                )
+                llm_response = await self._call_llm_with_history(conversation_history)
+                reasoning_steps.append(f"Received LLM response (iteration {iteration + 1})")
+                self.logger.debug(f"LLM Response (iteration {iteration + 1}): {llm_response}")
 
                 # Parse response for tool calls or final decision
                 tool_calls, action = self._parse_llm_response(llm_response)
                 self.logger.debug(f"Parsed tool calls: {tool_calls}")
                 self.logger.debug(f"Parsed action: {action}")
 
-                # Check if we should execute tool calls first
-                self.logger.info(
-                    f"Tool calls made: {tool_calls_made}, Max tool calls: {self.max_tool_calls}"
-                )
+                if action:
+                    # Final decision reached
+                    final_action = action
+                    reasoning_steps.append("Final decision reached")
+                    self.logger.info(f"Final action determined: {action}")
+                    break
+
                 if tool_calls and tool_calls_made < self.max_tool_calls:
-                    # Execute tool calls (prioritize over action)
+                    # Execute tool calls
                     tool_results = []
                     for tool_call in tool_calls:
                         tool_name = tool_call.get("tool_name")
@@ -527,7 +488,6 @@ CRITICAL REMINDERS:
                             tool_results.append(
                                 {"tool_name": tool_name, "parameters": parameters, "result": result}
                             )
-                            self.logger.debug(f"Tool result: {result}")
                             tool_calls_made += 1
                         else:
                             reasoning_steps.append(f"Unknown tool requested: {tool_name}")
@@ -535,60 +495,52 @@ CRITICAL REMINDERS:
 
                     # Add tool results to conversation
                     if tool_results:
+                        conversation_history.append({"role": "assistant", "content": llm_response})
                         tool_results_text = "Tool Results:\n" + json.dumps(tool_results, indent=2)
-                        chat_history.append(
-                            types.Content(role="user", parts=[types.Part(text=tool_results_text)])
-                        )
+                        conversation_history.append({"role": "user", "content": tool_results_text})
                         reasoning_steps.append(
                             f"Added {len(tool_results)} tool results to conversation"
                         )
-                        self.logger.info(
-                            f"Feeding tool results back to LLM: {len(tool_results)} results"
-                        )
-                        # Continue to next iteration to let LLM process the tool results
-                        continue
                     else:
                         # No valid tool calls were executed
                         reasoning_steps.append("No valid tool calls executed")
                         self.logger.warning("Tool calls were parsed but none were valid")
-
-                if action:
-                    # Final decision reached (only if no tool calls were executed)
-                    final_action = action
-                    reasoning_steps.append("Final decision reached")
-                    self.logger.info(f"Final action determined: {action}")
-                    break
-
-                # No tool calls and no action - force a decision
-                if not tool_calls and not action:
-                    chat_history.append(
-                        types.Content(
-                            role="user",
-                            parts=[
-                                types.Part(
-                                    text="Please provide your final decision and action in the required JSON format."
-                                )
-                            ],
+                        break
+                        reasoning_steps.append(
+                            f"Added {len(tool_results)} tool results to conversation"
                         )
-                    )
-                    final_response = await self._call_gemini(chat_history)
-                    _, final_action = self._parse_llm_response(final_response)
-                    reasoning_steps.append("Forced final decision")
+                else:
+                    # No more tool calls allowed or no tool calls requested
+                    if not action:
+                        # Force a decision
+                        conversation_history.append({"role": "assistant", "content": llm_response})
+                        conversation_history.append(
+                            {
+                                "role": "user",
+                                "content": "Please provide your final decision and action in the required JSON format.",
+                            }
+                        )
+                        final_response = await self._call_llm_with_history(conversation_history)
+                        _, final_action = self._parse_llm_response(final_response)
+                        reasoning_steps.append("Forced final decision")
                     break
 
             # Ensure we have a valid action
-            # Normalize or fallback to NO_ACTION
-            if final_action:
-                final_action = self._normalize_action(final_action)
-            else:
-                final_action = self._normalize_action(
-                    {
-                        "action_type": "NO_ACTION",
-                        "priority": "low",
-                        "reasoning": "Unable to determine appropriate action",
-                    }
-                )
+            if not final_action:
+                final_action = {
+                    "action_type": "NO_ACTION",
+                    "source": "agentic_reasoner",
+                    "action_id": str(uuid.uuid4()),
+                    "params": {},
+                    "priority": "low",
+                    "reasoning": "Unable to determine appropriate action",
+                }
                 reasoning_steps.append("Fallback to NO_ACTION")
+
+            # Ensure action has required fields
+            final_action.setdefault("action_id", str(uuid.uuid4()))
+            final_action.setdefault("source", "agentic_reasoner")
+            final_action.setdefault("priority", "medium")
 
             execution_time = time.time() - start_time
 
@@ -651,54 +603,54 @@ Please analyze this situation and determine what actions, if any, should be take
 Remember to follow the structured output format with tool calls if you need more information!
 """
 
-    def _normalize_action(self, raw_action: Dict[str, Any]) -> Dict[str, Any]:
-        """Ensure the action matches the expected format."""
-        normalized = {
-            "action_type": raw_action.get("action_type", "NO_ACTION").upper(),
-            "source": "agentic_reasoner",
-            "action_id": raw_action.get("action_id", str(uuid.uuid4())),
-            "params": raw_action.get("params", {}),
-            "priority": raw_action.get("priority", "medium"),
-            "reasoning": raw_action.get("reasoning", "No explicit reasoning provided by model"),
+    async def _call_llm_with_history(self, conversation_history: List[Dict[str, str]]) -> str:
+        """Call the LLM with conversation history."""
+        # Convert conversation to a single prompt for simple LLM APIs
+        prompt_parts = []
+        for message in conversation_history:
+            role = message["role"]
+            content = message["content"]
+            if role == "system":
+                prompt_parts.append(f"System: {content}")
+            elif role == "user":
+                prompt_parts.append(f"User: {content}")
+            elif role == "assistant":
+                prompt_parts.append(f"Assistant: {content}")
+
+        full_prompt = "\n\n".join(prompt_parts)
+
+        endpoint_url = f"{self.base_url}/api/generate"
+        payload = {
+            "model": self.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
         }
 
-        # Extra cleanup: remove stray quotes, handle nested JSON strings
-        if isinstance(normalized["params"], str):
-            try:
-                normalized["params"] = json.loads(normalized["params"])
-            except json.JSONDecodeError:
-                normalized["params"] = {}
+        headers = {"Content-Type": "application/json"}
 
-        return normalized
-
-    async def _call_gemini(self, chat_history: List[types.Content]) -> str:
-        """Call Gemini API with chat history."""
         for attempt in range(self.max_retries):
             try:
-                # Generate content with the chat history
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=chat_history,
-                    config=types.GenerateContentConfig(
-                        temperature=self.temperature,
-                        max_output_tokens=self.max_tokens,
-                    ),
-                )
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(endpoint_url, json=payload, headers=headers)
+                    response.raise_for_status()
 
-                # Extract text from response
-                if response and response.text:
-                    return response.text.strip()
-                else:
-                    raise ValueError("Empty response from Gemini")
+                    response_data = response.json()
+                    response_text = response_data.get("response", "").strip()
+
+                    if not response_text:
+                        raise ValueError("Empty response from LLM")
+
+                    return response_text
 
             except Exception as e:
-                self.logger.warning(f"Gemini call attempt {attempt + 1} failed: {e}")
+                self.logger.warning(f"LLM call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
                     raise
                 await asyncio.sleep(2**attempt)  # Exponential backoff
 
-        raise Exception("Gemini call failed after all retries")
+        raise Exception("LLM call failed after all retries")
 
     def _parse_llm_response(
         self, response: str
@@ -812,7 +764,7 @@ def create_agentic_reasoner_agent(
     logger: Optional[logging.Logger] = None,
 ) -> "ReasonerAgent":
     """
-    Create a reasoner agent with agentic LLM reasoning implementation using Gemini Flash 2.5.
+    Create a reasoner agent with agentic LLM reasoning implementation.
     """
     from .reasoner_agent import ReasonerAgent, ReasoningType
 

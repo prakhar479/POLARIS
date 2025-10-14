@@ -35,6 +35,9 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         self._data_type_index: Dict[KBDataType, Set[str]] = defaultdict(set)
         self._tag_index: Dict[str, Set[str]] = defaultdict(set)
         self._keyword_index: Dict[str, Set[str]] = defaultdict(set)
+        # Additional indexes for common fields
+        self._source_index: Dict[str, Set[str]] = defaultdict(set)
+        self._metric_name_index: Dict[str, Set[str]] = defaultdict(set)
 
         # Internal buffer for raw telemetry events before aggregation
         self._telemetry_buffer_size = telemetry_buffer_size
@@ -63,6 +66,12 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         for tag in entry.tags:
             self._tag_index[tag.lower()].add(entry_id)
 
+        # Index source and metric_name for faster lookups
+        if entry.source:
+            self._source_index[entry.source.lower()].add(entry_id)
+        if entry.metric_name:
+            self._metric_name_index[entry.metric_name.lower()].add(entry_id)
+
         # Index keywords from summary and content values
         keywords = self._extract_keywords(entry.summary or "")
         content_text = " ".join(
@@ -84,6 +93,17 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
             tag_lower = tag.lower()
             if entry_id in self._tag_index.get(tag_lower, set()):
                 self._tag_index[tag_lower].remove(entry_id)
+
+        # Remove from source and metric_name indexes
+        if entry.source:
+            source_key = entry.source.lower()
+            if entry_id in self._source_index.get(source_key, set()):
+                self._source_index[source_key].remove(entry_id)
+
+        if entry.metric_name:
+            metric_key = entry.metric_name.lower()
+            if entry_id in self._metric_name_index.get(metric_key, set()):
+                self._metric_name_index[metric_key].remove(entry_id)
 
         keywords_to_check = [k for k, v in self._keyword_index.items() if entry_id in v]
         for keyword in keywords_to_check:
@@ -283,13 +303,46 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
 
     def _execute_structured_query(self, query: KBQuery) -> List[KBEntry]:
         candidate_ids = set(self._entries.keys())
+
+        # Filter by data types using index
         if query.data_types:
             type_ids = set()
             for dt in query.data_types:
                 type_ids.update(self._data_type_index.get(dt, set()))
             candidate_ids &= type_ids
+
+        # If no filters, return all candidates
         if not query.filters:
             return [self._entries[eid] for eid in candidate_ids]
+
+        # Use indexes for efficient filtering of common exact-match fields
+        indexable_filters = ["tags", "source", "metric_name"]
+
+        for filter_key in indexable_filters:
+            if filter_key in query.filters:
+                filter_value = query.filters[filter_key]
+                index_ids = set()
+
+                if filter_key == "tags":
+                    if isinstance(filter_value, str):
+                        index_ids.update(self._tag_index.get(filter_value.lower(), set()))
+                    elif isinstance(filter_value, list):
+                        # For list of tags, get intersection (all tags must match)
+                        for i, tag in enumerate(filter_value):
+                            tag_ids = self._tag_index.get(tag.lower(), set())
+                            if i == 0:
+                                index_ids = tag_ids.copy()
+                            else:
+                                index_ids &= tag_ids
+                elif filter_key == "source" and isinstance(filter_value, str):
+                    index_ids.update(self._source_index.get(filter_value.lower(), set()))
+                elif filter_key == "metric_name" and isinstance(filter_value, str):
+                    index_ids.update(self._metric_name_index.get(filter_value.lower(), set()))
+
+                if index_ids:  # Only apply if we found matching IDs
+                    candidate_ids &= index_ids
+
+        # Apply remaining filters that couldn't use indexes
         results = []
         for entry_id in candidate_ids:
             entry = self._entries[entry_id]
@@ -298,19 +351,194 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         return results
 
     def _matches_filters(self, entry: KBEntry, filters: Dict[str, Any]) -> bool:
+        """Enhanced filter matching with support for various operations and data types."""
         for key, value in filters.items():
-            if key == "tags":
-                if not isinstance(value, list):
+            if not self._matches_single_filter(entry, key, value):
+                return False
+        return True
+
+    def _matches_single_filter(self, entry: KBEntry, key: str, value: Any) -> bool:
+        """Matches a single filter condition against an entry."""
+        # Handle special keys
+        if key == "tags":
+            return self._match_tags_filter(entry, value)
+        elif key == "entry_id":
+            return self._match_string_filter(entry.entry_id, value)
+        elif key == "summary":
+            return self._match_string_filter(entry.summary or "", value)
+        elif key == "metric_name":
+            return self._match_string_filter(entry.metric_name or "", value)
+        elif key == "source":
+            return self._match_string_filter(entry.source or "", value)
+        elif key == "metric_value":
+            return self._match_numeric_filter(entry.metric_value, value)
+        elif key == "timestamp":
+            return self._match_timestamp_filter(entry.timestamp, value)
+        elif key in entry.content:
+            return self._match_content_filter(entry.content[key], value)
+        elif key in entry.metadata:
+            return self._match_content_filter(entry.metadata[key], value)
+        elif "." in key:
+            # Handle nested keys with dot notation (e.g., "content.unit", "metadata.version")
+            return self._match_nested_key(entry, key, value)
+        else:
+            # Key not found in entry
+            return False
+
+    def _match_nested_key(self, entry: KBEntry, nested_key: str, value: Any) -> bool:
+        """Handle nested key access with dot notation."""
+        parts = nested_key.split(".", 1)
+        if len(parts) != 2:
+            return False
+
+        root_key, sub_key = parts
+
+        if root_key == "content" and sub_key in entry.content:
+            return self._match_content_filter(entry.content[sub_key], value)
+        elif root_key == "metadata" and sub_key in entry.metadata:
+            return self._match_content_filter(entry.metadata[sub_key], value)
+
+        return False
+
+    def _match_tags_filter(self, entry: KBEntry, value: Any) -> bool:
+        """Match tags with support for single tag, list of tags, or tag operations."""
+        if isinstance(value, str):
+            # Single tag - check if it exists (case insensitive)
+            entry_tags = {t.lower() for t in entry.tags}
+            return value.lower() in entry_tags
+        elif isinstance(value, list):
+            # List of tags - all must be present (AND operation)
+            entry_tags = {t.lower() for t in entry.tags}
+            filter_tags = {t.lower() for t in value}
+            return filter_tags.issubset(entry_tags)
+        elif isinstance(value, dict):
+            # Advanced tag operations
+            return self._match_advanced_filter(entry.tags, value)
+        return False
+
+    def _match_string_filter(self, entry_value: str, filter_value: Any) -> bool:
+        """Match string values with support for exact match, contains, regex, etc."""
+        if isinstance(filter_value, str):
+            # Exact match (case insensitive)
+            return entry_value.lower() == filter_value.lower()
+        elif isinstance(filter_value, dict):
+            # Advanced string operations
+            return self._match_advanced_filter(entry_value, filter_value)
+        return False
+
+    def _match_numeric_filter(self, entry_value: Any, filter_value: Any) -> bool:
+        """Match numeric values with support for exact match, ranges, etc."""
+        if entry_value is None:
+            return filter_value is None
+
+        if isinstance(filter_value, (int, float)):
+            # Exact match
+            return entry_value == filter_value
+        elif isinstance(filter_value, dict):
+            # Advanced numeric operations
+            return self._match_advanced_filter(entry_value, filter_value)
+        return False
+
+    def _match_timestamp_filter(self, entry_value: str, filter_value: Any) -> bool:
+        """Match timestamp values with support for exact match, ranges, etc."""
+        if isinstance(filter_value, str):
+            # Exact match or date prefix match
+            return entry_value.startswith(filter_value)
+        elif isinstance(filter_value, dict):
+            # Advanced timestamp operations
+            return self._match_advanced_filter(entry_value, filter_value)
+        return False
+
+    def _match_content_filter(self, entry_value: Any, filter_value: Any) -> bool:
+        """Match content values with type-aware comparison."""
+        if isinstance(filter_value, dict):
+            # Advanced operations
+            return self._match_advanced_filter(entry_value, filter_value)
+
+        # Direct comparison for simple types
+        if type(entry_value) == type(filter_value):
+            if isinstance(entry_value, str):
+                return entry_value.lower() == filter_value.lower()
+            else:
+                return entry_value == filter_value
+
+        # Try string conversion for mixed types
+        try:
+            return str(entry_value).lower() == str(filter_value).lower()
+        except:
+            return False
+
+    def _match_advanced_filter(self, entry_value: Any, filter_ops: Dict[str, Any]) -> bool:
+        """Handle advanced filter operations like $gt, $lt, $contains, etc."""
+        for op, op_value in filter_ops.items():
+            if op == "$eq":
+                if entry_value != op_value:
                     return False
-                entry_tags = {t.lower() for t in entry.tags}
-                filter_tags = {t.lower() for t in value}
-                if not filter_tags.issubset(entry_tags):
+            elif op == "$ne":
+                if entry_value == op_value:
                     return False
-            elif key in entry.content:
-                if entry.content[key] != value:
+            elif op == "$gt":
+                if not (isinstance(entry_value, (int, float)) and entry_value > op_value):
+                    return False
+            elif op == "$gte":
+                if not (isinstance(entry_value, (int, float)) and entry_value >= op_value):
+                    return False
+            elif op == "$lt":
+                if not (isinstance(entry_value, (int, float)) and entry_value < op_value):
+                    return False
+            elif op == "$lte":
+                if not (isinstance(entry_value, (int, float)) and entry_value <= op_value):
+                    return False
+            elif op == "$in":
+                if isinstance(op_value, list) and entry_value not in op_value:
+                    return False
+            elif op == "$nin":
+                if isinstance(op_value, list) and entry_value in op_value:
+                    return False
+            elif op == "$contains":
+                if not isinstance(entry_value, str) or op_value.lower() not in entry_value.lower():
+                    return False
+            elif op == "$startswith":
+                if not isinstance(entry_value, str) or not entry_value.lower().startswith(
+                    op_value.lower()
+                ):
+                    return False
+            elif op == "$endswith":
+                if not isinstance(entry_value, str) or not entry_value.lower().endswith(
+                    op_value.lower()
+                ):
+                    return False
+            elif op == "$regex":
+                import re
+
+                if not isinstance(entry_value, str):
+                    return False
+                try:
+                    if not re.search(op_value, entry_value, re.IGNORECASE):
+                        return False
+                except re.error:
+                    return False
+            elif op == "$exists":
+                exists = entry_value is not None
+                if exists != bool(op_value):
+                    return False
+            elif op == "$any":
+                # For lists/arrays - check if any element matches
+                if isinstance(entry_value, list):
+                    if not any(item == op_value for item in entry_value):
+                        return False
+                else:
+                    return False
+            elif op == "$all":
+                # For lists/arrays - check if all elements in op_value are present
+                if isinstance(entry_value, list) and isinstance(op_value, list):
+                    if not all(item in entry_value for item in op_value):
+                        return False
+                else:
                     return False
             else:
-                return False
+                # Unknown operation - ignore or could log warning
+                continue
         return True
 
     def _execute_natural_language_query(self, query: KBQuery) -> List[KBEntry]:
@@ -340,6 +568,8 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
         self._data_type_index.clear()
         self._tag_index.clear()
         self._keyword_index.clear()
+        self._source_index.clear()
+        self._metric_name_index.clear()
         self._raw_telemetry_buffers.clear()
         self.logger.info("Knowledge Base and all telemetry buffers cleared.")
 
@@ -351,6 +581,8 @@ class InMemoryKnowledgeBase(BaseKnowledgeBase):
             "data_type_counts": {k.value: len(v) for k, v in self._data_type_index.items() if v},
             "unique_tags": len(self._tag_index),
             "indexed_keywords": len(self._keyword_index),
+            "unique_sources": len(self._source_index),
+            "unique_metric_names": len(self._metric_name_index),
             "active_telemetry_buffers": len(self._raw_telemetry_buffers),
             "total_buffered_events": total_buffered_events,
         }
