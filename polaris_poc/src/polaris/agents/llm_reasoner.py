@@ -9,14 +9,15 @@ Includes convenient prompt modification capabilities and advanced historical con
 import json
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
+import os
 import logging
 from google import genai
-import google
+from google.genai import types
 from pathlib import Path
+import google
 import random
 import uuid
-import httpx
 from collections import deque
 from datetime import datetime, timezone, timedelta
 
@@ -30,6 +31,7 @@ from .reasoner_core import (
 
 from .reasoner_agent import KnowledgeQueryInterface
 from .reasoner_agent import ReasonerAgent
+from polaris.common.nats_client import NATSClient
 from google.genai import types
 
 
@@ -41,12 +43,13 @@ class LLMReasoningImplementation(ReasoningInterface):
         api_key: str,
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
-        model: str = "gpt-oss:20b",  # Default model for your local API
+        model: str = "gemini-2.0-flash",  # Default model for your local API
         max_tokens: int = 2048,
         temperature: float = 0.2,
         timeout: float = 600.0,
         base_url: str = "http://10.10.16.46:11435",  # Make the URL configurable
         logger: Optional[logging.Logger] = None,
+        nats_url = ""
     ):
 
         self.api_key = api_key
@@ -63,10 +66,16 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.logger.info(
             f"Initializing LLMReasoningImplementation with model {model} at endpoint {self.base_url}"
         )
+        self.nats_client = NATSClient(nats_url=nats_url, logger=logger, name='LLM_REASONER')
+
+        
+        self.nats_client.subscribe("polaris.execution.fast",self.update_log)
 
         # In-memory storage for the action history using a deque
         self.action_history: deque = deque(maxlen=20) # Store the last 20 actions
-
+        self.reactive_logs: deque = deque(maxlen=3) # Store the last 20 logs
+        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        
         self.kb_query = kb_query_interface
         self.context_builder = ContextBuilder(self.logger)
         
@@ -74,6 +83,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.last_inference_snapshots: Optional[List[Dict[str, Any]]] = None
         self.last_inference_action: Optional[Dict[str, Any]] = None
         self.last_inference_timestamp: Optional[str] = None
+        self.current_servers = -1
 
         # ======================================================================
         # == NEW PROMPT TEMPLATE WITH HISTORICAL CONTEXT AWARENESS            ==
@@ -216,8 +226,9 @@ After the thinking block, provide ONLY the final **JSON object** in a `<json_out
             # === Use filtered snapshots for current reasoning ===
             current_snapshots = filtered_snapshots or snapshots
             action_history_list = list(self.action_history)
+            reactive_logs_list = list(self.reactive_logs)
             enriched_context_data = self.context_builder.build_context_from_kb_results(
-                current_snapshots, action_history_list
+                current_snapshots, action_history_list, reactive_logs_list
             )
 
             
@@ -292,6 +303,10 @@ After the thinking block, provide ONLY the final **JSON object** in a `<json_out
                 context=context,
                 execution_time=execution_time,
             )
+           
+    async def update_log(self,msg):
+        self.reactive_logs.append(msg.data.decode())
+        self.logger.info(f"Updated reactive log: {msg.data.decode()}")
             
     def _evaluate_action_from_snapshot_shift(
     self,
@@ -410,9 +425,35 @@ After the thinking block, provide ONLY the final **JSON object** in a `<json_out
             for field in required_fields:
                 if field not in action:
                     raise ValueError(f"Missing required field in parsed JSON: {field}")
+                
+            
 
             action["action_id"] = str(uuid.uuid4())
             action["_thinking_process"] = thinking_content
+            
+            self.logger.info(f"Current servers before sanity check: {self.context_builder.current_servers}")
+            
+            
+            if action['action_type'] == 'ADD_SERVER' and self.context_builder.current_servers >= 3:
+                self.logger.warning("Attempted to ADD_SERVER at max capacity. Changing action to NO_ACTION.")
+                action = {
+                    "action_type": "NO_ACTION",
+                    "source": "llm_parser",
+                    "params": {},
+                    "action_id": str(uuid.uuid4()),
+                    "priority": "low"
+                }
+            
+            if action['action_type'] == 'REMOVE_SERVER' and self.context_builder.current_servers <= 1:
+                self.logger.warning("Attempted to REMOVE_SERVER at min capacity. Changing action to NO_ACTION.")
+                action = {
+                    "action_type": "NO_ACTION",
+                    "source": "llm_parser",
+                    "params": {},
+                    "action_id": str(uuid.uuid4()),
+                    "priority": "low"
+                }
+            
             return action
 
         except Exception as e:
@@ -425,37 +466,35 @@ After the thinking block, provide ONLY the final **JSON object** in a `<json_out
             }
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Calls the local LLM API endpoint."""
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
-        endpoint_url = f"{self.base_url}/api/generate"
-        payload = {"model": self.model, "prompt": full_prompt, "stream": False, "options": {"temperature": self.temperature, "num_predict": self.max_tokens}}
-        headers = {"Content-Type": "application/json"}
-
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=full_prompt)])]
+        generate_content_config = types.GenerateContentConfig(
+            temperature=self.temperature, max_output_tokens=self.max_tokens
+        )
         for attempt in range(self.max_retries):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    self.logger.info(f"Sending request to local LLM at {endpoint_url}")
-                    response = await client.post(endpoint_url, json=payload, headers=headers)
-                    response.raise_for_status()
-                    self.logger.debug(f"Raw response: {response.text[:500]}")
-                    response_data = response.json()
-                    response_text = response_data.get("response", "").strip()
-                    if not response_text:
-                        raise ValueError("LLM response JSON was empty or malformed.")
-                    self.logger.info(f"LLM response received on attempt {attempt + 1}")
-                    return response_text
-            except (httpx.RequestError, httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
-                self.logger.warning(f"Local LLM API call failed with error: {e}. Attempt {attempt + 1}/{self.max_retries}.")
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=generate_content_config,
+                )
+                response_text = response.text.strip()
+                self.logger.info(f"LLM response received on attempt {attempt + 1}")
+                return response_text
+            except google.genai.errors.ServerError as e:
+                self.logger.warning(
+                    f"Gemini API call failed with ServerError: {e}. Attempt {attempt + 1}/{self.max_retries}."
+                )
                 if attempt + 1 == self.max_retries:
-                    self.logger.error("Max retries reached. Failing the LLM operation.")
+                    self.logger.error("Max retries reached. Failing the operation.")
                     raise
                 backoff_time = self.initial_backoff * (2**attempt)
                 jitter = random.uniform(0, backoff_time * 0.1)
                 delay = backoff_time + jitter
-                self.logger.info(f"Retrying in {delay:.2f} seconds...")
+                self.logger.info(f"Model is overloaded. Retrying in {delay:.2f} seconds...")
                 await asyncio.sleep(delay)
         raise Exception("LLM call failed after all retries.")
-
+    
     def _store_call_history(self, context: ReasoningContext, system_prompt: str, user_prompt: str, llm_response: str, parsed_result: Dict[str, Any]):
         call_record = {"timestamp": context.timestamp, "session_id": context.session_id, "reasoning_type": self.reasoning_type.value, "system_prompt": system_prompt, "user_prompt": user_prompt, "llm_response": llm_response, "parsed_result": parsed_result, "model": self.model}
         self.call_history.append(call_record)
@@ -524,7 +563,7 @@ class ContextBuilder:
         rate_per_minute = (value_diff / time_diff_seconds) * 60
         return f"{rate_per_minute:+.2f}/min"
 
-    def build_context_from_kb_results(self, snapshots: List[Dict[str, Any]], action_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def build_context_from_kb_results(self, snapshots: List[Dict[str, Any]], action_history: List[Dict[str, Any]], reactive_log) -> Dict[str, Any]:
         """The main method to transform raw KB results into the final context payload."""
         if not snapshots: return {"error": "No recent snapshots found in the Knowledge Base."}
         
@@ -540,15 +579,22 @@ class ContextBuilder:
             roc = self.calculate_rate_of_change(sorted_snapshots, metric)
             historical_trends[metric] = {"5min_avg_ewma": round(ewma, 4) if ewma is not None else None, "5min_rate_of_change": roc}
 
+        self.logger.info(f"Current state extracted: {current_state}")
+        self.current_servers = current_state.get("servers", -1)
+        self.logger.info(f"Current server count updated to: {self.current_servers}")
+        
+        
+
         historical_actions_context = self.build_historical_actions_context(action_history, sorted_snapshots)
 
         system_goals_and_constraints = {"goals": {"target_utilization": 1, "target_response_time_ms_weighted": 900.0}, "constraints": {"max_servers": 3, "min_servers": 1, "cooldown_period_minutes": 2}}
-
+        
         return {
             "current_state": current_state,
             "historical_trends": historical_trends,
             "historical_actions": historical_actions_context,
             "system_goals_and_constraints": system_goals_and_constraints,
+            "reactive_logs": list(reactive_log)
         }
 
     def build_historical_actions_context(self, action_history: List[Dict[str, Any]], sorted_snapshots: List[Dict[str, Any]]):
@@ -732,6 +778,7 @@ def create_llm_reasoner_agent(
                 reasoning_type=reasoning_type,
                 kb_query_interface=agent.kb_query,
                 logger=logger,
+                nats_url='nats://localhost:4222'
             )
 
         llm_reasoner.configure_basic()

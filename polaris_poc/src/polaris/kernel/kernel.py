@@ -32,6 +32,8 @@ class BaseKernel(ABC):
         await self.nats_client.subscribe("polaris.telemetry.events.batch", self.process_telemetry_event)
         await self.nats_client.subscribe("polaris.telemetry.events.query", self.process_telemetry_event_stream)
         self.logger.info("Subscribed to telemetry streams.")
+        
+        
 
     async def stop(self):
         self.logger.info(f"Stopping {self.__class__.__name__}")
@@ -102,10 +104,10 @@ class SWIMKernel(BaseKernel):
         
         self.controller=  None  # Current controller
         # Maintain a rolling buffer of last 5 telemetry streams
-        self.stream_buffer = deque(maxlen=5)
-        self.batch_size = 5
+        self.stream_buffer = deque(maxlen=1)
+        self.batch_size = 1
 
-        self.action_cooldown_sec = 180.0  # The desired cool-down period
+        self.action_cooldown_sec = 80 # The desired cool-down period
         self.last_action_time= None
 
     async def process_telemetry_event(self, msg):
@@ -113,6 +115,8 @@ class SWIMKernel(BaseKernel):
             telemetry_data = json.loads(msg.data.decode())
             self.logger.debug(f"Telemetry data received: {telemetry_data}")
             self.logger.info(f"Selected controller: {self.controller.__class__.__name__}")
+            
+            
 
             if isinstance(self.controller, SlowController):
                 await self.nats_client.publish(
@@ -154,9 +158,8 @@ class SWIMKernel(BaseKernel):
             self.logger.info(f"Avg response time (last {self.batch_size} streams): {avg_resp_time:.3f}")
 
             # Decide which controller to use based on average
-            if False:
+            if avg_resp_time > 1:
                 # Switch to FastController
-                
                 
                 current_time = time.time()
                 if self.last_action_time is not None and (current_time - self.last_action_time) < self.action_cooldown_sec:
@@ -185,10 +188,12 @@ class SWIMKernel(BaseKernel):
 
                 if action:
                     await self.nats_client.publish_json("polaris.execution.actions", action)
-                    
                     # Update last action time to enforce the cool-down
                     self.last_action_time = current_time 
-                    
+                    enriched_action = action.copy()
+                    enriched_action['timestamp'] = time.time()
+                    await self.nats_client.publish_json("polaris.execution.fast", enriched_action)
+
                     # This replaces the blocking asyncio.sleep(60)
                     self.logger.info(
                         "Published action after 5-stream evaluation. "
