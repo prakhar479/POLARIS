@@ -58,7 +58,7 @@ telemetry:
   # Development: 10-50 for faster feedback and easier debugging
   # Production: 100-500 for better throughput (balance with memory usage)
   # High-volume systems: 500-1000 (monitor memory consumption)
-  batch_size: 10000
+  batch_size: 5000
   
   # Maximum wait time (seconds) before sending an incomplete batch
   # Lower values = more real-time but less efficient batching

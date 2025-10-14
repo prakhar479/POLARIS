@@ -79,6 +79,9 @@ class MonitorAdapter(ExternalAdapter):
         self.telemetry_batch_subject = telemetry_config.get(
             "batch_subject", "polaris.telemetry.events.batch"
         )
+
+        
+
         self.telemetry_batch_size = telemetry_config.get("batch_size", 100)
         self.telemetry_batch_max_wait = telemetry_config.get("batch_max_wait", 1.0)
         self.telemetry_stream = telemetry_config.get("stream", False)
@@ -327,9 +330,31 @@ class MonitorAdapter(ExternalAdapter):
             "cycle_id": cycle_id,
         }
 
+
+        self.logger.info(f"Sending snapshot: {monitor_snapshot}")
+
+        
+
         print(monitor_snapshot)  # <- add this
         # 3. Call the function to store this snapshot in the Knowledge Base.
         await self.store_system_snapshot(monitor_snapshot)
+
+        self.telemetry_query_subject = "polaris.telemetry.events.query"
+        # After store_system_snapshot(...)
+        try:
+            await self.nats_client.publish_json(
+                self.telemetry_query_subject, monitor_snapshot
+            )
+            self.logger.info(
+                "Published consolidated telemetry snapshot",
+                extra={"cycle_id": cycle_id, "subject": self.telemetry_query_subject},
+            )
+        except Exception as e:
+            self.logger.warning(
+                "Failed to publish consolidated snapshot",
+                extra={"cycle_id": cycle_id, "error": str(e)},
+            )
+
 
         elapsed = time.perf_counter() - start_time
         self.logger.info(

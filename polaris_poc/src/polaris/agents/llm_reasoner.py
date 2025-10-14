@@ -229,6 +229,10 @@ After the thinking block, provide ONLY the final **JSON object** in a `<json_out
 
             # 4. Call the LLM
             llm_response = await self._call_llm(system_prompt, user_prompt)
+            
+            with open("./llm_response_logs.txt", "w") as f:
+                f.write(llm_response + "\n\n\n")
+            
             reasoning_steps.append("Received LLM response")
 
 
