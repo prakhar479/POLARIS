@@ -182,7 +182,7 @@ class KnowledgeBaseService:
                 entry_id=snapshot_id,
                 data_type=KBDataType.OBSERVATION,
                 content=snapshot_payload,
-                source=snapshot_payload.get("snapshot_source", "unknown_snapshotter"),
+                source=snapshot_payload.get("source", "unknown_snapshotter"),
                 tags=["snapshot", "llm_context", "permanent"],
                 metric_name="monitor.state.snapshot",
                 metric_value=current_util,

@@ -551,7 +551,7 @@ class MonitorAdapter(ExternalAdapter):
                 entry_id=snapshot_id,
                 data_type=KBDataType.OBSERVATION,
                 content=snapshot_payload,
-                source=f"{self.plugin_config['system_name']}_snapshotter",
+                source="swim_snapshotter",  # changed since older code wsa returning "unknown"
                 tags=["snapshot", "llm_context", "permanent"],
                 # --- MODIFICATION ---
                 metric_name="monitor.state.snapshot",  # More specific metric name

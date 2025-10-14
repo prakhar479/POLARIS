@@ -12,10 +12,11 @@ import time
 from typing import Any, Dict, List, Optional, Union
 import logging
 from google import genai
-from google.genai import types
 import google
 from pathlib import Path
+import random
 import uuid  # Import uuid for generating action_id
+import httpx
 import yaml
 from collections import deque
 from datetime import datetime, timezone, timedelta
@@ -43,9 +44,11 @@ class LLMReasoningImplementation(ReasoningInterface):
         prompt_config: Dict[str, Any],  # <-- New parameter for the config
         prompt_config_path: Optional[str] = None,  # <-- Add path to reload config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
-        model: str = "gemini-2.0-flash",
-        max_tokens: int = 8192,
-        temperature: float = 0.3,
+        model: str = "gpt-oss:20b",
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        timeout: float = 600.0,
+        base_url: str = "http://10.10.16.46:11435",
         logger: Optional[logging.Logger] = None,
     ):
         self.api_key = api_key
@@ -53,16 +56,16 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.max_retries = 3
+        self.max_retries = 5
+        self.timeout = timeout
+        self.base_url = base_url
         self.prompt_config_path = prompt_config_path  # Store for reloading
         self.last_run_time: Optional[float] = None
         self.initial_backoff = 2.0
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
-
-        # Initialize Gemini client
-        self.client = genai.Client(api_key=self.api_key)
-
-        self.logger.info(f"Initializing LLMReasoningImplementation with Gemini model {model}")
+        self.logger.info(
+            f"Initializing LLMReasoningImplementation with model {model} at endpoint {self.base_url}"
+        )
 
         # In-memory storage for the action history using a deque
         self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
@@ -471,49 +474,58 @@ class LLMReasoningImplementation(ReasoningInterface):
         return []
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Calls the Google Gemini API."""
+        """Calls the local LLM API endpoint."""
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        endpoint_url = f"{self.base_url}/api/generate"
+
+        # Payload structure for Ollama-like APIs
+        payload = {
+            "model": self.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "max_tokens": self.max_tokens,
+        }
+
+        headers = {"Content-Type": "application/json"}
+
         for attempt in range(self.max_retries):
             try:
-                # Create chat history with system prompt and user prompt
-                chat_history = [
-                    types.Content(role="user", parts=[types.Part(text=system_prompt)]),
-                    types.Content(
-                        role="model",
-                        parts=[
-                            types.Part(
-                                text="Understood. I will analyze the system context and provide adaptation decisions in the specified format."
-                            )
-                        ],
-                    ),
-                    types.Content(role="user", parts=[types.Part(text=user_prompt)]),
-                ]
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    self.logger.info(f"Sending request to local LLM at {endpoint_url}")
+                    response = await client.post(endpoint_url, json=payload, headers=headers)
+                    response.raise_for_status()  # Raise an exception for 4xx/5xx errors
 
-                # Generate content with the chat history
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=chat_history,
-                    config=types.GenerateContentConfig(
-                        temperature=self.temperature,
-                        max_output_tokens=self.max_tokens,
-                    ),
+                    self.logger.debug(f"Raw response: {response.text[:500]}")
+
+                    response_data = response.json()
+                    response_text = response_data.get("response", "").strip()
+
+                    if not response_text:
+                        raise ValueError("LLM response JSON was empty or malformed.")
+
+                    self.logger.info(f"LLM response received on attempt {attempt + 1}")
+                    return response_text
+
+            except (
+                httpx.RequestError,
+                httpx.HTTPStatusError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as e:
+                self.logger.warning(
+                    f"Local LLM API call failed with error: {e}. Attempt {attempt + 1}/{self.max_retries}."
                 )
-
-                # Extract text from response
-                if response and response.text:
-                    self.logger.info(f"Gemini response received on attempt {attempt + 1}")
-                    return response.text.strip()
-                else:
-                    raise ValueError("Gemini response was empty")
-
-            except Exception as e:
-                self.logger.warning(f"Gemini call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
-                    self.logger.error("Max retries reached. Failing the Gemini operation.")
+                    self.logger.error("Max retries reached. Failing the LLM operation.")
                     raise
-                await asyncio.sleep(2**attempt)  # Exponential backoff
 
-        raise Exception("Gemini call failed after all retries.")
+                backoff_time = self.initial_backoff * (2**attempt)
+                jitter = random.uniform(0, backoff_time * 0.1)
+                delay = backoff_time + jitter
+                self.logger.info(f"Retrying in {delay:.2f} seconds...")
+                await asyncio.sleep(delay)
+
+        raise Exception("LLM call failed after all retries.")
 
     def _store_call_history(
         self,
@@ -600,9 +612,6 @@ def create_llm_reasoner_agent(
     from .llm_reasoner import LLMReasoningImplementation
     from .multi_agent_reasoner import MultiAgentReasoner
 
-    # Use hardcoded Gemini API key
-    gemini_api_key = "AIzaSyBJ7xvmAkdrd4LFD4IWYBNMb8v4CD-lCuE"
-
     # Load the new LLM prompt configuration from the YAML file
     try:
         with open(llm_config_path, "r") as f:
@@ -624,7 +633,7 @@ def create_llm_reasoner_agent(
     for reasoning_type in ReasoningType:
         if mode == "multi":
             llm_reasoner = MultiAgentReasoner(
-                api_key=gemini_api_key,
+                api_key=llm_api_key,
                 reasoning_type=reasoning_type,
                 kb_query_interface=agent.kb_query,
                 logger=logger,
@@ -632,7 +641,7 @@ def create_llm_reasoner_agent(
             # Note: You might need a similar config system for the MultiAgentReasoner
         else:
             llm_reasoner = LLMReasoningImplementation(
-                api_key=gemini_api_key,
+                api_key=llm_api_key,
                 reasoning_type=reasoning_type,
                 prompt_config=prompt_config,  # <-- Pass the loaded config here
                 prompt_config_path=llm_config_path,  # <-- Pass path for reloading
