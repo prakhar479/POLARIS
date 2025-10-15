@@ -5,7 +5,7 @@ A balanced, intelligent meta-learner that:
 - Acts as an expert systems engineer and pattern recognition specialist
 - Queries the Knowledge Base for comprehensive telemetry analysis
 - Analyzes patterns using Gemini API for balanced optimization decisions
-- Updates BOTH threshold parameters AND stores valuable observations in adaptive_phrases
+- Updates BOTH threshold parameters AND stores valuable observations in observed_learnings
 - Keeps FIXED CONSTRAINTS unchanged (min/max servers, dimmer bounds)
 - Makes evidence-based changes with equal focus on optimization and pattern storage
 - Operates on 10-minute intervals with intelligent change management
@@ -440,10 +440,10 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
                             f"Threshold optimization completed: Updated {threshold_count} performance parameter(s)."
                         )
                     elif template_count > 0:
-                        adaptive_phrases_updated = "adaptive_phrases" in valid_updates.get(
+                        observed_learnings_updated = "observed_learnings" in valid_updates.get(
                             "template_parts", {}
                         )
-                        if adaptive_phrases_updated:
+                        if observed_learnings_updated:
                             self.logger.info(
                                 f"Observation storage completed: Stored system patterns for reasoner intelligence."
                             )
@@ -479,16 +479,17 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
 **DECISION FRAMEWORK:**
 1. **OBSERVATION STORAGE** - When you identify new patterns or insights that aren't captured yet
 2. **THRESHOLD TUNING** - When numerical parameters are clearly misaligned with actual system behavior
+3. **TEMPLATE REFINEMENT** - When reasoning structure or constraints need minor improvements for better performance
 
 **CURRENT STATE:**
 - Thresholds: {self.current_thresholds}
 - Templates: {self.current_template_parts}
 
 **OBSERVATION STORAGE (when new patterns emerge):**
-Store insights in `adaptive_phrases` when you discover:
-- Performance correlations: "Response degrades when CPU > 85%"
-- Operational patterns: "traffic spikes need proactive scaling"  
-- Adaptation learnings: "Gradual dimmer more effective than sudden"
+Store brief insights in `observed_learnings` when you discover:
+- Performance correlations: "How CPU, memory, and response time relate"
+- Operational patterns: "What kinds of loads cause spikes"  
+- Adaptation learnings: "What kind of actions worked well under what conditions"
 
 **THRESHOLD TUNING (when parameters are clearly wrong):**
 Look for these signs that thresholds need adjustment:
@@ -497,6 +498,18 @@ Look for these signs that thresholds need adjustment:
 - Dimmer controls not matching performance vs user experience trade-offs
 - Cooldown timings causing delays or instability
 - Change by max {self.max_change_percent}% per cycle
+
+**TEMPLATE REFINEMENT (only for significant performance improvements):**
+You may make LIMITED modifications to `reasoning_structure` or `constraints` ONLY when:
+- Current reasoning steps consistently lead to poor decisions
+- Evidence shows a specific reasoning gap that could be filled
+
+TEMPLATE MODIFICATION RULES:
+- Keep the same overall structure
+- Only add clarifications, don't remove core logic
+- For constraints: only add clarifying details, never remove safety constraints
+- Maximum 1-2 sentence additions per modification then give final updated text
+- Must be directly supported by strong performance evidence
 
 **FIXED CONSTRAINTS (NEVER CHANGE):**
 {', '.join(self.FIXED_CONSTRAINTS)}
@@ -509,7 +522,7 @@ Both Threshold Adjustment AND Pattern Storage (data shows misaligned parameter +
     "utilization_scale_up_threshold_percent": 75
   }},
   "template_parts": {{
-    "adaptive_phrases": "Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience. Memory pressure correlates with response time degradation."
+    "observed_learnings": "Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience."
   }}
 }}
 ```
@@ -520,21 +533,29 @@ Threshold Too High (Response time target 800ms but system averages 600ms):
     "target_response_time_ms": 650
   }}
 }}
-```
 
+### TASK
+Analyze the provided decision data and determine whether to **tune thresholds**, **refine templates**, **apply both**, or **make no change**.
 
-**DECISION CRITERIA:**
-- **Tune Thresholds**: If current parameters clearly don't match system behavior patterns (too high/low/never triggered)
-- **Store Patterns**: If you discover new correlations, behaviors, or insights not yet captured
-- **Both Valid**: Make both changes if they are independently supported by strong evidence
-- **Return {{}}**: Only when parameters seem well-calibrated AND no new patterns emerge
+---
 
-**OUTPUT REQUIREMENTS:**
-- JSON must be valid and properly formatted  
-- Focus on changes with strongest evidence (threshold, pattern, or both)
-- Give equal consideration to both threshold optimization and pattern storage
-- Only make changes when clearly justified by the data
-- Justify your choice based on what the data clearly shows"""
+### DECISION CRITERIA
+1. **Tune Thresholds** Only if current parameters clearly mismatch system behavior (too high, too low, or never triggered).
+2. **Refine Templates** Only if reasoning or structure shows repeated logical gaps or misaligned decisions.
+3. **Combine Both** If both conditions above are independently supported by strong evidence.
+4. **Return {{}}** When:
+   - Thresholds are well-calibrated
+   - No new behavior patterns are observed
+   - Reasoning is already sound and consistent
+
+### OUTPUT REQUIREMENTS
+- Output must be **valid JSON**, properly formatted.
+- Evaluate **thresholds**, **patterns**, and **templates** with equal rigor.
+- Only propose changes when **clearly supported by evidence**.
+- For **template changes**, include the **entire revised text**, not just fragments.
+- Keep the response **concise and non-redundant** — suitable for direct use as a prompt.
+- Provide a **brief justification** for each decision (1 sentence).
+"""
 
     def _build_user_prompt(self, telemetry_summary: Dict[str, Any]) -> str:
         """Build user prompt with telemetry context."""
@@ -577,34 +598,32 @@ Threshold Too High (Response time target 800ms but system averages 600ms):
 **ANALYSIS FOCUS:**
 
 **PATTERN DISCOVERY CHECK:**  
-Look for new insights not yet captured in adaptive_phrases:
+Look for new insights not yet captured in observed_learnings:
 - Performance correlations (CPU, memory, response time relationships)
-- User behavior patterns (abandonment, tolerance thresholds)
+- User behavior patterns (dimmer thresholds)
 - Operational patterns (time-based load, cascade effects)
 - Successful adaptation strategies under specific conditions
 
 **THRESHOLD MISALIGNMENT CHECK:**
-Only when patterns are already well-captured, examine if current thresholds match actual system behavior:
+Examine if current thresholds match actual system behavior:
 - Are response time targets appropriate for observed performance?
 - Do utilization thresholds trigger scaling at right times?  
 - Are dimmer controls calibrated for performance vs user experience?
 - Do cooldown periods cause delays or allow instability?
 
+**TEMPLATE REFINEMENT CHECK:**
+Analyze if reasoning structure or constraints need minor improvements:
+- Are decision failures due to missing reasoning steps or unclear logic?
+- Would small clarifications significantly improve decision quality?
+
 **DECISION PRIORITY:**
-1. **Capture New Patterns**: If you discover insights not yet stored, add them to adaptive_phrases  
+1. **Capture New Patterns**: If you discover insights not yet stored, add them to observed_learnings  
 2. **Fix Parameter Misalignment**: If thresholds clearly don't match system behavior, adjust them
-You should make BOTH changes if strongly supported by data
-3. **No Changes**: Return {{}} only if parameters are well-aligned AND no new patterns are evident
+3. **Refine Decision Templates**: If reasoning structure or constraints have clear gaps causing repeated failures
+You should make ANY COMBINATION of changes if strongly supported by data
+4. **No Changes**: Return {{}} only if parameters are well-aligned AND no new patterns are evident AND reasoning is sound
 
-**EXAMPLES OF CLEAR THRESHOLD ISSUES:**
-- Target response time 1000ms but system consistently runs at 400ms → Lower target
-- Utilization threshold 90% but scaling happens at 60% → Adjust threshold
-- Dimmer reduction at 2s but users tolerate 1s → Reduce threshold
-
-**EXAMPLES OF PATTERN INSIGHTS:**
-- "Response time spikes correlate with CPU > 85%"
-- "Server additions during spikes improve latency"
-- "Dimmer reduction gives faster recovery than addition of server, but is less impactful"
+- "Append and give final phrase (old+new) to store in observed_learnings"
 """
 
         return prompt
@@ -743,7 +762,7 @@ You should make BOTH changes if strongly supported by data
                 "system_role",
                 "reasoning_structure",
                 "constraints",
-                "adaptive_phrases",
+                "observed_learnings",
             }
 
             for key, new_text in updates["template_parts"].items():
@@ -779,16 +798,78 @@ You should make BOTH changes if strongly supported by data
                     if len(current_structure) > 0:
                         # Simple heuristic: if the new text is dramatically different in length or has few common words
                         length_ratio = len(new_text) / len(current_structure)
-                        if length_ratio < 0.5 or length_ratio > 2.0:
+                        if length_ratio < 0.7 or length_ratio > 1.5:
                             self.logger.warning(
                                 f"Reasoning structure appears to have major structural changes "
                                 f"(length ratio: {length_ratio:.2f}). Only minor refinements allowed."
                             )
                             continue
 
-                # Handle adaptive_phrases for intelligent template evolution
-                if key == "adaptive_phrases":
-                    current_phrases = self.current_template_parts.get("adaptive_phrases", "")
+                    # Ensure core step names are preserved
+                    required_steps = [
+                        "Data Observer",
+                        "Trend Analyst",
+                        "Performance Reviewer",
+                        "Strategy Planner",
+                        "Action Sanity Check",
+                        "Command Generator",
+                    ]
+                    missing_steps = [step for step in required_steps if step not in new_text]
+                    if missing_steps:
+                        self.logger.warning(
+                            f"Reasoning structure missing required steps: {missing_steps}. "
+                            f"Core framework must be preserved."
+                        )
+                        continue
+
+                # Special validation for constraints (safety constraint protection)
+                if key == "constraints":
+                    current_constraints = self.current_template_parts.get("constraints", "")
+
+                    # Check that core safety constraints are preserved
+                    required_safety_elements = [
+                        "Primary Goal",
+                        "NON-NEGOTIABLE SLA",
+                        "Response time must never exceed",
+                        "Server Limits",
+                        "cannot exceed its maximum server count",
+                        "Dimmer Range",
+                        "must be a float between",
+                    ]
+
+                    missing_safety = [
+                        elem for elem in required_safety_elements if elem not in new_text
+                    ]
+                    if missing_safety:
+                        self.logger.warning(
+                            f"Constraints update missing critical safety elements: {missing_safety}. "
+                            f"Safety constraints cannot be removed."
+                        )
+                        continue
+
+                    # Check that fixed constraint values are still referenced
+                    fixed_constraint_refs = [f"{{{const}}}" for const in self.FIXED_CONSTRAINTS]
+                    missing_refs = [ref for ref in fixed_constraint_refs if ref not in new_text]
+                    if missing_refs:
+                        self.logger.warning(
+                            f"Constraints update missing fixed constraint references: {missing_refs}. "
+                            f"Fixed constraints must remain referenced."
+                        )
+                        continue
+
+                    # Ensure length doesn't change dramatically (no major rewrites)
+                    if len(current_constraints) > 0:
+                        length_ratio = len(new_text) / len(current_constraints)
+                        if length_ratio < 0.8 or length_ratio > 1.3:
+                            self.logger.warning(
+                                f"Constraints appears to have major changes "
+                                f"(length ratio: {length_ratio:.2f}). Only minor clarifications allowed."
+                            )
+                            continue
+
+                # Handle observed_learnings for intelligent template evolution
+                if key == "observed_learnings":
+                    current_phrases = self.current_template_parts.get("observed_learnings", "")
 
                     # Allow adding/removing ONE short phrase per cycle
                     if isinstance(new_text, str) and len(new_text.strip()) > 0:
@@ -809,13 +890,6 @@ You should make BOTH changes if strongly supported by data
                                 f"Large observation update ({phrase_count} vs {current_count}) - allowing for pattern storage"
                             )
                             # Still allow it - observations are valuable
-
-                # Check if fixed constraints are mentioned in constraints template
-                if key == "constraints":
-                    if any(fixed in new_text for fixed in self.FIXED_CONSTRAINTS):
-                        self.logger.info(
-                            f"Template update for {key} mentions fixed constraints (OK)"
-                        )
 
                 valid_template_parts[key] = new_text
                 self.logger.info(f"Validated template part update: {key} ({len(new_text)} chars)")
@@ -1001,7 +1075,7 @@ def create_meta_learner_agent(
     config_path: str,
     nats_url: Optional[str] = None,
     update_interval_seconds: float = 600.0,  # Conservative 10-minute interval
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-2.0-flash",
     max_change_percent: float = 10.0,  # Conservative 10% max change
     logger: Optional[logging.Logger] = None,
 ) -> MetaLearnerLLM:

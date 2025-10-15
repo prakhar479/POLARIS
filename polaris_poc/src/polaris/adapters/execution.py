@@ -561,6 +561,7 @@ class ExecutionAdapter(ExternalAdapter):
                 "Adaptation decision published to knowledge base",
                 extra={
                     "action_id": action.action_id,
+                    "source": action.source,
                     "action_type": action.action_type,
                     "success": result.success,
                     "subject": self.decisions_subject,

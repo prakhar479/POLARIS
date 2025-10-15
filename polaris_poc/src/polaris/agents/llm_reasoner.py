@@ -19,6 +19,8 @@ import uuid  # Import uuid for generating action_id
 import yaml
 from collections import deque
 from datetime import datetime, timezone, timedelta
+from polaris.common.nats_client import NATSClient
+import re
 
 # Add these imports to the existing reasoner_agent.py file
 from .reasoner_core import (
@@ -47,6 +49,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         logger: Optional[logging.Logger] = None,
+        nats_url="",
     ):
         self.api_key = api_key
         self.reasoning_type = reasoning_type
@@ -63,9 +66,13 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.client = genai.Client(api_key=self.api_key)
 
         self.logger.info(f"Initializing LLMReasoningImplementation with Gemini model {model}")
+        self.nats_client = NATSClient(nats_url=nats_url, logger=logger, name="LLM_REASONER")
 
+        self.nats_client.subscribe("polaris.execution.fast", self.update_log)
         # In-memory storage for the action history using a deque
         self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
+
+        self.reactive_logs: deque = deque(maxlen=3)  # Store the last 20 logs
 
         # self.last_action_memory: Optional[Dict[str, Any]] = None
         self.kb_query = kb_query_interface
@@ -73,6 +80,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.last_inference_snapshots: Optional[List[Dict[str, Any]]] = None
         self.last_inference_action: Optional[Dict[str, Any]] = None
         self.last_inference_timestamp: Optional[str] = None
+        self.current_servers = -1
 
         # Load prompt template and thresholds from the config dictionary
         try:
@@ -166,8 +174,8 @@ class LLMReasoningImplementation(ReasoningInterface):
         start_time = time.time()
         reasoning_steps = ["Starting single-LLM agentic reasoning"]
         now = time.time()
-        if self.last_run_time and (now - self.last_run_time) < 60:
-            self.logger.info("Skipping reasoning : cooldown not reached (2 mins)")
+        if self.last_run_time and (now - self.last_run_time) < 30:
+            self.logger.info("Skipping reasoning : cooldown not reached (30 secs)")
             return ReasoningResult(
                 result={"action_type": "NO_ACTION", "source": "rate_limiter"},
                 confidence=1.0,
@@ -184,6 +192,10 @@ class LLMReasoningImplementation(ReasoningInterface):
                 data_types=["observation"],
                 filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
                 limit=120,
+            )
+            decisions = await self.kb_query.query_structured(
+                data_types=["adaptation_decision"],
+                limit=8,
             )
             reasoning_steps.append(f"Fetched {len(snapshots)} KB snapshots")
             # === Filter to only snapshots newer than last inference ===
@@ -207,8 +219,9 @@ class LLMReasoningImplementation(ReasoningInterface):
             # === Use filtered snapshots for current reasoning ===
             current_snapshots = filtered_snapshots or snapshots
             action_history_list = list(self.action_history)
+            reactive_logs_list = list(self.reactive_logs)
             enriched_context_data = self.context_builder.build_context_from_kb_results(
-                current_snapshots, action_history_list
+                current_snapshots, action_history_list, reactive_logs_list, decisions
             )
 
             # 3. Prepare prompts
@@ -278,6 +291,12 @@ class LLMReasoningImplementation(ReasoningInterface):
                 context=context,
                 execution_time=execution_time,
             )
+
+    async def update_log(self, msg):
+
+        self.reactive_logs.append(msg.data.decode())
+
+        self.logger.info(f"Updated reactive log: {msg.data.decode()}")
 
     def _evaluate_action_from_snapshot_shift(
         self,
@@ -378,39 +397,48 @@ class LLMReasoningImplementation(ReasoningInterface):
     # ======================================================================
     # == MODIFIED RESPONSE PARSER                                         ==
     # ======================================================================
+
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """Parse the LLM JSON output from within the <json_output> block and extract thinking."""
+        """Parse the LLM JSON output from within <json_output> or ```json_output``` blocks, and extract reasoning."""
         try:
+            # --- Extract <thinking> block (optional) ---
             thinking_content = "No <thinking> block found."
-            if "<thinking>" in response and "</thinking>" in response:
-                thinking_start = response.find("<thinking>") + len("<thinking>")
-                thinking_end = response.find("</thinking>", thinking_start)
-                if thinking_end != -1:
-                    thinking_content = response[thinking_start:thinking_end].strip()
+            match_thinking = re.search(r"```thinking(.*?)```", response, re.DOTALL)
+            if not match_thinking:
+                match_thinking = re.search(r"<thinking>(.*?)</thinking>", response, re.DOTALL)
+            if match_thinking:
+                thinking_content = match_thinking.group(1).strip()
+
             self.logger.info(
                 f"LLM Reasoning Process:\n{thinking_content}", extra={"component": "llm_thinking"}
             )
 
-            json_str = ""
-            if "<json_output>" in response and "</json_output>" in response:
-                json_start = response.find("<json_output>") + len("<json_output>")
-                json_end = response.find("</json_output>", json_start)
-                if json_end != -1:
-                    json_str = response[json_start:json_end].strip()
+            # --- Extract JSON block ---
+            json_str = None
+
+            # Match ```json_output ... ``` (preferred)
+            match_json = re.search(r"```json_output(.*?)```", response, re.DOTALL)
+            if not match_json:
+                # Fallback to XML-style
+                match_json = re.search(r"<json_output>(.*?)</json_output>", response, re.DOTALL)
+            if match_json:
+                json_str = match_json.group(1).strip()
             else:
-                self.logger.warning(
-                    "LLM response did not contain <json_output> tags. Falling back to extracting first JSON object."
-                )
-                json_start = response.find("{")
-                json_end = response.rfind("}") + 1
-                if json_start != -1 and json_end != 0:
-                    json_str = response[json_start:json_end]
+                # Fallback to first {...} block
+                match_json = re.search(r"\{.*\}", response, re.DOTALL)
+                if match_json:
+                    json_str = match_json.group(0).strip()
 
             if not json_str:
                 raise ValueError("No valid JSON object found in response.")
 
+            # Strip any leading ``` or trailing artifacts
+            json_str = re.sub(r"^```[\w]*|```$", "", json_str).strip()
+
+            # --- Parse JSON ---
             action = json.loads(json_str)
 
+            # --- Sanity checks ---
             required_fields = ["action_type", "source"]
             for field in required_fields:
                 if field not in action:
@@ -418,6 +446,31 @@ class LLMReasoningImplementation(ReasoningInterface):
 
             action["action_id"] = str(uuid.uuid4())
             action["_thinking_process"] = thinking_content
+
+            # Capacity sanity logic
+            if action["action_type"] == "ADD_SERVER" and self.context_builder.current_servers >= 3:
+                self.logger.warning("Max capacity reached. Changing action to NO_ACTION.")
+                action = {
+                    "action_type": "NO_ACTION",
+                    "source": "llm_parser",
+                    "params": {},
+                    "action_id": str(uuid.uuid4()),
+                    "priority": "low",
+                }
+
+            if (
+                action["action_type"] == "REMOVE_SERVER"
+                and self.context_builder.current_servers <= 1
+            ):
+                self.logger.warning("Min capacity reached. Changing action to NO_ACTION.")
+                action = {
+                    "action_type": "NO_ACTION",
+                    "source": "llm_parser",
+                    "params": {},
+                    "action_id": str(uuid.uuid4()),
+                    "priority": "low",
+                }
+
             return action
 
         except Exception as e:
@@ -481,7 +534,7 @@ class LLMReasoningImplementation(ReasoningInterface):
                         role="model",
                         parts=[
                             types.Part(
-                                text="Understood. I will analyze the system context and provide adaptation decisions in the specified format."
+                                text="I will analyze the system context and provide adaptation decisions in the specified format."
                             )
                         ],
                     ),
@@ -600,6 +653,8 @@ def create_llm_reasoner_agent(
     from .llm_reasoner import LLMReasoningImplementation
     from .multi_agent_reasoner import MultiAgentReasoner
 
+    # Use hardcoded Gemini API key
+    gemini_api_key = "AIzaSyCqqeyWnNYp3JtpqZxb3HNscTh00dFqqcA"
 
     # Load the new LLM prompt configuration from the YAML file
     try:
@@ -636,6 +691,7 @@ def create_llm_reasoner_agent(
                 prompt_config_path=llm_config_path,  # <-- Pass path for reloading
                 kb_query_interface=agent.kb_query,
                 logger=logger,
+                nats_url="nats://localhost:4222",
             )
 
         llm_reasoner.configure_basic()
@@ -710,7 +766,11 @@ class ContextBuilder:
         return f"{rate_per_minute:+.2f}/min"
 
     def build_context_from_kb_results(
-        self, snapshots: List[Dict[str, Any]], action_history: List[Dict[str, Any]]
+        self,
+        snapshots: List[Dict[str, Any]],
+        action_history: List[Dict[str, Any]],
+        reactive_log,
+        decisions,
     ) -> Dict[str, Any]:
         """The main method to transform raw KB results into the final context payload."""
         if not snapshots:
@@ -738,6 +798,11 @@ class ContextBuilder:
                 "5min_avg_ewma": round(ewma, 4) if ewma is not None else None,
                 "5min_rate_of_change": roc,
             }
+        self.logger.info(f"Current state extracted: {current_state}")
+
+        self.current_servers = current_state.get("servers", -1)
+
+        self.logger.info(f"Current server count updated to: {self.current_servers}")
 
         historical_actions_context = self.build_historical_actions_context(
             action_history, sorted_snapshots
@@ -753,6 +818,8 @@ class ContextBuilder:
             "historical_trends": historical_trends,
             "historical_actions": historical_actions_context,
             "system_goals_and_constraints": system_goals_and_constraints,
+            "reactive_logs": list(reactive_log),
+            "recent_decisions_including_reactive_controller": decisions[-5:] if decisions else [],
         }
 
     def build_historical_actions_context(
