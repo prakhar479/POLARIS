@@ -448,6 +448,23 @@ class NATSReasonerBase(ABC):
         self.reasoner_kernel_subject = self.config.get("reasoner", {}).get(
             "kernel_request_subject", "polaris.reasoner.kernel.requests"
         )
+        
+        # Verification routing configuration
+        reasoner_config = self.config.get("reasoner", {})
+        action_routing = reasoner_config.get("action_routing", {})
+        self.enable_verification = action_routing.get("enable_verification", True)
+        self.verification_level = action_routing.get("default_verification_level", "policy")
+        self.verification_timeout = action_routing.get("verification_timeout_sec", 45)
+        self.verification_failure_action = action_routing.get("verification_failure_action", "reject")
+        
+        # Verification subjects
+        verification_config = self.config.get("verification", {})
+        self.verification_input_subject = verification_config.get(
+            "input_subject", "polaris.verification.requests"
+        )
+        self.verification_output_subject = verification_config.get(
+            "output_subject", "polaris.verification.results"
+        )
 
         # Telemetry KB config
         self.telemetry_kb_enabled = (
@@ -569,10 +586,19 @@ class NATSReasonerBase(ABC):
             # Placeholder for action generation logic
             action_message = result["result"]
 
-            self.logger.info(
-                f"Publishing reasoning action to execution layer", extra={"action": action_message}
-            )
-            await self.publish(self.execution_action_subject, action_message)
+            if self.enable_verification:
+                self.logger.info(
+                    f"Publishing reasoning action to verification layer", 
+                    extra={"action": action_message, "verification_level": self.verification_level}
+                )
+                await self._publish_action_for_verification(action_message)
+            else:
+                self.logger.info(
+                    f"Publishing reasoning action directly to execution layer (verification disabled)", 
+                    extra={"action": action_message}
+                )
+                await self.publish(self.execution_action_subject, action_message)
+                
             await msg.respond(json.dumps({"success": True, "result": result}).encode())
 
         except Exception as e:
@@ -609,6 +635,53 @@ class NATSReasonerBase(ABC):
         except Exception as e:
             self.logger.error(f"KB stats error: {e}", exc_info=True)
             return None
+
+    async def _publish_action_for_verification(self, action_message: Dict[str, Any]) -> None:
+        """Publish action to verification adapter for validation before execution."""
+        import uuid
+        
+        try:
+            # Create verification request
+            verification_request = {
+                "request_id": str(uuid.uuid4()),
+                "action": action_message,
+                "context": {
+                    "source": "reasoner_agent",
+                    "agent_id": self.agent_id,
+                    "timestamp": time.time()
+                },
+                "verification_level": self.verification_level,
+                "timeout_sec": self.verification_timeout,
+                "requester": f"reasoner_agent_{self.agent_id}"
+            }
+            
+            self.logger.debug(
+                "Sending action for verification",
+                extra={
+                    "request_id": verification_request["request_id"],
+                    "action_type": action_message.get("action_type"),
+                    "verification_level": self.verification_level
+                }
+            )
+            
+            # Publish to verification input subject
+            await self.publish(self.verification_input_subject, verification_request)
+            
+        except Exception as e:
+            self.logger.error(
+                f"Failed to publish action for verification: {e}",
+                extra={"action": action_message},
+                exc_info=True
+            )
+            
+            # Handle verification failure based on configuration
+            if self.verification_failure_action == "bypass":
+                self.logger.warning("Bypassing verification due to failure, sending directly to execution")
+                await self.publish(self.execution_action_subject, action_message)
+            elif self.verification_failure_action == "reject":
+                self.logger.error("Rejecting action due to verification failure")
+                # Could publish to an error/rejected actions subject here
+            # "retry" would require more complex retry logic
 
     async def _handle_system_notification(self, data: Dict[str, Any], msg) -> None:
         """Handle system notifications."""

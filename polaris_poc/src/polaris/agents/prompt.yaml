@@ -7,12 +7,12 @@ prompt_config:
     max_response_time_s: 1.0
     max_response_time_ms: 1000
   thresholds:
-    impending_breach_threshold_ms: 900
+    impending_breach_threshold_ms: 850
     dimmer_low_threshold: 0.7
     target_server_utilization: 0.89
     dimmer_proactive_step: 0.15
     dimmer_max_step: 0.2
-    cooldown_period_minutes: 4.455
+    cooldown_period_minutes: 5.3366445
     target_response_time_ms: 600.0
   template_parts:
     system_role: 'You are an integrated, proactive autonomous system controller for
@@ -79,11 +79,16 @@ prompt_config:
       \ placeholder string like `\"generated-uuid\"`.\n        - `params`: (Object)\
       \ Varies by `action_type`. E.g., `{\"value\": 0.8}` for `SET_DIMMER`.\n    \
       \    - `priority`: (String) Choose from `\"low\"`, `\"medium\"`, `\"high\"`.\n"
-    adaptive_phrases: Successful dimmer adjustments are observed, but the system might
-      be overly dependent on them. Monitor CPU and memory usage in conjunction with
-      dimmer settings to identify potential resource limitations. If CPU usage is
-      low, consider increasing the dimmer value to improve user experience. If CPU
-      usage is high, consider adding a server to reduce the load.
+    adaptive_phrases: Observed that frequent REMOVE_SERVER actions are often followed
+      by ADD_SERVER actions, indicating a potential issue with load estimation or
+      a need for a more nuanced approach to server removal. The current cooldown period
+      appears insufficient to prevent premature server removal, leading to instability.
+      Consider increasing the cooldown period further and implementing a more conservative
+      server removal policy that takes into account recent load history and predictive
+      load forecasting to avoid premature removal. A more gradual approach to server
+      removal may improve stability. The REMOVE_SERVER action success rate is low,
+      suggesting the cooldown period is insufficient or the removal criteria are too
+      aggressive. Increasing the cooldown period may improve stability.
     output_format: '**Output Format:**
 
       First, provide your entire step-by-step reasoning within a `<thinking>` block.

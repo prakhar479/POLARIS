@@ -1,0 +1,346 @@
+# POLARIS Configuration Optimized for SWIM System
+# ================================================
+# This configuration is specifically tuned for optimal adaptation performance
+# with the SWIM exemplar system using Gemini Pro model and Bayesian world model.
+# 
+# Key optimizations:
+# - Aggressive monitoring intervals for responsive adaptation
+# - Relaxed verification thresholds for SWIM's safe environment
+# - Tuned batch sizes for SWIM's telemetry patterns
+# - Optimized timeouts for SWIM's fast response characteristics
+
+# =============================================================================
+# NATS Message Bus Configuration - Optimized for SWIM
+# =============================================================================
+nats:
+  url: "nats://localhost:4222"
+
+# =============================================================================
+# Telemetry Configuration - Optimized for SWIM's Metrics
+# =============================================================================
+telemetry:
+  # SWIM generates metrics every 5 seconds, so optimize batching accordingly
+  stream_subject: "polaris.telemetry.events.stream"
+  batch_subject: "polaris.telemetry.events.batch"
+  
+  # Smaller batch size for more responsive adaptation to SWIM changes
+  batch_size: 20
+  
+  # Shorter wait time to ensure rapid response to SWIM state changes
+  batch_max_wait: 2.0
+  
+  # Moderate queue size suitable for SWIM's predictable telemetry volume
+  queue_maxsize: 1000
+  
+  # Enable streaming for real-time adaptation
+  stream: true
+  
+  knowledge_base:
+    enabled: true
+    # Smaller buffer for more frequent aggregation of SWIM metrics
+    buffer_size: 50
+
+# =============================================================================
+# Reasoner Configuration - Optimized for SWIM Scenarios
+# =============================================================================
+reasoner:
+  kernel_request_subject: "polaris.reasoner.kernel.requests"
+  
+  action_routing:
+    # Enable verification but with SWIM-optimized settings
+    enable_verification: true
+    default_verification_level: "policy"
+    
+    # Shorter timeout for SWIM's fast adaptation scenarios
+    verification_timeout_sec: 20
+    
+    # Retry verification for SWIM's generally safe operations
+    verification_failure_action: "retry"
+
+# =============================================================================
+# Kernel Configuration - SWIM Optimized
+# =============================================================================
+kernel:
+  enable_verification: true
+  verification_timeout_sec: 15.0
+  
+  performance:
+    # Higher concurrency for SWIM's multiple adaptation actions
+    max_concurrent_actions: 10
+    
+    # Shorter timeout for SWIM's fast action execution
+    action_timeout_sec: 60
+    
+    # More frequent health checks for responsive monitoring
+    health_check_interval_sec: 15
+
+# =============================================================================
+# Execution Configuration - SWIM Specific
+# =============================================================================
+execution:
+  action_subject: "polaris.execution.actions"
+  result_subject: "polaris.execution.results"
+  metrics_subject: "polaris.execution.metrics"
+  decisions_subject: "polaris.execution.decisions"
+
+# =============================================================================
+# Verification Configuration - SWIM Optimized Thresholds
+# =============================================================================
+verification:
+  input_subject: "polaris.verification.requests"
+  output_subject: "polaris.verification.results"
+  policy_subject: "polaris.verification.policies"
+  metrics_subject: "polaris.verification.metrics"
+  
+  # Faster verification for SWIM's safe environment
+  default_timeout_sec: 15
+  max_concurrent_verifications: 8
+  enable_by_default: true
+  
+  routing:
+    enable_automatic_routing: true
+    bypass_action_types: []
+    require_verification_for: ["REMOVE_SERVER"]  # Only critical actions
+  
+  # SWIM-Optimized Thresholds
+  thresholds:
+    # Relaxed CPU threshold - SWIM is a simulation
+    max_cpu_utilization: 0.95
+    max_memory_utilization: 0.95
+    max_disk_utilization: 0.98
+    
+    # SWIM-specific performance thresholds
+    max_response_time_increase_percent: 50.0  # Allow higher increases for experimentation
+    max_throughput_decrease_percent: 30.0     # More tolerance for SWIM scenarios
+    
+    # SWIM safety constraints
+    min_system_availability: 0.95  # Relaxed for research environment
+    max_error_rate_increase: 0.10   # Higher tolerance for SWIM experiments
+    
+    # SWIM resource allocation - allow aggressive scaling
+    max_concurrent_actions: 5       # SWIM can handle multiple actions
+    max_action_duration_minutes: 10 # SWIM actions are fast
+    
+    # Relaxed change management for research
+    max_configuration_changes_per_hour: 20
+    require_approval_for_changes_affecting_users: false
+  
+  # SWIM-Optimized Risk Levels
+  risk_levels:
+    low:
+      verification_level: "basic"
+      auto_approve: true
+      require_human_approval: false
+      
+    medium:
+      verification_level: "policy"
+      auto_approve: true  # Auto-approve for SWIM research
+      require_human_approval: false
+      additional_checks: ["resource_impact"]
+      
+    high:
+      verification_level: "policy"  # Reduced from comprehensive
+      auto_approve: false
+      require_human_approval: false  # No human approval needed for SWIM
+      additional_checks: ["resource_impact", "simulation"]
+      
+    critical:
+      verification_level: "comprehensive"
+      auto_approve: false
+      require_human_approval: false  # Even critical actions don't need human approval in SWIM
+      require_multiple_approvals: false
+      additional_checks: ["simulation", "rollback_plan"]
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logger:
+  name: "polaris"
+  level: "INFO"  # Reduced verbosity for cleaner output
+  format: "pretty"
+
+# =============================================================================
+# Digital Twin Configuration - SWIM Optimized
+# =============================================================================
+digital_twin:
+  nats:
+    update_subject: "polaris.digitaltwin.update"
+    calibrate_subject: "polaris.digitaltwin.calibrate"
+    error_subject: "polaris.digitaltwin.errors"
+    queue_group: "digital_twin_workers"
+    max_reconnect_attempts: 5
+    reconnect_wait_sec: 1
+    
+    # Optimized for SWIM's telemetry patterns
+    queue_maxsize: 500
+    batch_size: 15
+    batch_timeout_sec: 1.0
+  
+  grpc:
+    host: "0.0.0.0"
+    port: 50051
+    max_workers: 8
+    max_message_size: 4194304
+    keepalive_time_ms: 20000
+    keepalive_timeout_ms: 3000
+  
+  world_model:
+    implementation: "bayesian"
+    config_path: "bayesian_world_model_config.yaml"
+    reload_on_failure: true
+    health_check_interval_sec: 30
+  
+  performance:
+    # Higher concurrency for SWIM's multiple metrics
+    max_concurrent_queries: 15
+    
+    # Shorter timeouts for SWIM's fast responses
+    query_timeout_sec: 15
+    simulation_timeout_sec: 30
+  
+  debugging:
+    log_level: "INFO"
+    enable_detailed_logging: false  # Reduced for performance
+    log_to_console: true
+    log_file: "logs/digital_twin.log"
+
+# =============================================================================
+# SWIM-Specific Verification Constraints
+# =============================================================================
+# Additional constraints specifically for SWIM system operations
+swim_verification:
+  constraints:
+    - id: "swim_server_scaling_limit"
+      type: "resource"
+      severity: "medium"
+      description: "Limit rapid server scaling in SWIM"
+      condition: "action_type != 'ADD_SERVER' OR time_since_last_scale > 10"
+      violation_message: "Must wait at least 10 seconds between server scaling actions"
+      suggested_fix: "Wait for previous scaling action to stabilize"
+      
+    - id: "swim_dimmer_bounds"
+      type: "safety"
+      severity: "high"
+      description: "Ensure SWIM dimmer stays within operational bounds"
+      condition: "action_type != 'SET_DIMMER' OR (0.1 <= params.value <= 1.0)"
+      violation_message: "SWIM dimmer must be between 0.1 and 1.0 for stable operation"
+      suggested_fix: "Set dimmer value within safe operational range"
+      
+    - id: "swim_minimum_servers"
+      type: "safety"
+      severity: "critical"
+      description: "Maintain minimum server count for SWIM operation"
+      condition: "action_type != 'REMOVE_SERVER' OR current_servers > 1"
+      violation_message: "Cannot remove last server - SWIM requires at least 1 server"
+      suggested_fix: "Ensure at least one server remains active"
+      
+    - id: "swim_response_time_protection"
+      type: "performance"
+      severity: "medium"
+      description: "Prevent actions that would severely degrade SWIM response time"
+      condition: "predicted_response_time < 5000"  # 5 seconds max
+      violation_message: "Action would cause unacceptable response time degradation"
+      suggested_fix: "Consider adding servers or adjusting dimmer before this action"
+
+  # SWIM-Specific Policies
+  policies:
+    - id: "swim_experimentation_policy"
+      type: "governance"
+      severity: "low"
+      description: "Allow aggressive experimentation in SWIM research environment"
+      conditions:
+        - "system_name == 'swim'"
+        - "action.risk_level != 'critical'"
+      violation_message: "Only critical actions require additional approval in SWIM"
+      suggested_fix: "Proceed with action - SWIM is designed for experimentation"
+      
+    - id: "swim_adaptation_frequency"
+      type: "temporal"
+      severity: "low"
+      description: "Allow frequent adaptations for responsive SWIM control"
+      conditions:
+        - "time_since_last_action > 5"  # 5 seconds minimum
+      violation_message: "Allow brief pause between SWIM adaptations"
+      suggested_fix: "Wait 5 seconds for action effects to stabilize"
+
+# =============================================================================
+# SWIM Performance Targets
+# =============================================================================
+# Define target performance metrics for SWIM system optimization
+swim_targets:
+  # Response time targets (milliseconds)
+  basic_response_time_target: 1000      # 1 second for basic services
+  optional_response_time_target: 2000   # 2 seconds for optional services
+  
+  # Throughput targets (requests per second)
+  basic_throughput_target: 50
+  optional_throughput_target: 30
+  
+  # Resource utilization targets
+  server_utilization_target: 0.75       # 75% utilization sweet spot
+  server_utilization_max: 0.90          # 90% maximum before scaling
+  
+  # Quality targets
+  dimmer_optimal_range: [0.7, 1.0]      # Prefer higher quality when possible
+  
+  # Adaptation responsiveness
+  adaptation_response_time_sec: 30       # Target time to respond to changes
+  stabilization_time_sec: 60             # Time to allow for action effects
+
+# =============================================================================
+# Gemini Pro Model Configuration for SWIM
+# =============================================================================
+gemini_swim_config:
+  # Model selection optimized for SWIM scenarios
+  model: "gemini-2.0-flash"
+  temperature: 0.3  # Lower temperature for more consistent SWIM analysis
+  max_tokens: 4096
+  
+  # SWIM-specific prompts
+  system_prompt: |
+    You are an expert in adaptive systems managing the SWIM (Simulated Web Infrastructure Manager) exemplar.
+    
+    SWIM System Knowledge:
+    - SWIM simulates a web service with configurable servers and QoS controls
+    - Key metrics: response_time, throughput, server_utilization, dimmer, active_servers
+    - Available actions: ADD_SERVER, REMOVE_SERVER, SET_DIMMER
+    - SWIM responds quickly to changes (2-10 seconds for effects to stabilize)
+    
+    Adaptation Strategies:
+    - High response time + low utilization → Consider dimmer adjustment first
+    - High response time + high utilization → Add servers
+    - Low utilization + acceptable response time → Consider removing servers
+    - Balance quality (dimmer) vs performance based on current load
+    
+    Your responses should:
+    - Be specific to SWIM's characteristics and constraints
+    - Consider both immediate and longer-term effects
+    - Provide confidence levels for your recommendations
+    - Suggest monitoring points to validate adaptation success
+    
+    Remember: SWIM is a research system designed for experimentation, so be more
+    aggressive with adaptations than you would with production systems.
+
+# =============================================================================
+# Bayesian World Model Configuration for SWIM
+# =============================================================================
+bayesian_swim_config:
+  # SWIM-specific parameters
+  prediction_horizon_minutes: 30        # Shorter horizon for SWIM's dynamic nature
+  max_history_points: 500               # Sufficient for SWIM's patterns
+  update_interval_seconds: 10           # Frequent updates for responsive adaptation
+  
+  # SWIM-tuned statistical thresholds
+  correlation_threshold: 0.6            # Lower threshold for SWIM's complex relationships
+  anomaly_threshold: 2.0                # More sensitive anomaly detection
+  prior_confidence: 0.3                 # Lower prior confidence for faster learning
+  learning_rate: 0.1                    # Higher learning rate for SWIM's dynamics
+  
+  # SWIM-optimized Kalman filter parameters
+  process_noise: 0.05                   # Higher process noise for SWIM's variability
+  measurement_noise: 0.05               # Lower measurement noise (SWIM is precise)
+  initial_uncertainty: 0.5              # Moderate initial uncertainty
+  
+  # Performance settings for SWIM
+  max_concurrent_operations: 8
+  computation_timeout_sec: 15           # Shorter timeout for responsive decisions

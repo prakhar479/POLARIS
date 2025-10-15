@@ -99,12 +99,26 @@ class GeminiWorldModel(WorldModel):
         try:
             self.logger.info("Initializing Gemini World Model...")
             
-            # Check for API key
+            # Check for API key with interactive prompt
             api_key = os.getenv(self.api_key_env)
             if not api_key:
-                raise WorldModelInitializationError(
-                    f"Gemini API key not found in environment variable: {self.api_key_env}"
-                )
+                # Try to get API key interactively
+                try:
+                    from polaris.common.api_key_manager import get_gemini_api_key_interactive
+                    self.logger.info("API key not found in environment, prompting user...")
+                    api_key = get_gemini_api_key_interactive("Gemini World Model")
+                    if not api_key:
+                        raise WorldModelInitializationError(
+                            f"Gemini API key not found in environment variable: {self.api_key_env}"
+                        )
+                    # Set the API key in environment for this session
+                    os.environ[self.api_key_env] = api_key
+                    self.logger.info("✅ Gemini API key obtained interactively")
+                except ImportError:
+                    raise WorldModelInitializationError(
+                        f"Gemini API key not found in environment variable: {self.api_key_env}. "
+                        f"Install API key manager dependencies: pip install keyring cryptography"
+                    )
             
             # Configure Gemini API
             genai.configure(api_key=api_key)
@@ -177,12 +191,22 @@ class GeminiWorldModel(WorldModel):
         """Test the Gemini API connection."""
         try:
             test_prompt = "Test connection. Respond with 'OK' if you can process this message."
-            response = await self._generate_response(test_prompt)
             
-            if not response or len(response.strip()) == 0:
+            # Use a shorter timeout for connection test
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._model.generate_content,
+                    test_prompt,
+                    generation_config=self._generation_config,
+                    safety_settings=self._safety_settings
+                ),
+                timeout=10.0  # Shorter timeout for connection test
+            )
+            
+            if not response or not response.text or len(response.text.strip()) == 0:
                 raise WorldModelInitializationError("API test returned empty response")
             
-            self.logger.info(f"API connection test successful: {response[:50]}...")
+            self.logger.info(f"API connection test successful: {response.text[:50]}...")
             
         except Exception as e:
             raise WorldModelInitializationError(f"API connection test failed: {str(e)}") from e
@@ -281,9 +305,10 @@ Focus strictly on technical, data-driven hypotheses."""
                 try:
                     self._last_request_time = time.time()
                     
-                    # Generate response
+                    # Generate response using asyncio.to_thread to avoid blocking
                     response = await asyncio.wait_for(
-                        self._model.generate_content_async(
+                        asyncio.to_thread(
+                            self._model.generate_content,
                             prompt,
                             generation_config=self._generation_config,
                             safety_settings=self._safety_settings

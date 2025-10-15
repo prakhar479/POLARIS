@@ -91,6 +91,48 @@ telemetry:
 
 reasoner:
   kernel_request_subject: "polaris.reasoner.kernel.requests"
+  
+  # -------------------------------------------------------------------------
+  # Action Routing Configuration
+  # -------------------------------------------------------------------------
+  # Controls how the reasoner publishes actions for execution
+  action_routing:
+    # Enable verification for all reasoner actions
+    # When true, actions are sent to verification.input_subject instead of execution.action_subject
+    enable_verification: true
+    
+    # Verification level for reasoner actions
+    # "basic", "policy", "formal", "comprehensive"
+    default_verification_level: "policy"
+    
+    # Timeout for verification requests (seconds)
+    verification_timeout_sec: 45
+    
+    # Fallback behavior if verification fails or times out
+    # "reject" - reject the action, "bypass" - send directly to execution, "retry" - retry verification
+    verification_failure_action: "reject"
+
+# =============================================================================
+# Kernel Configuration
+# =============================================================================
+# Controls the POLARIS kernel behavior for action execution and verification
+kernel:
+  # Enable verification for all kernel-executed actions
+  enable_verification: true
+  
+  # Verification timeout for kernel actions (seconds)
+  verification_timeout_sec: 30.0
+  
+  # Kernel-specific performance settings
+  performance:
+    # Maximum concurrent actions the kernel can process
+    max_concurrent_actions: 20
+    
+    # Action execution timeout (seconds)
+    action_timeout_sec: 300
+    
+    # Health check interval for kernel monitoring (seconds)
+    health_check_interval_sec: 30
 
 # =============================================================================
 # Execution Control Configuration
@@ -154,6 +196,76 @@ verification:
   default_timeout_sec: 30
   max_concurrent_verifications: 5
   enable_by_default: true
+
+  # -------------------------------------------------------------------------
+  # Action Routing Configuration
+  # -------------------------------------------------------------------------
+  # Controls whether actions are automatically routed through verification
+  routing:
+    # Enable automatic verification for all execution actions
+    # When true, components should publish to verification.input_subject instead of execution.action_subject
+    enable_automatic_routing: true
+    
+    # Bypass verification for specific action types (emergency actions, etc.)
+    bypass_action_types: []
+    
+    # Require verification for high-risk action types
+    require_verification_for: ["system_restart", "configuration_change", "resource_allocation"]
+
+  # -------------------------------------------------------------------------
+  # Verification Thresholds and Constraints
+  # -------------------------------------------------------------------------
+  # Define system-wide verification thresholds and safety constraints
+  thresholds:
+    # Maximum resource utilization before requiring verification
+    max_cpu_utilization: 0.85
+    max_memory_utilization: 0.90
+    max_disk_utilization: 0.95
+    
+    # Performance impact thresholds
+    max_response_time_increase_percent: 20.0
+    max_throughput_decrease_percent: 15.0
+    
+    # Safety constraints
+    min_system_availability: 0.99
+    max_error_rate_increase: 0.05
+    
+    # Resource allocation limits
+    max_concurrent_actions: 10
+    max_action_duration_minutes: 30
+    
+    # Change management thresholds
+    max_configuration_changes_per_hour: 5
+    require_approval_for_changes_affecting_users: true
+
+  # -------------------------------------------------------------------------
+  # Risk Assessment Configuration
+  # -------------------------------------------------------------------------
+  # Configure risk levels and corresponding verification requirements
+  risk_levels:
+    low:
+      verification_level: "basic"
+      auto_approve: true
+      require_human_approval: false
+      
+    medium:
+      verification_level: "policy"
+      auto_approve: false
+      require_human_approval: false
+      additional_checks: ["resource_impact", "dependency_analysis"]
+      
+    high:
+      verification_level: "comprehensive"
+      auto_approve: false
+      require_human_approval: true
+      additional_checks: ["formal_verification", "simulation", "rollback_plan"]
+      
+    critical:
+      verification_level: "comprehensive"
+      auto_approve: false
+      require_human_approval: true
+      require_multiple_approvals: true
+      additional_checks: ["formal_verification", "simulation", "rollback_plan", "impact_assessment"]
 
 # =============================================================================
 # Logging Configuration
@@ -269,12 +381,12 @@ digital_twin:
     # "gemini": Google Gemini LLM-based reasoning (production AI)
     # "statistical": Time series and statistical analysis
     # "hybrid": Combines multiple approaches for robust reasoning
-    implementation: "gemini"
+    implementation: "bayesian"
 
     # Path to World Model configuration file (relative to this config)
     # Contains implementation-specific settings for the selected World Model
     # IMPORTANT: This creates a dependency on world_model.yaml
-    config_path: "gemini_world_model.yaml"
+    config_path: "bayesian_world_model_config.yaml"
 
     # Automatic reload on World Model failure
     # true: Attempt to reload World Model configuration on errors

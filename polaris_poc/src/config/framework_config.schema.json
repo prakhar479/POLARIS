@@ -217,7 +217,7 @@
             "implementation": {
               "type": "string",
               "description": "World Model implementation type",
-              "enum": ["mock", "gemini", "statistical", "hybrid"],
+              "enum": ["mock", "gemini", "statistical", "hybrid", "bayesian"],
               "default": "mock"
             },
             "config_path": {

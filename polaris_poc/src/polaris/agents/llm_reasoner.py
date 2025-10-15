@@ -600,8 +600,6 @@ def create_llm_reasoner_agent(
     from .llm_reasoner import LLMReasoningImplementation
     from .multi_agent_reasoner import MultiAgentReasoner
 
-    # Use hardcoded Gemini API key
-    gemini_api_key = "AIzaSyBJ7xvmAkdrd4LFD4IWYBNMb8v4CD-lCuE"
 
     # Load the new LLM prompt configuration from the YAML file
     try:

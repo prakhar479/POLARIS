@@ -355,7 +355,7 @@ class DigitalTwinConfigManager:
             self.world_model_config["config"] = {}
         
         # Validate known implementations
-        known_implementations = ["mock", "gemini", "statistical", "hybrid"]
+        known_implementations = ["mock", "gemini", "bayesian", "statistical", "hybrid"]
         if wm_implementation not in known_implementations:
             self.logger.warning(f"Unknown World Model implementation: {wm_implementation}")
         
@@ -364,6 +364,8 @@ class DigitalTwinConfigManager:
             self._validate_gemini_config()
         
         # Additional validation for other implementations can be added here
+        elif wm_implementation == "bayesian":
+            self._validate_bayesian_config()
         elif wm_implementation == "mock":
             # Basic validation for mock config
             mock_config = self.world_model_config.get("config", {})
@@ -438,6 +440,91 @@ class DigitalTwinConfigManager:
             # Validate required vector store fields
             if "provider" not in vector_config:
                 raise DigitalTwinConfigError("Vector store configuration is missing 'provider' field")
+    
+    def _validate_bayesian_config(self) -> None:
+        """Validate Bayesian/Kalman Filter specific configuration.
+        
+        This method validates that the Bayesian configuration in the world model's config
+        section is valid. The config is expected to be in the 'config' section of the
+        world model configuration.
+        
+        Raises:
+            DigitalTwinConfigError: If Bayesian configuration is invalid
+        """
+        # Get the config section where implementation-specific settings are stored
+        config_section = self.world_model_config.get("config", {})
+        
+        # Validate prediction_horizon_minutes if specified
+        if "prediction_horizon_minutes" in config_section:
+            horizon = config_section["prediction_horizon_minutes"]
+            if not isinstance(horizon, int) or horizon <= 0 or horizon > 1440:  # Max 24 hours
+                raise DigitalTwinConfigError(
+                    f"Invalid prediction_horizon_minutes in Bayesian config: {horizon}. "
+                    f"Must be a positive integer between 1 and 1440 (24 hours)"
+                )
+        
+        # Validate correlation_threshold if specified
+        if "correlation_threshold" in config_section:
+            threshold = config_section["correlation_threshold"]
+            if not isinstance(threshold, (int, float)) or threshold < 0 or threshold > 1:
+                raise DigitalTwinConfigError(
+                    f"Invalid correlation_threshold in Bayesian config: {threshold}. "
+                    f"Must be a number between 0 and 1"
+                )
+        
+        # Validate anomaly_threshold if specified
+        if "anomaly_threshold" in config_section:
+            threshold = config_section["anomaly_threshold"]
+            if not isinstance(threshold, (int, float)) or threshold <= 0 or threshold > 10:
+                raise DigitalTwinConfigError(
+                    f"Invalid anomaly_threshold in Bayesian config: {threshold}. "
+                    f"Must be a positive number between 0 and 10 (standard deviations)"
+                )
+        
+        # Validate process_noise if specified
+        if "process_noise" in config_section:
+            noise = config_section["process_noise"]
+            if not isinstance(noise, (int, float)) or noise <= 0 or noise > 1:
+                raise DigitalTwinConfigError(
+                    f"Invalid process_noise in Bayesian config: {noise}. "
+                    f"Must be a positive number between 0 and 1"
+                )
+        
+        # Validate measurement_noise if specified
+        if "measurement_noise" in config_section:
+            noise = config_section["measurement_noise"]
+            if not isinstance(noise, (int, float)) or noise <= 0 or noise > 1:
+                raise DigitalTwinConfigError(
+                    f"Invalid measurement_noise in Bayesian config: {noise}. "
+                    f"Must be a positive number between 0 and 1"
+                )
+        
+        # Validate learning_rate if specified
+        if "learning_rate" in config_section:
+            rate = config_section["learning_rate"]
+            if not isinstance(rate, (int, float)) or rate <= 0 or rate > 1:
+                raise DigitalTwinConfigError(
+                    f"Invalid learning_rate in Bayesian config: {rate}. "
+                    f"Must be a positive number between 0 and 1"
+                )
+        
+        # Validate max_history_points if specified
+        if "max_history_points" in config_section:
+            points = config_section["max_history_points"]
+            if not isinstance(points, int) or points <= 0 or points > 100000:
+                raise DigitalTwinConfigError(
+                    f"Invalid max_history_points in Bayesian config: {points}. "
+                    f"Must be a positive integer between 1 and 100000"
+                )
+        
+        # Validate update_interval_seconds if specified
+        if "update_interval_seconds" in config_section:
+            interval = config_section["update_interval_seconds"]
+            if not isinstance(interval, (int, float)) or interval <= 0 or interval > 3600:
+                raise DigitalTwinConfigError(
+                    f"Invalid update_interval_seconds in Bayesian config: {interval}. "
+                    f"Must be a positive number between 0 and 3600 (1 hour)"
+                )
     
     def get_complete_config(self) -> Dict[str, Any]:
         """Get the complete Digital Twin configuration.

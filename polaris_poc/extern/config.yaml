@@ -1,175 +1,548 @@
-# Switch System Configuration for POLARIS Framework
-# This configuration defines how POLARIS connects to and manages the Switch system
+# SWIM Managed System Plugin Configuration
+# =========================================
+# Configuration for the SWIM (Simulated Web Infrastructure Manager) exemplar system.
+# SWIM is a self-adaptive web service simulator used for research and experimentation
+# with adaptive system strategies and POLARIS framework capabilities.
+#
+# System Overview:
+# SWIM simulates a web service with configurable servers, request processing,
+# and quality-of-service controls. It provides realistic adaptation scenarios
+# for testing POLARIS monitoring, analysis, and execution capabilities.
+#
+# Framework Integration:
+# This configuration enables POLARIS to monitor SWIM's performance metrics
+# and execute adaptation actions like server scaling and QoS adjustments.
 
-system_name: "switch_yolo_system"
-system_type: "computer_vision"
-description: "YOLO model switching system for adaptive object detection"
+# =============================================================================
+# System Identification
+# =============================================================================
+# Unique identifier for the SWIM system within POLARIS
+# Must be unique across all managed systems in the deployment
+system_name: "swim"
 
-# Connection configuration
-connection:
-  host: "localhost"
-  port: 3001
-  protocol: "http"
+# Plugin version following semantic versioning
+# Update when connector capabilities or interfaces change
+system_version: "1.0.0"
 
-# Implementation-specific configuration
+# =============================================================================
+# Implementation Configuration
+# =============================================================================
+# Defines how POLARIS connects to and controls the SWIM system
 implementation:
-  connector_class: "SwitchSystemConnector"
+  # Python connector class that implements SWIM-specific communication protocol
+  # Located in connector.py within the same directory as this configuration
+  connector_class: "swim_connector.SwimTCPConnector"
+  
+  # Connection timeout for SWIM TCP operations (seconds)
+  # SWIM typically responds quickly, but allow time for server operations
+  # Recommended: 30-60 seconds to accommodate server addition/removal
   timeout: 30.0
-  max_retries: 3
-  retry_base_delay: 1.0
-  retry_max_delay: 5.0
-
-# Switch system specific configuration
-switch_system:
-  model_file_path: "model.csv"
-  monitor_file_path: "monitor.csv" 
-  knowledge_file_path: "knowledge.csv"
-  metrics_file_path: "metrics.csv"
   
-  # Available YOLO models and their characteristics
-  models:
-    yolov5n:
-      size: "nano"
-      speed: "fastest"
-      accuracy: "lowest"
-      resource_usage: "minimal"
-    yolov5s:
-      size: "small"
-      speed: "fast"
-      accuracy: "low"
-      resource_usage: "low"
-    yolov5m:
-      size: "medium"
-      speed: "medium"
-      accuracy: "medium"
-      resource_usage: "medium"
-    yolov5l:
-      size: "large"
-      speed: "slow"
-      accuracy: "high"
-      resource_usage: "high"
-    yolov5x:
-      size: "extra_large"
-      speed: "slowest"
-      accuracy: "highest"
-      resource_usage: "maximum"
+  # Maximum retry attempts for failed SWIM operations
+  # SWIM is generally reliable, but network issues may cause transient failures
+  # Lower retry count is appropriate due to SWIM's deterministic behavior
+  max_retries: 2
 
-# Monitoring configuration
+# =============================================================================
+# Connection Configuration
+# =============================================================================
+# Network settings for connecting to the SWIM simulation
+connection:
+  # SWIM uses a custom TCP protocol for command and control
+  # The connector implements SWIM's text-based command protocol
+  protocol: "tcp"
+  
+  # SWIM server hostname or IP address
+  # Development: "localhost" for local SWIM instances
+  # Docker: Use service name from docker-compose (e.g., "swim")
+  # Production: Use actual SWIM server address
+  host: "localhost"
+  
+  # SWIM TCP control port (default: 4242)
+  # This is SWIM's standard control interface port
+  # Ensure this port is accessible and not blocked by firewalls
+  port: 4242
+  
+  # SWIM does not require authentication in standard configuration
+  # Authentication can be added through SWIM's configuration if needed
+  auth:
+    type: "none"
+  
+  # SWIM typically runs without SSL in research environments
+  # SSL can be enabled if SWIM is configured with TLS support
+  ssl:
+    enabled: false
+
+# =============================================================================
+# Monitoring Configuration
+# =============================================================================
+# Defines metrics collection from SWIM to enable POLARIS adaptive capabilities.
+# SWIM provides comprehensive performance and resource metrics that reflect
+# the state of the simulated web infrastructure.
 monitoring:
-  metrics_collection_interval: 1.0  # seconds
-  health_check_interval: 30.0       # seconds
+  # Enable continuous monitoring of SWIM metrics
+  # Required for POLARIS to make informed adaptation decisions
+  enabled: true
   
-  # Key metrics to monitor
-  key_metrics:
-    - "image_processing_time"
-    - "confidence"
-    - "utility"
-    - "cpu_usage"
-    - "detection_boxes"
-    - "total_processed"
-
-# Adaptation configuration
-adaptation:
-  # Thresholds for triggering adaptations
-  thresholds:
-    response_time_max: 2.0      # seconds
-    confidence_min: 0.5         # minimum acceptable confidence
-    utility_min: 0.3           # minimum acceptable utility
-    cpu_usage_max: 80.0        # percentage
+  # Monitoring interval in seconds
+  # 5.0 seconds provides good balance between data freshness and system load
+  # SWIM updates metrics continuously, so frequent sampling captures dynamics
+  # Adjust based on adaptation requirements and system load considerations
+  interval: 5.0
   
-  # Adaptation strategies
-  strategies:
-    - name: "performance_optimization"
-      trigger: "response_time_high"
-      action: "switch_to_faster_model"
-    - name: "accuracy_optimization" 
-      trigger: "confidence_low"
-      action: "switch_to_accurate_model"
-    - name: "resource_optimization"
-      trigger: "cpu_usage_high"
-      action: "switch_to_efficient_model"
-
-# Knowledge base configuration
-knowledge_base:
-  # Default thresholds for model switching based on input rate
-  default_thresholds:
-    yolov5n: [0.0, 2.0]    # [min_rate, max_rate]
-    yolov5s: [2.0, 5.0]
-    yolov5m: [5.0, 10.0]
-    yolov5l: [10.0, 20.0]
-    yolov5x: [20.0, 100.0]
-  
-  # Learning parameters
-  learning:
-    enabled: true
-    adaptation_window: 300    # seconds
-    confidence_threshold: 0.8
-    update_frequency: 60      # seconds
-
-# Execution configuration
-execution:
-  # Actions that can be performed on the system
-  available_actions:
-    - name: "switch_model"
-      parameters: ["model_name"]
-      description: "Switch to a different YOLO model"
-    - name: "update_thresholds"
-      parameters: ["model_thresholds"]
-      description: "Update model switching thresholds"
-    - name: "start_processing"
-      parameters: []
-      description: "Start image processing pipeline"
-    - name: "stop_processing"
-      parameters: []
-      description: "Stop image processing pipeline"
-    - name: "restart_processing"
-      parameters: []
-      description: "Restart image processing pipeline"
-
-# Verification configuration
-verification:
-  # Constraints to verify before executing actions
-  constraints:
-    - name: "valid_model"
-      type: "enum"
-      values: ["yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x"]
-      description: "Model must be one of the available YOLO models"
-    - name: "threshold_range"
-      type: "range"
-      min: 0.0
-      max: 100.0
-      description: "Thresholds must be within valid range"
-    - name: "processing_state"
-      type: "boolean"
-      description: "Processing must be in valid state for certain actions"
-
-# Logging configuration
-logging:
-  level: "INFO"
-  format: "json"
-  include_metrics: true
-  include_performance: true
-  
-  # Log rotation
-  rotation:
-    max_size: "100MB"
-    backup_count: 5
+  # Core SWIM metrics that reflect system state and performance
+  # These metrics are used by POLARIS World Models for analysis and decision making
+  metrics:
+    # -------------------------------------------------------------------------
+    # Quality of Service Metrics
+    # -------------------------------------------------------------------------
+    - name: "dimmer"
+      command: "get_dimmer"
+      unit: "ratio"
+      type: "float"
+      description: "Current dimmer setting (QoS adjustment factor, 0.0-1.0). Lower values reduce quality to improve performance."
+      category: "performance"
     
-# Performance configuration
-performance:
-  # Connection pooling
-  connection_pool:
-    max_connections: 10
-    keepalive_timeout: 30
+    # -------------------------------------------------------------------------
+    # Resource Capacity Metrics
+    # -------------------------------------------------------------------------
+    - name: "active_servers"
+      command: "get_active_servers"
+      unit: "count"
+      type: "integer"
+      description: "Number of currently active servers processing requests. Key indicator of system capacity."
+      category: "resource"
+    
+    - name: "max_servers"
+      command: "get_max_servers"
+      unit: "count"
+      type: "integer"
+      description: "Maximum number of servers allowed by system configuration. Represents capacity ceiling."
+      category: "resource"
+    
+    - name: "servers"
+      command: "get_servers"
+      unit: "count"
+      type: "integer"
+      description: "Total number of servers (active + inactive). May differ from active_servers during scaling."
+      category: "resource"
+    
+    # -------------------------------------------------------------------------
+    # Performance Metrics by Service Type
+    # -------------------------------------------------------------------------
+    - name: "basic_response_time"
+      command: "get_basic_rt"
+      unit: "ms"
+      type: "float"
+      description: "Response time for basic service requests. Essential service with higher priority."
+      category: "performance"
+    
+    - name: "optional_response_time"
+      command: "get_opt_rt"
+      unit: "ms"
+      type: "float"
+      description: "Response time for optional service requests. Lower priority, affected by dimmer setting."
+      category: "performance"
+    
+    - name: "basic_throughput"
+      command: "get_basic_throughput"
+      unit: "req/s"
+      type: "float"
+      description: "Throughput for basic service (requests per second). Indicates processing capacity."
+      category: "performance"
+    
+    - name: "optional_throughput"
+      command: "get_opt_throughput"
+      unit: "req/s"
+      type: "float"
+      description: "Throughput for optional service (requests per second). Varies with QoS settings."
+      category: "performance"
+    
+    # -------------------------------------------------------------------------
+    # Load and Demand Metrics
+    # -------------------------------------------------------------------------
+    - name: "arrival_rate"
+      command: "get_arrival_rate"
+      unit: "req/s"
+      type: "float"
+      description: "Current request arrival rate (requests per second). Represents system load demand."
+      category: "performance"
+    
+    - name: "utilization_server_0"
+      command: "get_utilization server1"
+      server_index: 0
+      unit: "ratio"
+      type: "float"
+      description: "Current server utilization for server 0"
+      category: "resource"
+
+    - name: "utilization_server_1"
+      command: "get_utilization server2"
+      server_index: 1
+      unit: "ratio"
+      type: "float"
+      description: "Current server utilization for server 1"
+      category: "resource"
+
+    - name: "utilization_server_2"
+      command: "get_utilization server3"
+      server_index: 2
+      unit: "ratio"
+      type: "float"
+      description: "Current server utilization for server 2"
+      category: "resource"
+
   
-  # Caching
-  cache:
-    enabled: true
-    ttl: 60  # seconds
-    max_entries: 1000
+  # -------------------------------------------------------------------------
+  # Derived Metrics - Calculated Indicators
+  # -------------------------------------------------------------------------
+  # These metrics combine base metrics to provide higher-level system indicators
+  # useful for adaptation decision making and system analysis
+  derived_metrics:
+    - name: "average_response_time"
+      formula: "(basic_response_time * basic_throughput + optional_response_time * optional_throughput) / (basic_throughput + optional_throughput)"
+      unit: "ms"
+      description: "Weighted average response time across all services. Overall performance indicator."
+    
+    - name: "server_utilization"
+      formula: "(utilization_server_0 + utilization_server_1 + utilization_server_2) / active_servers"
+      unit: "ratio"
+      description: "Average server utilization ratio (0.0-1.0). Indicates how close system is to capacity limits."
+
+
+  # -------------------------------------------------------------------------
+  # Monitoring Strategy Configuration
+  # -------------------------------------------------------------------------
+  strategies:
+    # Collect all metrics in a single batch operation for efficiency
+    # SWIM supports batch queries, reducing TCP round-trips
+    batch_collection: true
+    
+    # SWIM is single-threaded, so parallel collection is not beneficial
+    # Sequential collection avoids potential race conditions in SWIM
+    parallel_collection: false
+    
+    # Maximum concurrent operations (not applicable with parallel_collection=false)
+    # Set to 1 to ensure sequential processing
+    max_concurrent: 1
+    
+    # Error handling strategy for SWIM monitoring
+    # "fail": Stop monitoring if any metric fails (recommended for SWIM)
+    # SWIM is deterministic, so failures usually indicate serious issues
+    error_handling: "fail"
+
+# =============================================================================
+# Execution Configuration
+# =============================================================================
+# Defines adaptation actions that POLARIS can perform on SWIM to improve
+# system performance and meet quality objectives. These actions enable
+# closed-loop adaptation based on monitoring data and World Model analysis.
+execution:
+  # Enable execution capabilities for SWIM adaptation
+  # SWIM is designed for adaptation experiments, so execution should be enabled
+  enabled: true
   
-  # Batch processing
-  batch:
-    enabled: false  # Switch system processes one image at a time
-    max_batch_size: 1
-    batch_timeout: 1.0
+  # Available adaptation actions for SWIM system management
+  # These actions correspond to SWIM's built-in adaptation mechanisms
+  actions:
+    # -------------------------------------------------------------------------
+    # Server Scaling Actions
+    # -------------------------------------------------------------------------
+    - type: "ADD_SERVER"
+      command: "add_server"
+      description: "Add a new server to increase system capacity and reduce response times"
+      parameters: []  # No parameters required - SWIM adds one server per action
+      
+      # Safety preconditions to prevent invalid operations
+      preconditions:
+        - check: "get_servers < get_max_servers"
+          message: "Cannot add server: already at maximum capacity limit"
+      
+      # Impact assessment for adaptation planning
+      impact:
+        severity: "medium"        # Moderate impact on system resources and performance
+        reversible: true          # Can be reversed with REMOVE_SERVER action
+        estimated_duration: 2.0   # SWIM server addition takes ~2 seconds
+    
+    - type: "REMOVE_SERVER"
+      command: "remove_server"
+      description: "Remove a server to reduce resource usage (may increase response times)"
+      parameters: []  # No parameters required - SWIM removes one server per action
+      
+      # Safety preconditions to maintain minimum system capacity
+      preconditions:
+        - check: "get_servers > 1"
+          message: "Cannot remove server: minimum of 1 server required for system operation"
+      
+      impact:
+        severity: "medium"        # Moderate impact - reduces capacity
+        reversible: true          # Can be reversed with ADD_SERVER action
+        estimated_duration: 2.0   # SWIM server removal takes ~2 seconds
+    
+    # -------------------------------------------------------------------------
+    # Scaling Actions (Aliases for Server Management)
+    # -------------------------------------------------------------------------
+    - type: "SCALE_UP"
+      command: "add_server"
+      description: "Scale up system capacity by adding servers"
+      parameters:
+        - name: "count"
+          type: "integer"
+          required: false
+          validation:
+            min: 1
+            max: 5
+      
+      preconditions:
+        - check: "get_servers < get_max_servers"
+          message: "Cannot scale up: already at maximum capacity limit"
+      
+      impact:
+        severity: "medium"
+        reversible: true
+        estimated_duration: 2.0
+    
+    - type: "SCALE_DOWN"
+      command: "remove_server"
+      description: "Scale down system capacity by removing servers"
+      parameters:
+        - name: "count"
+          type: "integer"
+          required: false
+          validation:
+            min: 1
+            max: 3
+      
+      preconditions:
+        - check: "get_servers > 1"
+          message: "Cannot scale down: minimum of 1 server required"
+      
+      impact:
+        severity: "medium"
+        reversible: true
+        estimated_duration: 2.0
+
+    # -------------------------------------------------------------------------
+    # Quality of Service Actions
+    # -------------------------------------------------------------------------
+    - type: "SET_DIMMER"
+      command: "set_dimmer {value}"
+      description: "Adjust quality of service by setting dimmer value (0.0=lowest quality, 1.0=highest quality)"
+      
+      # Dimmer value parameter with validation
+      parameters:
+        - name: "value"
+          type: "float"
+          required: true
+          validation:
+            min: 0.0  # Minimum QoS (fastest processing, lowest quality)
+            max: 1.0  # Maximum QoS (slowest processing, highest quality)
+      
+      impact:
+        severity: "low"           # Low impact - immediate effect, no resource changes
+        reversible: true          # Can be adjusted to any other value
+        estimated_duration: 0.5   # SWIM dimmer adjustment is nearly instantaneous
+    
+    - type: "ADJUST_QOS"
+      command: "set_dimmer {value}"
+      description: "Alias for SET_DIMMER - adjust quality of service level"
+      
+      # Same parameters and validation as SET_DIMMER
+      parameters:
+        - name: "value"
+          type: "float"
+          required: true
+          validation:
+            min: 0.0
+            max: 1.0
+      
+      impact:
+        severity: "low"
+        reversible: true
+        estimated_duration: 0.5
+  
+  # -------------------------------------------------------------------------
+  # Execution Constraints and Safety Limits
+  # -------------------------------------------------------------------------
+  constraints:
+    # Minimum interval between actions (seconds)
+    # SWIM can handle rapid actions, but some spacing helps with stability analysis
+    # Set to 0.0 for maximum responsiveness in research scenarios
+    min_interval: 0.0
+    
+    # Maximum concurrent actions
+    # SWIM is single-threaded and processes actions sequentially
+    # Must be set to 1 to prevent action conflicts and ensure deterministic behavior
+    max_concurrent: 1
+    
+    # Maximum number of queued actions
+    # Large queue size accommodates burst adaptation scenarios
+    # SWIM processes actions quickly, so large queue is safe
+    queue_size: 1000
+
+# =============================================================================
+# Plugin Metadata and Documentation
+# =============================================================================
+metadata:
+  # Original SWIM system authors and maintainers
+  author: "CMU ABLE Team"
+  
+  # Comprehensive description of SWIM and its role in POLARIS
+  description: |
+    SWIM (Simulated Web Infrastructure Manager) is a self-adaptive exemplar system
+    developed by Carnegie Mellon University's ABLE research group. It simulates
+    a web service infrastructure with realistic performance characteristics,
+    server scaling capabilities, and quality-of-service controls.
+    
+    SWIM serves as an ideal testbed for POLARIS adaptive system research,
+    providing:
+    - Realistic web service performance dynamics
+    - Multiple adaptation mechanisms (scaling, QoS adjustment)
+    - Deterministic behavior for reproducible experiments
+    - Comprehensive monitoring metrics
+    - Fast execution suitable for rapid experimentation
+    
+    This plugin enables POLARIS to monitor SWIM's performance metrics and
+    execute adaptation actions, creating a complete closed-loop adaptive system
+    for research and demonstration purposes.
+  
+  # Official SWIM documentation and source code
+  documentation: "https://github.com/cps-sei/swim"
+  
+  # Classification tags for plugin discovery and organization
+  tags:
+    - "web-service"      # Simulates web service infrastructure
+    - "self-adaptive"    # Designed for adaptation research
+    - "exemplar"         # Research exemplar system
+    - "simulation"       # Simulated rather than real system
+    - "research"         # Primarily for research use
+    - "cmu"              # Developed at Carnegie Mellon University
+
+# =============================================================================
+# SWIM-Specific Configuration Notes
+# =============================================================================
+
+# SWIM System Characteristics:
+# - Single-threaded simulation with deterministic behavior
+# - Fast execution suitable for rapid experimentation cycles
+# - Two service types: basic (essential) and optional (quality-dependent)
+# - Server pool with dynamic scaling capabilities
+# - Dimmer-based quality-of-service control mechanism
+# - TCP-based control interface with text command protocol
+
+# Typical SWIM Adaptation Scenarios:
+# 1. Load Increase Response:
+#    - Monitor: arrival_rate increases, response_time increases
+#    - Adapt: ADD_SERVER to increase capacity
+#    - Verify: response_time decreases, server_utilization decreases
+#
+# 2. Quality vs Performance Trade-off:
+#    - Monitor: response_time too high under load
+#    - Adapt: SET_DIMMER to lower value (reduce quality, improve performance)
+#    - Verify: response_time decreases, throughput increases
+#
+# 3. Resource Optimization:
+#    - Monitor: server_utilization low, arrival_rate decreased
+#    - Adapt: REMOVE_SERVER to reduce resource usage
+#    - Verify: server_utilization increases, response_time remains acceptable
+
+# Integration with POLARIS World Models:
+# - Mock Model: Uses predefined responses, good for testing plugin integration
+# - Statistical Model: Analyzes SWIM metric trends, predicts future performance
+# - Gemini Model: Provides natural language analysis of SWIM behavior
+# - Hybrid Model: Combines approaches for robust SWIM adaptation strategies
+
+# Common Configuration Customizations:
+# - Adjust monitoring.interval for different temporal resolutions (1-60 seconds)
+# - Modify constraints.min_interval to control adaptation aggressiveness
+# - Customize preconditions to implement different safety policies
+# - Add derived metrics for domain-specific performance indicators
+
+# Troubleshooting Common Issues:
+# 1. Connection failures: Verify SWIM is running and port 4242 is accessible
+# 2. Command failures: Check SWIM console for error messages
+# 3. Metric collection errors: Ensure SWIM simulation is active (not paused)
+# 4. Action execution failures: Verify preconditions and SWIM state consistency
+
+# =============================================================================
+# Verification Configuration
+# =============================================================================
+# Defines safety constraints and policies for SWIM action verification.
+# The verification adapter validates actions before execution to ensure
+# system safety, policy compliance, and operational constraints are met.
+verification:
+  # Safety and Resource Constraints
+  constraints:
+    - id: "max_servers_limit"
+      type: "resource"
+      condition: "action_type != 'ADD_SERVER' or (current_state.get('active_servers', 0) + params.get('count', 1)) <= current_state.get('max_servers', 10)"
+      severity: "critical"
+      description: "Cannot exceed maximum server limit"
+      suggested_fix: "Remove existing servers before adding new ones or increase max_servers limit"
+      
+    - id: "min_servers_requirement"
+      type: "safety"
+      condition: "action_type != 'REMOVE_SERVER' or (current_state.get('active_servers', 1) - params.get('count', 1)) >= 1"
+      severity: "critical"
+      description: "Must maintain at least one active server"
+      suggested_fix: "Ensure minimum server count is maintained"
+      
+    - id: "dimmer_range_check"
+      type: "safety"
+      condition: "action_type != 'SET_DIMMER' or (0.0 <= params.get('value', 1.0) <= 1.0)"
+      severity: "high"
+      description: "Dimmer value must be between 0.0 and 1.0"
+      suggested_fix: "Set dimmer value within valid range [0.0, 1.0]"
+      
+    - id: "utilization_threshold"
+      type: "resource"
+      condition: "action_type != 'REMOVE_SERVER' or current_state.get('utilization', 0) < 0.8"
+      severity: "high"
+      description: "Cannot remove servers when utilization is high"
+      suggested_fix: "Wait for utilization to decrease before removing servers"
+
+  # Organizational Policies
+  policies:
+    - id: "change_management"
+      name: "Change Management Policy"
+      description: "Basic change management for SWIM system"
+      rules:
+        - id: "approval_required_for_removal"
+          condition: "action_type != 'REMOVE_SERVER' or action.get('approved_by') is not None"
+          severity: "medium"
+          description: "Server removal should have approval"
+          suggested_fix: "Add approval metadata to action"
+        
+        - id: "gradual_scaling"
+          condition: "action_type != 'ADD_SERVER' or params.get('count', 1) <= 2"
+          severity: "low"
+          description: "Scale gradually to avoid resource waste"
+          suggested_fix: "Add servers incrementally rather than in large batches"
+
+  # Verification Settings
+  settings:
+    default_timeout_sec: 30
+    max_concurrent: 3
+    enable_digital_twin: true
+    enable_formal_verification: false
+    
+    verification_levels:
+      basic:
+        enabled: true
+        timeout_sec: 5
+      policy:
+        enabled: true
+        timeout_sec: 15
+      formal:
+        enabled: false
+        timeout_sec: 30
+      comprehensive:
+        enabled: false
+        timeout_sec: 60
+
+  # External Integrations
+  integrations:
+    digital_twin:
+      grpc_endpoint: "localhost:50051"
+      simulation_horizon_minutes: 30
+      timeout_sec: 30

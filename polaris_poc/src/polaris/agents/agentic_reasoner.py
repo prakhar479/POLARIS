@@ -33,7 +33,11 @@ from .reasoner_agent import (
     DTDiagnosis,
     DTResponse,
     GRPCDigitalTwinClient,
+    ReasonerAgent,
 )
+
+from .reasoner_core import ReasoningType
+from .improved_grpc_client import ImprovedGRPCDigitalTwinClient
 
 
 class AgenticTool:
@@ -156,12 +160,17 @@ class DigitalTwinTool(AgenticTool):
             if not self.dt_interface:
                 return {"success": False, "error": "Digital twin interface not available"}
 
-            # Ensure connection is established
+            # Ensure connection is established with better error handling
             if hasattr(self.dt_interface, "stub") and not self.dt_interface.stub:
                 self.logger.info("Digital twin not connected, attempting to connect...")
-                await self.dt_interface.connect()
-                if not self.dt_interface.stub:
-                    return {"success": False, "error": "Failed to connect to digital twin"}
+                try:
+                    await asyncio.wait_for(self.dt_interface.connect(), timeout=15.0)
+                    if not self.dt_interface.stub:
+                        return {"success": False, "error": "Failed to connect to digital twin"}
+                except asyncio.TimeoutError:
+                    return {"success": False, "error": "Digital twin connection timeout"}
+                except Exception as e:
+                    return {"success": False, "error": f"Digital twin connection failed: {str(e)}"}
 
             operation = kwargs.get("operation", "query")
             self.logger.debug(f"Executing digital twin operation: {operation}")
@@ -262,7 +271,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
 
         # Initialize Gemini client
-        self.client = genai.Client(api_key="AIzaSyBJ7xvmAkdrd4LFD4IWYBNMb8v4CD-lCuE")
+        self.client = genai.Client(api_key=self.api_key)
 
         # Initialize tools
         self.tools = {}
@@ -810,28 +819,87 @@ def create_agentic_reasoner_agent(
     llm_api_key: str,
     nats_url: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
+    use_improved_grpc: bool = True,
+    grpc_timeout_config: Optional[Dict[str, float]] = None,
 ) -> "ReasonerAgent":
     """
     Create a reasoner agent with agentic LLM reasoning implementation using Gemini Flash 2.5.
+    
+    Args:
+        agent_id: Unique identifier for the agent
+        config_path: Path to configuration file
+        llm_api_key: API key for Gemini LLM
+        nats_url: NATS server URL
+        logger: Logger instance
+        use_improved_grpc: Whether to use the improved GRPC client
+        grpc_timeout_config: Custom timeout configuration for GRPC client
     """
     from .reasoner_agent import ReasonerAgent, ReasoningType
 
-    agent = ReasonerAgent(
-        agent_id=agent_id,
-        reasoning_implementations={},
-        config_path=config_path,
-        nats_url=nats_url,
-        logger=logger,
-    )
+    # Create agent with custom GRPC client if requested
+    if use_improved_grpc:
+        # Load configuration to get GRPC address
+        import yaml
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        grpc_address = config.get('digital_twin', {}).get('grpc', {}).get('address', 'localhost:50051')
+        
+        # Default timeout configuration
+        default_timeouts = {
+            'query_timeout': 20.0,
+            'simulation_timeout': 90.0,
+            'diagnosis_timeout': 45.0,
+            'connection_timeout': 15.0,
+            'default_timeout': 30.0
+        }
+        
+        if grpc_timeout_config:
+            default_timeouts.update(grpc_timeout_config)
+        
+        # Create improved GRPC client
+        improved_dt_client = ImprovedGRPCDigitalTwinClient(
+            grpc_address=grpc_address,
+            logger=logger,
+            **default_timeouts,
+            max_retries=3,
+            circuit_breaker_enabled=True,
+            failure_threshold=5,
+            recovery_timeout=60.0
+        )
+        
+        # Create agent with standard constructor
+        agent = ReasonerAgent(
+            agent_id=agent_id,
+            reasoning_implementations={},
+            config_path=config_path,
+            nats_url=nats_url,
+            logger=logger,
+        )
+        
+        # Replace the default GRPC client with improved one
+        if agent.dt_query:
+            agent.dt_query = improved_dt_client
+            if logger:
+                logger.info("Replaced default GRPC client with improved version")
+    else:
+        # Use default agent creation
+        agent = ReasonerAgent(
+            agent_id=agent_id,
+            reasoning_implementations={},
+            config_path=config_path,
+            nats_url=nats_url,
+            logger=logger,
+        )
 
     # Log available interfaces
     if logger:
         logger.info(f"Creating agentic reasoner with KB interface: {agent.kb_query is not None}")
         logger.info(f"Creating agentic reasoner with DT interface: {agent.dt_query is not None}")
         if agent.dt_query:
-            logger.info(
-                f"Digital Twin address: {getattr(agent.dt_query, 'grpc_address', 'unknown')}"
-            )
+            grpc_addr = getattr(agent.dt_query, 'grpc_address', 'unknown')
+            client_type = "ImprovedGRPCDigitalTwinClient" if use_improved_grpc else "GRPCDigitalTwinClient"
+            logger.info(f"Digital Twin client: {client_type} at {grpc_addr}")
 
     # Create agentic reasoner for each reasoning type
     for reasoning_type in ReasoningType:
@@ -844,5 +912,116 @@ def create_agentic_reasoner_agent(
         )
 
         agent.add_reasoning_implementation(reasoning_type, agentic_reasoner)
+        if logger:
+            logger.info(f"Added reasoning implementation for {reasoning_type.value}")
 
     return agent
+
+
+def create_agentic_reasoner_with_bayesian_world_model(
+    agent_id: str,
+    config_path: str,
+    llm_api_key: str,
+    nats_url: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+) -> "ReasonerAgent":
+    """
+    Create a reasoner agent that uses the Bayesian/Kalman filter world model
+    instead of the Gemini LLM world model for deterministic predictions.
+    """
+    # Update config to use Bayesian world model
+    import yaml
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Modify world model configuration
+    if 'world_model' not in config:
+        config['world_model'] = {}
+    
+    config['world_model']['implementation'] = 'bayesian'
+    config['world_model']['config'] = {
+        'prediction_horizon_minutes': 120,
+        'max_history_points': 2000,
+        'correlation_threshold': 0.7,
+        'anomaly_threshold': 2.5,
+        'process_noise': 0.01,
+        'measurement_noise': 0.1,
+        'learning_rate': 0.05
+    }
+    
+    # Ensure digital twin configuration exists for GRPC client
+    if 'digital_twin' not in config:
+        config['digital_twin'] = {}
+    if 'grpc' not in config['digital_twin']:
+        config['digital_twin']['grpc'] = {}
+    
+    # Set default GRPC configuration if not present
+    grpc_config = config['digital_twin']['grpc']
+    if 'host' not in grpc_config:
+        grpc_config['host'] = 'localhost'
+    if 'port' not in grpc_config:
+        grpc_config['port'] = 50051
+    
+    # Save modified config temporarily
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.dump(config, f)
+        temp_config_path = f.name
+    
+    try:
+        # Create standard reasoner agent (it will use the modified config)
+        agent = ReasonerAgent(
+            agent_id=agent_id,
+            reasoning_implementations={},
+            config_path=temp_config_path,
+            nats_url=nats_url,
+            logger=logger,
+        )
+        
+        # Replace the default GRPC client with improved one if possible
+        if agent.dt_query:
+            try:
+                grpc_address = f"{grpc_config['host']}:{grpc_config['port']}"
+                improved_client = ImprovedGRPCDigitalTwinClient(
+                    grpc_address=grpc_address,
+                    logger=logger,
+                    query_timeout=30.0,
+                    simulation_timeout=120.0,
+                    diagnosis_timeout=60.0,
+                    max_retries=3,
+                    circuit_breaker_enabled=True
+                )
+                agent.dt_query = improved_client
+                if logger:
+                    logger.info("Replaced default GRPC client with improved version")
+            except Exception as e:
+                if logger:
+                    logger.warning(f"Could not create improved GRPC client, using default: {e}")
+
+        # Create agentic reasoner for each reasoning type
+        for reasoning_type in ReasoningType:
+            agentic_reasoner = AgenticLLMReasoner(
+                api_key=llm_api_key,
+                reasoning_type=reasoning_type,
+                kb_query_interface=agent.kb_query,
+                dt_interface=agent.dt_query,
+                logger=logger,
+            )
+            agent.add_reasoning_implementation(reasoning_type, agentic_reasoner)
+            if logger:
+                logger.info(f"Added reasoning implementation for {reasoning_type.value}")
+        
+        if logger:
+            logger.info("Created agentic reasoner with Bayesian/Kalman filter world model")
+            logger.info(f"Digital Twin will use Bayesian world model at {grpc_address}")
+        
+        return agent
+        
+    finally:
+        # Clean up temporary config file
+        try:
+            os.unlink(temp_config_path)
+        except Exception:
+            pass

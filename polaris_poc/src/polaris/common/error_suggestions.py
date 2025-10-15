@@ -326,9 +326,10 @@ class ConfigurationErrorSuggestionDatabase:
             # World Model Configuration
             "digital_twin.world_model.implementation": {
                 "invalid_enum": [
-                    "Valid implementations: mock, gemini, statistical, hybrid",
+                    "Valid implementations: mock, gemini, bayesian, statistical, hybrid",
                     "Use 'mock' for development and testing (no external dependencies)",
                     "Use 'gemini' for AI-powered reasoning (requires API key)",
+                    "Use 'bayesian' for deterministic statistical predictions (Kalman filtering)",
                     "Use 'statistical' for time series analysis (requires historical data)",
                     "Use 'hybrid' for combined approach (most robust)"
                 ]
@@ -359,6 +360,52 @@ class ConfigurationErrorSuggestionDatabase:
                     "gemini-2.5-flash: Fast and cost-effective",
                     "gemini-2.5-pro: More capable but higher cost",
                     "Check Google AI documentation for latest model versions"
+                ]
+            },
+            
+            # Bayesian Configuration
+            "bayesian.prediction_horizon_minutes": {
+                "out_of_range": [
+                    "Prediction horizon must be between 1 and 1440 minutes (24 hours)",
+                    "Use 60-120 minutes for most applications",
+                    "Longer horizons require more computation and may be less accurate",
+                    "Consider your system's dynamics when setting horizon"
+                ]
+            },
+            
+            "bayesian.correlation_threshold": {
+                "out_of_range": [
+                    "Correlation threshold must be between 0.0 and 1.0",
+                    "Use 0.7 for moderate correlation detection (recommended)",
+                    "Use 0.8-0.9 for strong correlations only",
+                    "Lower values detect more correlations but may include noise"
+                ]
+            },
+            
+            "bayesian.anomaly_threshold": {
+                "out_of_range": [
+                    "Anomaly threshold must be between 0.1 and 10.0 standard deviations",
+                    "Use 2.0-2.5 for balanced anomaly detection (recommended)",
+                    "Use 3.0+ for fewer false positives",
+                    "Use 1.5-2.0 for more sensitive detection"
+                ]
+            },
+            
+            "bayesian.process_noise": {
+                "out_of_range": [
+                    "Process noise must be between 0.001 and 1.0",
+                    "Use 0.01 for stable systems (recommended)",
+                    "Use 0.05-0.1 for more dynamic systems",
+                    "Higher values allow faster adaptation but reduce stability"
+                ]
+            },
+            
+            "bayesian.measurement_noise": {
+                "out_of_range": [
+                    "Measurement noise must be between 0.001 and 1.0",
+                    "Use 0.1 for typical sensor noise (recommended)",
+                    "Use 0.05 for high-quality measurements",
+                    "Use 0.2-0.5 for noisy measurements"
                 ]
             },
             
@@ -538,6 +585,14 @@ class ConfigurationErrorSuggestionDatabase:
                 "Verify statistical libraries are installed"
             ],
             
+            "digital_twin.world_model.implementation->bayesian.*": [
+                "Bayesian implementation requires bayesian section in world_model.yaml",
+                "Install required packages: pip install numpy scipy filterpy",
+                "Configure Kalman filter parameters (process_noise, measurement_noise)",
+                "Set appropriate correlation and anomaly thresholds",
+                "Ensure sufficient memory for historical data storage"
+            ],
+            
             "telemetry.stream_subject->nats.url": [
                 "Telemetry subjects require NATS server to be accessible",
                 "Ensure NATS URL is valid and server is running",
@@ -647,12 +702,21 @@ class ConfigurationErrorSuggestionDatabase:
             "digital_twin.grpc.host": ["127.0.0.1", "0.0.0.0", "10.0.1.100"],
             
             # World Model Examples
-            "digital_twin.world_model.implementation": ["mock", "gemini", "statistical", "hybrid"],
+            "digital_twin.world_model.implementation": ["mock", "gemini", "bayesian", "statistical", "hybrid"],
             
             # Gemini Examples
             "gemini.model": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.0-pro"],
             "gemini.temperature": ["0.0", "0.3", "0.7", "1.0"],
             "gemini.api_key_env": ["GEMINI_API_KEY", "GOOGLE_AI_API_KEY"],
+            
+            # Bayesian Examples
+            "bayesian.prediction_horizon_minutes": ["60", "120", "240", "480"],
+            "bayesian.correlation_threshold": ["0.5", "0.7", "0.8", "0.9"],
+            "bayesian.anomaly_threshold": ["2.0", "2.5", "3.0"],
+            "bayesian.process_noise": ["0.01", "0.05", "0.1"],
+            "bayesian.measurement_noise": ["0.1", "0.2", "0.5"],
+            "bayesian.learning_rate": ["0.01", "0.05", "0.1", "0.2"],
+            "bayesian.max_history_points": ["1000", "2000", "5000", "10000"],
             
             # Logger Examples
             "logger.level": ["DEBUG", "INFO", "WARNING", "ERROR"],

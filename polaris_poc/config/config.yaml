@@ -1,0 +1,78 @@
+# Plugin Configuration for Verification Adapter
+# This file is loaded by the verification adapter as plugin configuration
+
+verification:
+  # System identification
+  system_name: "polaris_framework"
+  
+  # Verification Settings
+  settings:
+    default_timeout_sec: 30.0
+    max_concurrent: 5
+    queue_size: 1000
+    enable_digital_twin: true
+    enable_formal_verification: false
+    
+  # Safety Constraints
+  constraints:
+    - id: "cpu_utilization_limit"
+      type: "resource"
+      severity: "high"
+      description: "Prevent actions that would cause excessive CPU utilization"
+      condition: "system.cpu_utilization < 0.90"
+      violation_message: "Action would exceed CPU utilization limit (90%)"
+      suggested_fix: "Reduce action scope or wait for lower system load"
+      
+    - id: "memory_utilization_limit"
+      type: "resource"
+      severity: "high"
+      description: "Prevent actions that would cause excessive memory utilization"
+      condition: "system.memory_utilization < 0.85"
+      violation_message: "Action would exceed memory utilization limit (85%)"
+      suggested_fix: "Free memory or reduce action memory requirements"
+      
+    - id: "concurrent_actions_limit"
+      type: "safety"
+      severity: "medium"
+      description: "Limit number of concurrent system modifications"
+      condition: "system.concurrent_actions < 10"
+      violation_message: "Too many concurrent actions in progress"
+      suggested_fix: "Wait for current actions to complete"
+      
+    - id: "system_availability_check"
+      type: "safety"
+      severity: "critical"
+      description: "Ensure system availability remains above threshold"
+      condition: "system.availability > 0.99"
+      violation_message: "System availability too low for safe action execution"
+      suggested_fix: "Restore system health before executing actions"
+  
+  # Organizational Policies
+  policies:
+    - id: "change_management_policy"
+      type: "governance"
+      severity: "medium"
+      description: "Enforce change management procedures for system modifications"
+      conditions:
+        - "action.type != 'emergency'"
+        - "action.has_approval == true OR action.risk_level == 'low'"
+      violation_message: "Action requires change management approval"
+      suggested_fix: "Obtain proper approvals through change management process"
+      
+    - id: "business_hours_policy"
+      type: "temporal"
+      severity: "low"
+      description: "Restrict high-risk actions to business hours"
+      conditions:
+        - "action.risk_level == 'low' OR time.is_business_hours == true"
+      violation_message: "High-risk actions not allowed outside business hours"
+      suggested_fix: "Schedule action during business hours or reduce risk level"
+      
+    - id: "rollback_plan_policy"
+      type: "governance"
+      severity: "medium"
+      description: "Require rollback plan for high-risk actions"
+      conditions:
+        - "action.risk_level != 'high' OR action.has_rollback_plan == true"
+      violation_message: "High-risk actions require a rollback plan"
+      suggested_fix: "Create and document a rollback plan for this action"

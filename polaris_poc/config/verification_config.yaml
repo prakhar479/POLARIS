@@ -1,0 +1,224 @@
+# Verification Adapter Configuration
+# ===================================
+# This file defines verification constraints, policies, and settings
+# for the POLARIS verification adapter.
+
+# System identification
+system_name: "polaris_framework"
+
+# =============================================================================
+# Verification Settings
+# =============================================================================
+settings:
+  # Default timeout for verification requests (seconds)
+  default_timeout_sec: 30.0
+  
+  # Maximum concurrent verifications
+  max_concurrent: 5
+  
+  # Queue size for verification requests (0 = unbounded)
+  queue_size: 1000
+  
+  # Enable Digital Twin integration for predictive verification
+  enable_digital_twin: true
+  
+  # Enable formal verification methods (requires additional tools)
+  enable_formal_verification: false
+  
+  # Verification performance settings
+  performance:
+    # Cache verification results for repeated actions (seconds)
+    result_cache_ttl: 300
+    
+    # Maximum verification time before timeout (seconds)
+    max_verification_time: 60
+    
+    # Enable parallel constraint checking
+    parallel_checking: true
+
+# =============================================================================
+# Safety Constraints
+# =============================================================================
+# Define system safety constraints that must be validated before action execution
+constraints:
+  - id: "cpu_utilization_limit"
+    type: "resource"
+    severity: "high"
+    description: "Prevent actions that would cause excessive CPU utilization"
+    condition: "system.cpu_utilization < 0.90"
+    violation_message: "Action would exceed CPU utilization limit (90%)"
+    suggested_fix: "Reduce action scope or wait for lower system load"
+    
+  - id: "memory_utilization_limit"
+    type: "resource"
+    severity: "high"
+    description: "Prevent actions that would cause excessive memory utilization"
+    condition: "system.memory_utilization < 0.85"
+    violation_message: "Action would exceed memory utilization limit (85%)"
+    suggested_fix: "Free memory or reduce action memory requirements"
+    
+  - id: "disk_space_limit"
+    type: "resource"
+    severity: "critical"
+    description: "Prevent actions when disk space is critically low"
+    condition: "system.disk_utilization < 0.95"
+    violation_message: "Insufficient disk space for action execution"
+    suggested_fix: "Free disk space before executing action"
+    
+  - id: "concurrent_actions_limit"
+    type: "safety"
+    severity: "medium"
+    description: "Limit number of concurrent system modifications"
+    condition: "system.concurrent_actions < 10"
+    violation_message: "Too many concurrent actions in progress"
+    suggested_fix: "Wait for current actions to complete"
+    
+  - id: "system_availability_check"
+    type: "safety"
+    severity: "critical"
+    description: "Ensure system availability remains above threshold"
+    condition: "system.availability > 0.99"
+    violation_message: "System availability too low for safe action execution"
+    suggested_fix: "Restore system health before executing actions"
+    
+  - id: "error_rate_check"
+    type: "safety"
+    severity: "high"
+    description: "Prevent actions during high error rate periods"
+    condition: "system.error_rate < 0.05"
+    violation_message: "System error rate too high for safe action execution"
+    suggested_fix: "Investigate and resolve system errors first"
+
+# =============================================================================
+# Organizational Policies
+# =============================================================================
+# Define organizational policies and compliance requirements
+policies:
+  - id: "change_management_policy"
+    type: "governance"
+    severity: "medium"
+    description: "Enforce change management procedures for system modifications"
+    conditions:
+      - "action.type != 'emergency'"
+      - "action.has_approval == true OR action.risk_level == 'low'"
+    violation_message: "Action requires change management approval"
+    suggested_fix: "Obtain proper approvals through change management process"
+    
+  - id: "business_hours_policy"
+    type: "temporal"
+    severity: "low"
+    description: "Restrict high-risk actions to business hours"
+    conditions:
+      - "action.risk_level == 'low' OR time.is_business_hours == true"
+    violation_message: "High-risk actions not allowed outside business hours"
+    suggested_fix: "Schedule action during business hours or reduce risk level"
+    
+  - id: "maintenance_window_policy"
+    type: "temporal"
+    severity: "high"
+    description: "Restrict system modifications during maintenance windows"
+    conditions:
+      - "system.in_maintenance_window == false OR action.type == 'maintenance'"
+    violation_message: "System modifications not allowed during maintenance window"
+    suggested_fix: "Wait for maintenance window to end or classify as maintenance action"
+    
+  - id: "user_impact_policy"
+    type: "governance"
+    severity: "high"
+    description: "Require additional approval for user-impacting changes"
+    conditions:
+      - "action.affects_users == false OR action.has_user_impact_approval == true"
+    violation_message: "User-impacting changes require additional approval"
+    suggested_fix: "Obtain user impact approval or modify action to avoid user impact"
+    
+  - id: "rollback_plan_policy"
+    type: "governance"
+    severity: "medium"
+    description: "Require rollback plan for high-risk actions"
+    conditions:
+      - "action.risk_level != 'high' OR action.has_rollback_plan == true"
+    violation_message: "High-risk actions require a rollback plan"
+    suggested_fix: "Create and document a rollback plan for this action"
+
+# =============================================================================
+# Action Type Configurations
+# =============================================================================
+# Define verification requirements for different action types
+action_types:
+  system_restart:
+    default_risk_level: "high"
+    required_verification_level: "comprehensive"
+    require_human_approval: true
+    additional_constraints: ["system_availability_check", "maintenance_window_policy"]
+    
+  configuration_change:
+    default_risk_level: "medium"
+    required_verification_level: "policy"
+    require_human_approval: false
+    additional_constraints: ["change_management_policy", "rollback_plan_policy"]
+    
+  resource_allocation:
+    default_risk_level: "medium"
+    required_verification_level: "policy"
+    require_human_approval: false
+    additional_constraints: ["cpu_utilization_limit", "memory_utilization_limit"]
+    
+  scaling_action:
+    default_risk_level: "low"
+    required_verification_level: "basic"
+    require_human_approval: false
+    additional_constraints: ["resource_utilization_limit", "concurrent_actions_limit"]
+    
+  emergency_action:
+    default_risk_level: "critical"
+    required_verification_level: "basic"  # Fast verification for emergencies
+    require_human_approval: false
+    bypass_policies: ["business_hours_policy", "maintenance_window_policy"]
+    additional_constraints: ["system_availability_check"]
+
+# =============================================================================
+# Integration Settings
+# =============================================================================
+# Configure integration with other POLARIS components
+integration:
+  # Digital Twin integration for predictive verification
+  digital_twin:
+    enabled: true
+    simulation_timeout_sec: 30
+    confidence_threshold: 0.7
+    
+  # Knowledge Base integration for learning from verification history
+  knowledge_base:
+    enabled: true
+    store_verification_results: true
+    learn_from_violations: true
+    
+  # External verification tools integration
+  external_tools:
+    enabled: false
+    # Configuration for external formal verification tools would go here
+
+# =============================================================================
+# Monitoring and Alerting
+# =============================================================================
+# Configure verification monitoring and alerting
+monitoring:
+  # Enable detailed verification metrics
+  enable_metrics: true
+  
+  # Metrics collection interval (seconds)
+  metrics_interval: 60
+  
+  # Alert thresholds
+  alerts:
+    # Alert when verification rejection rate exceeds threshold
+    high_rejection_rate_threshold: 0.20
+    
+    # Alert when verification latency exceeds threshold (milliseconds)
+    high_latency_threshold: 5000
+    
+    # Alert when constraint violations exceed threshold per hour
+    high_violation_rate_threshold: 10
+    
+    # Alert when verification adapter queue is nearly full
+    queue_full_threshold: 0.90

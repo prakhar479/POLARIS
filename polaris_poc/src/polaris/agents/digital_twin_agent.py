@@ -31,6 +31,7 @@ from polaris.proto import digital_twin_pb2_grpc
 # add other implementations here to register
 from polaris.models.mock_world_model import MockWorldModel
 from polaris.models.gemini_world_model import GeminiWorldModel
+from polaris.models.bayesian_world_model import BayesianWorldModel
 
 class DigitalTwinAgent:
     """
