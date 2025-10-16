@@ -44,19 +44,19 @@ Component-Specific Features:
         - Health checks and performance monitoring
         - Configuration validation with environment checks
         - Interactive API key prompts for Gemini components
-        
+
     Agentic Reasoner:
         - Improved GRPC client with circuit breaker
         - Configurable timeouts and retry logic
         - Tool usage monitoring (KB, Digital Twin)
         - Interactive API key management
-        
+
     All Gemini Components:
         - Automatic API key detection from multiple sources
         - Interactive prompts when API key not found
         - Secure storage options (keyring, environment variables)
         - API key validation and testing
-        
+
     Reasoner:
         - Multiple reasoning modes (llm, hybrid, statistical)
         - Custom prompt configuration
@@ -80,14 +80,22 @@ API_KEY = os.getenv("API_KEY")
 
 # Import API key manager for interactive prompts
 try:
-    from polaris.common.api_key_manager import get_gemini_api_key_interactive, validate_gemini_environment
+    from polaris.common.api_key_manager import (
+        get_gemini_api_key_interactive,
+        validate_gemini_environment,
+    )
+
     API_KEY_MANAGER_AVAILABLE = True
     INTERACTIVE_FUNCTION = get_gemini_api_key_interactive
     VALIDATION_FUNCTION = validate_gemini_environment
 except ImportError:
     try:
         # Fallback to simple API key manager
-        from polaris.common.simple_api_key_manager import get_gemini_api_key_simple, validate_gemini_environment_simple
+        from polaris.common.simple_api_key_manager import (
+            get_gemini_api_key_simple,
+            validate_gemini_environment_simple,
+        )
+
         API_KEY_MANAGER_AVAILABLE = True
         INTERACTIVE_FUNCTION = get_gemini_api_key_simple
         VALIDATION_FUNCTION = validate_gemini_environment_simple
@@ -102,13 +110,13 @@ def get_api_key_for_component(component_name: str, interactive: bool = True) -> 
     # First try the global API_KEY
     if API_KEY:
         return API_KEY
-    
+
     # Try environment variables first
     for env_var in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GENAI_API_KEY"]:
         key = os.getenv(env_var)
         if key:
             return key
-    
+
     # If API key manager is available and we're in interactive mode, use it
     if API_KEY_MANAGER_AVAILABLE and interactive and INTERACTIVE_FUNCTION:
         try:
@@ -123,7 +131,7 @@ def get_api_key_for_component(component_name: str, interactive: bool = True) -> 
         print("  - GOOGLE_API_KEY")
         print("  - GENAI_API_KEY")
         print("Or install interactive API key manager: pip install keyring cryptography")
-    
+
     return None
 
 
@@ -134,16 +142,16 @@ def validate_api_key_environment(component_name: str, interactive: bool = True) 
             return VALIDATION_FUNCTION(component_name)
         except Exception as e:
             print(f"⚠️  API key validation failed: {e}")
-    
+
     # Fallback validation
     result = {
         "valid": False,
         "api_key_found": False,
         "source": None,
         "issues": [],
-        "recommendations": []
+        "recommendations": [],
     }
-    
+
     api_key = get_api_key_for_component(component_name, interactive=False)
     if api_key:
         result["api_key_found"] = True
@@ -152,8 +160,10 @@ def validate_api_key_environment(component_name: str, interactive: bool = True) 
     else:
         result["issues"].append("API key not found in environment")
         result["recommendations"].append("Set GEMINI_API_KEY environment variable")
-    
+
     return result
+
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -173,7 +183,7 @@ from polaris.agents.reasoner_agent import (
 from polaris.agents.llm_reasoner import create_llm_reasoner_agent
 from polaris.agents.agentic_reasoner import (
     create_agentic_reasoner_agent,
-    create_agentic_reasoner_with_bayesian_world_model
+    create_agentic_reasoner_with_bayesian_world_model,
 )
 
 
@@ -200,7 +210,7 @@ Examples:
         "component",
         choices=[
             "monitor",
-            "execution", 
+            "execution",
             "verification",
             "digital-twin",
             "knowledge-base",
@@ -669,12 +679,14 @@ async def start_digital_twin(args, config_path: Path):
             # Check for Gemini API key with interactive prompt
             logger.info("Validating Gemini API key...")
             api_validation = validate_api_key_environment("Digital Twin (Gemini World Model)")
-            
+
             if not api_validation["valid"]:
                 if not args.validate_only and not args.dry_run:
                     # Try to get API key interactively
                     logger.info("API key not found, prompting user...")
-                    api_key = get_api_key_for_component("Digital Twin (Gemini World Model)", interactive=True)
+                    api_key = get_api_key_for_component(
+                        "Digital Twin (Gemini World Model)", interactive=True
+                    )
                     if not api_key:
                         issues.append("Gemini API key is required for Gemini world model")
                     else:
@@ -685,6 +697,7 @@ async def start_digital_twin(args, config_path: Path):
             # Check for required packages
             try:
                 import google.genai
+
                 logger.info("✅ Google Generative AI package available")
             except ImportError:
                 issues.append(
@@ -693,6 +706,7 @@ async def start_digital_twin(args, config_path: Path):
 
             try:
                 import langchain
+
                 logger.info("✅ LangChain package available")
             except ImportError:
                 issues.append("LangChain package not installed (pip install langchain)")
@@ -924,7 +938,7 @@ async def start_agentic_reasoner(args, config_path: Path):
 
     # Determine configuration to use
     config_to_use = config_path
-    
+
     # Use Bayesian world model config if requested
     if args.use_bayesian_world_model:
         bayesian_config_path = Path("config/bayesian_world_model_config.yaml")
@@ -933,7 +947,7 @@ async def start_agentic_reasoner(args, config_path: Path):
             config_to_use = bayesian_config_path
         else:
             logger.warning("Bayesian config not found, using main config with Bayesian override")
-    
+
     # Use agentic reasoner specific config if available
     agentic_config_path = Path("src/config/agentic_reasoner_config.yaml")
     if agentic_config_path.exists() and not args.use_bayesian_world_model:
@@ -945,31 +959,31 @@ async def start_agentic_reasoner(args, config_path: Path):
     # Configure GRPC timeouts based on preset
     timeout_presets = {
         "default": {
-            'query_timeout': 20.0,
-            'simulation_timeout': 90.0,
-            'diagnosis_timeout': 45.0,
-            'connection_timeout': 15.0
+            "query_timeout": 20.0,
+            "simulation_timeout": 90.0,
+            "diagnosis_timeout": 45.0,
+            "connection_timeout": 15.0,
         },
         "fast": {
-            'query_timeout': 10.0,
-            'simulation_timeout': 30.0,
-            'diagnosis_timeout': 20.0,
-            'connection_timeout': 5.0
+            "query_timeout": 10.0,
+            "simulation_timeout": 30.0,
+            "diagnosis_timeout": 20.0,
+            "connection_timeout": 5.0,
         },
         "robust": {
-            'query_timeout': 45.0,
-            'simulation_timeout': 180.0,
-            'diagnosis_timeout': 90.0,
-            'connection_timeout': 30.0
+            "query_timeout": 45.0,
+            "simulation_timeout": 180.0,
+            "diagnosis_timeout": 90.0,
+            "connection_timeout": 30.0,
         },
         "custom": {
-            'query_timeout': 25.0,
-            'simulation_timeout': 120.0,
-            'diagnosis_timeout': 60.0,
-            'connection_timeout': 15.0
-        }
+            "query_timeout": 25.0,
+            "simulation_timeout": 120.0,
+            "diagnosis_timeout": 60.0,
+            "connection_timeout": 15.0,
+        },
     }
-    
+
     # Set grpc_timeout_config based on the selected preset
     if args.timeout_config in timeout_presets:
         grpc_timeout_config = timeout_presets[args.timeout_config]
@@ -981,10 +995,10 @@ async def start_agentic_reasoner(args, config_path: Path):
     # Environment validation
     logger.info("Validating environment for Agentic Reasoner...")
     issues = []
-    
+
     # Check API key with interactive prompt
     api_validation = validate_api_key_environment("Agentic Reasoner")
-    
+
     if not api_validation["valid"]:
         if not args.validate_only and not args.dry_run:
             # Try to get API key interactively
@@ -1003,21 +1017,23 @@ async def start_agentic_reasoner(args, config_path: Path):
         # Ensure we have the API key for agent creation
         if not API_KEY:
             API_KEY = get_api_key_for_component("Agentic Reasoner", interactive=False)
-    
+
     # Check for required packages
     try:
         import google.genai
+
         logger.info("✅ Google Generative AI package available")
     except ImportError:
         issues.append("Google Generative AI package not installed (pip install google-genai)")
-    
+
     if args.use_bayesian_world_model:
         try:
             import numpy, scipy, filterpy
+
             logger.info("✅ Bayesian world model dependencies available")
         except ImportError:
             issues.append("Bayesian dependencies missing (pip install numpy scipy filterpy)")
-    
+
     if issues:
         logger.error("Environment validation failed:")
         for issue in issues:
@@ -1050,13 +1066,14 @@ async def start_agentic_reasoner(args, config_path: Path):
                 grpc_timeout_config=grpc_timeout_config,
             )
             logger.info("🔧 Using improved GRPC client with circuit breaker")
-        
+
         logger.info("✅ Agentic Reasoner created successfully")
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to create Agentic Reasoner: {e}")
         if args.log_level == "DEBUG":
             import traceback
+
             traceback.print_exc()
         sys.exit(1)
 
@@ -1082,34 +1099,39 @@ async def start_agentic_reasoner(args, config_path: Path):
     # Start Agentic Reasoner
     logger.info("🚀 Starting Enhanced Agentic Reasoner agent...")
     logger.info("🤖 This reasoner can autonomously use tools (KB, Digital Twin) to make decisions")
-    
+
     if args.use_bayesian_world_model:
-        logger.info("📊 Features: Deterministic predictions, statistical analysis, correlation discovery")
+        logger.info(
+            "📊 Features: Deterministic predictions, statistical analysis, correlation discovery"
+        )
     else:
         logger.info("🌐 Features: LLM-based reasoning, improved GRPC reliability, circuit breaker")
-    
+
     try:
         await agent.connect()
         logger.info("✅ Agentic Reasoner agent started successfully")
         logger.info("📡 Agentic Reasoner is running - press Ctrl+C to stop")
         logger.info("🔧 Available tools: Knowledge Base queries, Digital Twin interactions")
-        
+
         if grpc_timeout_config:
-            logger.info(f"⏱️  GRPC Timeouts: Query={grpc_timeout_config['query_timeout']}s, "
-                       f"Simulation={grpc_timeout_config['simulation_timeout']}s")
+            logger.info(
+                f"⏱️  GRPC Timeouts: Query={grpc_timeout_config['query_timeout']}s, "
+                f"Simulation={grpc_timeout_config['simulation_timeout']}s"
+            )
 
         # Wait until shutdown
         await stop_event.wait()
-        
+
     except Exception as e:
         logger.error(f"❌ Agentic Reasoner agent error: {e}")
         if args.log_level == "DEBUG":
             import traceback
+
             traceback.print_exc()
         raise
     finally:
         logger.info("🛑 Shutting down Agentic Reasoner agent...")
-        
+
         # Stop performance monitoring
         if performance_monitor:
             performance_monitor.cancel()
@@ -1117,7 +1139,7 @@ async def start_agentic_reasoner(args, config_path: Path):
                 await performance_monitor
             except asyncio.CancelledError:
                 pass
-        
+
         await agent.disconnect()
         logger.info("✅ Agentic Reasoner shutdown complete")
 
@@ -1196,29 +1218,29 @@ async def start_all_components(args, config_path: Path):
     """Start all POLARIS components in the correct order."""
     logger = setup_logging()
     logger.setLevel(getattr(logging, args.log_level))
-    
+
     # Default startup order
     default_order = [
         "knowledge-base",
-        "digital-twin", 
+        "digital-twin",
         "kernel",
         "monitor",
         "execution",
         "verification",
         "agentic-reasoner",
-        "meta-learner"
+        "meta-learner",
     ]
-    
+
     # Use custom order if provided
     startup_order = args.start_order if args.start_order else default_order
-    
+
     # Apply exclusions
     if args.exclude_components:
         startup_order = [comp for comp in startup_order if comp not in args.exclude_components]
         logger.info(f"Excluding components: {args.exclude_components}")
-    
+
     logger.info(f"Starting components in order: {startup_order}")
-    
+
     # Validation mode
     if args.validate_only:
         logger.info("🔍 Validating all component configurations...")
@@ -1228,16 +1250,16 @@ async def start_all_components(args, config_path: Path):
             component_args = argparse.Namespace(**vars(args))
             component_args.component = component
             component_args.validate_only = True
-            
+
             try:
                 await main_component_handler(component_args, config_path)
                 logger.info(f"✅ {component} validation passed")
             except Exception as e:
                 logger.error(f"❌ {component} validation failed: {e}")
-        
+
         logger.info("🏁 All component validation complete")
         return
-    
+
     # Dry run mode
     if args.dry_run:
         logger.info("🧪 Dry run mode - would start components in this order:")
@@ -1245,11 +1267,15 @@ async def start_all_components(args, config_path: Path):
             logger.info(f"  {i}. {component}")
         logger.info("🏁 Dry run complete")
         return
-    
+
     logger.info("🚀 Starting complete POLARIS framework...")
-    logger.info("⚠️  Note: This will start all components. Use individual component mode for production.")
-    logger.info("📋 For production, start components individually in separate processes/containers.")
-    
+    logger.info(
+        "⚠️  Note: This will start all components. Use individual component mode for production."
+    )
+    logger.info(
+        "📋 For production, start components individually in separate processes/containers."
+    )
+
     # In a real implementation, you'd start each component in a separate process
     # For now, we'll just show what would be started
     logger.info("🔄 Component startup simulation:")
@@ -1257,24 +1283,24 @@ async def start_all_components(args, config_path: Path):
         logger.info(f"  {i}. Starting {component}...")
         await asyncio.sleep(0.5)  # Simulate startup delay
         logger.info(f"     ✅ {component} started")
-    
+
     logger.info("✅ All components started successfully")
     logger.info("📡 Complete POLARIS framework is running")
     logger.info("🛑 Press Ctrl+C to stop all components")
-    
+
     # Wait for shutdown signal
     stop_event = asyncio.Event()
-    
+
     def signal_handler():
         logger.info("Received shutdown signal for all components")
         stop_event.set()
-    
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             asyncio.get_running_loop().add_signal_handler(sig, signal_handler)
         except NotImplementedError:
             signal.signal(sig, lambda *_: signal_handler())
-    
+
     await stop_event.wait()
     logger.info("🛑 Shutting down all components...")
 
@@ -1292,7 +1318,7 @@ async def main_component_handler(args, config_path: Path):
         "execution": start_adapter,
         "verification": start_adapter,
     }
-    
+
     handler = component_handlers.get(args.component)
     if handler:
         await handler(args, config_path)
@@ -1305,35 +1331,39 @@ async def _monitor_agent_performance(agent, logger):
     try:
         while True:
             await asyncio.sleep(30)  # Check every 30 seconds
-            
+
             # Get GRPC metrics if available
-            if hasattr(agent, 'dt_query') and hasattr(agent.dt_query, 'get_connection_metrics'):
+            if hasattr(agent, "dt_query") and hasattr(agent.dt_query, "get_connection_metrics"):
                 metrics = agent.dt_query.get_connection_metrics()
                 logger.info("📊 GRPC Performance Metrics:")
                 logger.info(f"   Success Rate: {metrics['success_rate']:.2%}")
                 logger.info(f"   Avg Response Time: {metrics['average_response_time_sec']:.3f}s")
                 logger.info(f"   Circuit Breaker: {metrics['circuit_breaker_state']}")
-                
+
                 # Alert on issues
-                if metrics['success_rate'] < 0.9:
+                if metrics["success_rate"] < 0.9:
                     logger.warning(f"🚨 Low success rate: {metrics['success_rate']:.2%}")
-                if metrics['average_response_time_sec'] > 5.0:
-                    logger.warning(f"🚨 Slow responses: {metrics['average_response_time_sec']:.3f}s")
-            
+                if metrics["average_response_time_sec"] > 5.0:
+                    logger.warning(
+                        f"🚨 Slow responses: {metrics['average_response_time_sec']:.3f}s"
+                    )
+
             # Get world model health if available
-            if hasattr(agent, 'world_model'):
+            if hasattr(agent, "world_model"):
                 try:
                     health = await agent.world_model.get_health_status()
                     logger.info("📊 World Model Health:")
                     logger.info(f"   Status: {health['status']}")
-                    logger.info(f"   Health Score: {health['metrics'].get('system_health_score', 'N/A')}")
-                    
-                    if health['status'] != 'healthy':
+                    logger.info(
+                        f"   Health Score: {health['metrics'].get('system_health_score', 'N/A')}"
+                    )
+
+                    if health["status"] != "healthy":
                         logger.warning(f"🚨 World model unhealthy: {health['status']}")
-                        
+
                 except Exception as e:
                     logger.debug(f"Could not get world model health: {e}")
-                    
+
     except asyncio.CancelledError:
         logger.info("Performance monitoring stopped")
     except Exception as e:
@@ -1342,7 +1372,8 @@ async def _monitor_agent_performance(agent, logger):
 
 def print_component_info():
     """Print detailed information about available components."""
-    print("""
+    print(
+        """
 🏗️  POLARIS Framework Components:
 
 📡 ADAPTERS (Interface with managed systems):
@@ -1380,7 +1411,8 @@ def print_component_info():
    - Use appropriate configuration files for each environment
    - Monitor component health and performance metrics
    - Set up proper logging and alerting
-""")
+"""
+    )
 
 
 if __name__ == "__main__":

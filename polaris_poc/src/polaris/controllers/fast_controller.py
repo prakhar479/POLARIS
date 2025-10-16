@@ -16,13 +16,19 @@ class FastController(BaseController):
 
         # --- NEW: Configuration parameters for tuning ---
         self.RT_THRESHOLD = 0.75
-        self.DIMMER_STEP = 0.1
+        self.DIMMER_STEP = 0.15
         self.LOW_UTIL_THRESHOLD = 0.4  # Consider scaling down if avg server util is below 40%
         self.PERSISTENCE_COUNT = 3  # Require 3 consecutive violations before acting
 
         # --- NEW: State tracking for persistence ---
         self.violation_counter = 0
         self.normal_counter = 0
+
+        # --- NEW: Temporary dimmer reduction state ---
+        self.temp_dimmer_active = False
+        self.temp_dimmer_start_time = None
+        self.temp_dimmer_original_value = None
+        self.temp_dimmer_timeout = 60  # 60 seconds timeout
 
     def decide_action(self, telemetry_snapshot: dict):
         """
@@ -32,6 +38,9 @@ class FastController(BaseController):
 
         state = telemetry_snapshot.get("current_state", {})
         telemetry_values = self._normalize_telemetry(state)
+
+        # Check if temporary dimmer reduction should be deactivated
+        self._check_temp_dimmer_deactivation(telemetry_values)
 
         weighted_response_time = self._calculate_weighted_response_time(telemetry_values)
 
@@ -68,7 +77,30 @@ class FastController(BaseController):
 
         if active_servers < max_servers:
             self.logger.warning("High response time action: ADD_SERVER")
-            return self._create_action("ADD_SERVER", {"server_type": "compute", "count": 1}, "high")
+
+            # Activate temporary dimmer reduction when adding a server
+            current_dimmer = telemetry_values.get("swim.dimmer", 1.0)
+            if not self.temp_dimmer_active:
+                self.temp_dimmer_active = True
+                self.temp_dimmer_start_time = time.time()
+                self.temp_dimmer_original_value = current_dimmer
+                temp_dimmer_value = max(0, current_dimmer - self.DIMMER_STEP)
+                self.logger.info(
+                    f"Temporarily reducing dimmer from {current_dimmer} to {temp_dimmer_value} while adding server"
+                )
+
+                # Return a combined action that adds server and sets temporary dimmer
+                return [
+                    self._create_action("SET_DIMMER", {"value": temp_dimmer_value}, "normal"),
+                    self._create_action(
+                        "ADD_SERVER", {"server_type": "compute", "count": 1}, "high"
+                    ),
+                ]
+            else:
+                # Temp dimmer already active, just add server
+                return self._create_action(
+                    "ADD_SERVER", {"server_type": "compute", "count": 1}, "high"
+                )
         else:
             current_dimmer = telemetry_values.get("swim.dimmer", 1.0)
             new_dimmer = max(0, current_dimmer - self.DIMMER_STEP)
@@ -110,6 +142,28 @@ class FastController(BaseController):
         return self._no_op("System is stable, no action needed.")
 
     # --- HELPER METHODS to keep code clean ---
+    def _check_temp_dimmer_deactivation(self, telemetry_values):
+        """Check if temporary dimmer reduction should be deactivated."""
+        if not self.temp_dimmer_active:
+            return
+
+        active_servers = telemetry_values.get("swim.active.servers", 0)
+        max_servers = telemetry_values.get("swim.max.servers", 0)
+        current_time = time.time()
+
+        # Check if servers are now equal (server addition complete) or timeout reached
+        servers_equal = active_servers == max_servers
+        timeout_reached = (current_time - self.temp_dimmer_start_time) >= self.temp_dimmer_timeout
+
+        if servers_equal or timeout_reached:
+            reason = "servers equal" if servers_equal else "timeout reached"
+            self.logger.info(f"Deactivating temporary dimmer reduction: {reason}")
+            self.temp_dimmer_active = False
+            self.temp_dimmer_start_time = None
+            # Note: We don't automatically restore the original dimmer value here
+            # as the system should naturally adjust it through normal operations
+            self.temp_dimmer_original_value = None
+
     def _normalize_telemetry(self, state: dict) -> dict:
         return {
             "swim.dimmer": state.get("dimmer", 1.0),

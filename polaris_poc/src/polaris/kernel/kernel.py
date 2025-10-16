@@ -195,16 +195,26 @@ class SWIMKernel(BaseKernel):
                 action = self.generate_action(latest_data)
 
                 if action:
-                    await self.nats_client.publish_json("polaris.execution.actions", action)
+                    # Handle both single actions and lists of actions
+                    actions_to_publish = action if isinstance(action, list) else [action]
+
+                    for single_action in actions_to_publish:
+                        await self.nats_client.publish_json(
+                            "polaris.execution.actions", single_action
+                        )
+                        enriched_action = single_action.copy()
+                        enriched_action["timestamp"] = time.time()
+                        await self.nats_client.publish_json(
+                            "polaris.execution.fast", enriched_action
+                        )
+
                     # Update last action time to enforce the cool-down
                     self.last_action_time = current_time
-                    enriched_action = action.copy()
-                    enriched_action["timestamp"] = time.time()
-                    await self.nats_client.publish_json("polaris.execution.fast", enriched_action)
 
                     # This replaces the blocking asyncio.sleep(60)
+                    action_count = len(actions_to_publish)
                     self.logger.info(
-                        "Published action after 5-stream evaluation. "
+                        f"Published {action_count} action(s) after 5-stream evaluation. "
                         f"Cooldown of {self.action_cooldown_sec}s initiated."
                     )
                 else:

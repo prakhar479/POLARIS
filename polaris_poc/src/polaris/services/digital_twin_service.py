@@ -136,6 +136,8 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 },
             )
 
+            grpc_metadata = {k: str(v) for k, v in query_response.metadata.items()}
+
             grpc_response = digital_twin_pb2.QueryResponse(
                 query_id=query_response.query_id,
                 success=query_response.success,
@@ -143,7 +145,7 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 confidence=query_response.confidence,
                 explanation=query_response.explanation,
                 timestamp=query_response.timestamp,
-                metadata=query_response.metadata,
+                metadata=grpc_metadata,
             )
 
             # Update metrics
@@ -232,7 +234,9 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                         "timeout": action.timeout,
                     }
                 )
-
+            self.logger.debug(
+                "Converted gRPC actions to internal format",
+            )
             # Convert gRPC request to internal format
             sim_request = SimulationRequest(
                 simulation_id=request.simulation_id or str(uuid.uuid4()),
@@ -246,24 +250,73 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
             # Execute simulation through World Model
             sim_response = await self.world_model.simulate(sim_request)
 
+            self.logger.debug(
+                f"World Model simulation completed, response: {sim_response.to_dict()} ",
+            )
+
             # Convert future states to gRPC format
             grpc_future_states = []
+
             for state in sim_response.future_states:
                 if isinstance(state, dict):
+                    # Extract predicted values from the state metrics
+                    grpc_metrics = {}
+                    state_data = state.get("state", {})
+
+                    # Calculate average confidence from all metrics
+                    confidences = []
+                    description_parts = []
+
+                    for metric_name, metric_data in state_data.items():
+                        if isinstance(metric_data, dict) and "predicted_value" in metric_data:
+                            grpc_metrics[metric_name] = metric_data["predicted_value"]
+
+                            # Collect confidence for averaging
+                            if "confidence" in metric_data:
+                                confidences.append(metric_data["confidence"])
+
+                            # Build description with remaining metrics
+                            desc_parts = []
+                            if "predicted_velocity" in metric_data:
+                                desc_parts.append(f"velocity: {metric_data['predicted_velocity']}")
+                            if "uncertainty" in metric_data:
+                                desc_parts.append(f"uncertainty: {metric_data['uncertainty']}")
+                            if "confidence" in metric_data:
+                                desc_parts.append(f"confidence: {metric_data['confidence']}")
+
+                            if desc_parts:
+                                description_parts.append(f"{metric_name} ({', '.join(desc_parts)})")
+                        else:
+                            # Fallback for simple numeric values
+                            grpc_metrics[metric_name] = (
+                                float(metric_data) if metric_data is not None else 0.0
+                            )
+
+                    # Calculate average confidence
+                    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+
+                    # Create description string with all metric details
+                    description = "; ".join(description_parts) if description_parts else ""
+
                     grpc_state = digital_twin_pb2.PredictedState(
                         timestamp=state.get("timestamp", ""),
-                        metrics=state.get("metrics", {}),
-                        confidence=state.get("confidence", 0.0),
-                        description=state.get("description", ""),
+                        metrics=grpc_metrics,
+                        confidence=avg_confidence,
+                        description=description,
                     )
                     grpc_future_states.append(grpc_state)
-
+            self.logger.debug(
+                "Reached 2",
+            )
             # Create simulation metrics
             grpc_metrics = digital_twin_pb2.SimulationMetrics(
                 execution_time_sec=(datetime.now(timezone.utc) - start_time).total_seconds(),
                 scenarios_processed=1,
                 average_confidence=sim_response.confidence,
                 custom_metrics={},
+            )
+            self.logger.debug(
+                "Reached 3",
             )
 
             # Create impact estimates
@@ -274,6 +327,10 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 cost_currency=sim_response.impact_estimates.get("cost_currency", "USD"),
                 impact_description=sim_response.impact_estimates.get("impact_description", ""),
             )
+            self.logger.debug(
+                "Reached 4",
+            )
+            grpc_metadata = {k: str(v) for k, v in sim_response.metadata.items()}
 
             # Convert internal response to gRPC format
             grpc_response = digital_twin_pb2.SimulationResponse(
@@ -287,9 +344,12 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 explanation=sim_response.explanation,
                 impact_estimates=grpc_impact,
                 timestamp=sim_response.timestamp,
-                metadata=sim_response.metadata,
+                metadata=grpc_metadata,  # <- all values are strings now
             )
 
+            self.logger.debug(
+                "Reached 5",
+            )
             # Update metrics
             self._metrics["simulations_processed"] += 1
 
@@ -309,6 +369,10 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
 
         except Exception as e:
             self._metrics["total_errors"] += 1
+
+            self.logger.debug(
+                "Simulation processing failed - exception occurred",
+            )
 
             self.logger.error(
                 f"Simulation processing failed due to {str(e)}",
@@ -395,6 +459,8 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
 
                 grpc_hypotheses.append(grpc_hypothesis)
 
+            grpc_metadata = {k: str(v) for k, v in diag_response.metadata.items()}
+
             # Convert internal response to gRPC format
             grpc_response = digital_twin_pb2.DiagnosisResponse(
                 diagnosis_id=diag_response.diagnosis_id,
@@ -405,7 +471,7 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 explanation=diag_response.explanation,
                 supporting_evidence=diag_response.supporting_evidence,
                 timestamp=diag_response.timestamp,
-                metadata=diag_response.metadata,
+                metadata=grpc_metadata,
             )
 
             # Update metrics

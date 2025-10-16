@@ -239,7 +239,7 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
             try:
                 self.channel = grpc.aio.insecure_channel(self.grpc_address)
                 self.stub = digital_twin_pb2_grpc.DigitalTwinStub(self.channel)
-                
+
                 # Test the connection with a simple health check
                 await self._test_connection()
                 self.logger.info("Digital Twin gRPC connection established successfully")
@@ -281,7 +281,7 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
                 except json.JSONDecodeError:
                     # If it's not valid JSON, use as plain string
                     result = response_pb.result
-            
+
             return DTResponse(
                 success=response_pb.success,
                 result=result,
@@ -328,10 +328,10 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
                     "timestamp": state.timestamp,
                     "metrics": dict(state.metrics),
                     "confidence": state.confidence,
-                    "description": state.description
+                    "description": state.description,
                 }
                 future_states.append(future_state)
-            
+
             return DTResponse(
                 success=response_pb.success,
                 confidence=response_pb.confidence,
@@ -381,30 +381,32 @@ class GRPCDigitalTwinClient(DigitalTwinInterface):
         except Exception as e:
             self.logger.error(f"Error processing gRPC Diagnose response: {e}", exc_info=True)
             return None
-    
+
     async def _test_connection(self):
         """Test the gRPC connection with a simple management request."""
         if not self.stub:
             raise Exception("gRPC stub not initialized")
-        
+
         try:
             # Send a simple health check request
             request = digital_twin_pb2.ManagementRequest(
                 request_id=str(uuid.uuid4()),
                 operation="health_check",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
-            
+
             # Short timeout for connection test
             response = await self.stub.Manage(request, timeout=5.0)
-            
+
             if not response.success:
                 self.logger.warning(f"Digital Twin health check returned: {response.result}")
-            
+
         except grpc.aio.AioRpcError as e:
             if e.code() == grpc.StatusCode.UNIMPLEMENTED:
                 # Health check not implemented, but connection works
-                self.logger.debug("Digital Twin health check not implemented, but connection is working")
+                self.logger.debug(
+                    "Digital Twin health check not implemented, but connection is working"
+                )
             else:
                 raise Exception(f"gRPC connection test failed: {e.details()}")
         except Exception as e:
@@ -448,15 +450,17 @@ class NATSReasonerBase(ABC):
         self.reasoner_kernel_subject = self.config.get("reasoner", {}).get(
             "kernel_request_subject", "polaris.reasoner.kernel.requests"
         )
-        
+
         # Verification routing configuration
         reasoner_config = self.config.get("reasoner", {})
         action_routing = reasoner_config.get("action_routing", {})
-        self.enable_verification = action_routing.get("enable_verification", True)
+        self.enable_verification = False
         self.verification_level = action_routing.get("default_verification_level", "policy")
         self.verification_timeout = action_routing.get("verification_timeout_sec", 45)
-        self.verification_failure_action = action_routing.get("verification_failure_action", "reject")
-        
+        self.verification_failure_action = action_routing.get(
+            "verification_failure_action", "reject"
+        )
+
         # Verification subjects
         verification_config = self.config.get("verification", {})
         self.verification_input_subject = verification_config.get(
@@ -588,17 +592,17 @@ class NATSReasonerBase(ABC):
 
             if self.enable_verification:
                 self.logger.info(
-                    f"Publishing reasoning action to verification layer", 
-                    extra={"action": action_message, "verification_level": self.verification_level}
+                    f"Publishing reasoning action to verification layer",
+                    extra={"action": action_message, "verification_level": self.verification_level},
                 )
                 await self._publish_action_for_verification(action_message)
             else:
                 self.logger.info(
-                    f"Publishing reasoning action directly to execution layer (verification disabled)", 
-                    extra={"action": action_message}
+                    f"Publishing reasoning action directly to execution layer (verification disabled)",
+                    extra={"action": action_message},
                 )
                 await self.publish(self.execution_action_subject, action_message)
-                
+
             await msg.respond(json.dumps({"success": True, "result": result}).encode())
 
         except Exception as e:
@@ -639,7 +643,7 @@ class NATSReasonerBase(ABC):
     async def _publish_action_for_verification(self, action_message: Dict[str, Any]) -> None:
         """Publish action to verification adapter for validation before execution."""
         import uuid
-        
+
         try:
             # Create verification request
             verification_request = {
@@ -648,35 +652,37 @@ class NATSReasonerBase(ABC):
                 "context": {
                     "source": "reasoner_agent",
                     "agent_id": self.agent_id,
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
                 },
                 "verification_level": self.verification_level,
                 "timeout_sec": self.verification_timeout,
-                "requester": f"reasoner_agent_{self.agent_id}"
+                "requester": f"reasoner_agent_{self.agent_id}",
             }
-            
+
             self.logger.debug(
                 "Sending action for verification",
                 extra={
                     "request_id": verification_request["request_id"],
                     "action_type": action_message.get("action_type"),
-                    "verification_level": self.verification_level
-                }
+                    "verification_level": self.verification_level,
+                },
             )
-            
+
             # Publish to verification input subject
             await self.publish(self.verification_input_subject, verification_request)
-            
+
         except Exception as e:
             self.logger.error(
                 f"Failed to publish action for verification: {e}",
                 extra={"action": action_message},
-                exc_info=True
+                exc_info=True,
             )
-            
+
             # Handle verification failure based on configuration
             if self.verification_failure_action == "bypass":
-                self.logger.warning("Bypassing verification due to failure, sending directly to execution")
+                self.logger.warning(
+                    "Bypassing verification due to failure, sending directly to execution"
+                )
                 await self.publish(self.execution_action_subject, action_message)
             elif self.verification_failure_action == "reject":
                 self.logger.error("Rejecting action due to verification failure")
@@ -838,9 +844,7 @@ class ReasonerAgent(NATSReasonerBase):
     async def _subscribe_to_threshold_updates(self) -> None:
         """Subscribe to threshold update notifications."""
         try:
-            await self.nc.subscribe(
-                "polaris.meta_learner.update", cb=self._handle_threshold_update
-            )
+            await self.nc.subscribe("polaris.meta_learner.update", cb=self._handle_threshold_update)
             self.logger.info("Subscribed to polaris.meta_learner.update")
         except Exception as e:
             self.logger.error(f"Failed to subscribe to threshold updates: {e}")

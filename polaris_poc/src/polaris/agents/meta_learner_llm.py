@@ -133,7 +133,6 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
                     config["prompt_config"] = {}
                 if "thresholds" not in config["prompt_config"]:
                     config["prompt_config"]["thresholds"] = {}
-
                 for key, value in updates["thresholds"].items():
                     # Only add or update thresholds, never remove
                     config["prompt_config"]["thresholds"][key] = value
@@ -147,13 +146,31 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
                     config["prompt_config"]["template_parts"] = {}
                 config["prompt_config"]["template_parts"].update(updates["template_parts"])
 
-            # Save back
+            # Custom representer for all strings - use | for everything
+            def str_presenter(dumper, data):
+                if isinstance(data, str):
+                    data = data.replace("\\n", "\n")
+                    # Use literal block style if multiline OR contains backslashes
+                    style = "|" if ("\n" in data or "\\" in data) else None
+                    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+                return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+            # Register the custom representer
+            yaml.add_representer(str, str_presenter)
+
+            # Save back with proper formatting
             with open(self.prompt_config_path, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                yaml.dump(
+                    config,
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    width=4096,  # Prevent line wrapping
+                )
 
             self.logger.info(f"Updated prompt config: {updates}")
             return True
-
         except Exception as e:
             self.logger.error(f"Failed to save prompt config: {e}")
             return False
@@ -474,7 +491,7 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
 
     def _build_system_prompt(self) -> str:
         """Build system prompt emphasizing balanced optimization and observation storage."""
-        return f"""You are an expert systems engineer specializing in adaptive system optimization and pattern recognition. Your role is to improve system performance through both parameter tuning and intelligent observation storage.
+        return f"""You are an expert systems engineer and prompt engineer specializing in adaptive system optimization and pattern recognition. Your role is to improve system performance through both parameter tuning and intelligent observation storage.
 
 **DECISION FRAMEWORK:**
 1. **OBSERVATION STORAGE** - When you identify new patterns or insights that aren't captured yet
@@ -510,6 +527,7 @@ TEMPLATE MODIFICATION RULES:
 - For constraints: only add clarifying details, never remove safety constraints
 - Maximum 1-2 sentence additions per modification then give final updated text
 - Must be directly supported by strong performance evidence
+- You CANNOT change tool calling examples or logic
 
 **FIXED CONSTRAINTS (NEVER CHANGE):**
 {', '.join(self.FIXED_CONSTRAINTS)}
@@ -531,6 +549,12 @@ Threshold Too High (Response time target 800ms but system averages 600ms):
 {{
   "thresholds": {{
     "target_response_time_ms": 650
+  }}
+}}
+```json
+{{
+  "template_parts": {{
+    "some other template part": "old contents + new clarification/slight refinement"
   }}
 }}
 
@@ -602,6 +626,7 @@ Look for new insights not yet captured in observed_learnings:
 - Performance correlations (CPU, memory, response time relationships)
 - User behavior patterns (dimmer thresholds)
 - Operational patterns (time-based load, cascade effects)
+- Change the current content to add new observation and given final, summarized and brief text 
 - Successful adaptation strategies under specific conditions
 
 **THRESHOLD MISALIGNMENT CHECK:**
