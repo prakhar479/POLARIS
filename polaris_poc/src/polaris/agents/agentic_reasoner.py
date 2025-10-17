@@ -582,7 +582,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
-        model: str = "gemini-2.5-pro",
+        model: str = "gemini-2.0-flash",
         max_tokens: int = 8192,
         temperature: float = 0.3,
         max_tool_calls: int = 5,

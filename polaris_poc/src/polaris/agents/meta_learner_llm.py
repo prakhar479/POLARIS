@@ -151,7 +151,7 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
                 if isinstance(data, str):
                     data = data.replace("\\n", "\n")
                     # Use literal block style if multiline OR contains backslashes
-                    style = "|" if ("\n" in data or "\\" in data) else None
+                    style = "|"
                     return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
                 return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
