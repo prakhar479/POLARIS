@@ -582,31 +582,33 @@ class AgenticLLMReasoner(ReasoningInterface):
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
-        model: str = "gemini-2.0-flash",
-        max_tokens: int = 8192,
+        model: str = "gpt-5",
+        max_completion_tokens: int = 8192,
         temperature: float = 0.3,
         max_tool_calls: int = 5,
         prompt_config_path: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
-        self.api_key = api_key
+        self.api_key = "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"
         self.reasoning_type = reasoning_type
         self.model = model
-        self.max_tokens = max_tokens
+        self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
         self.max_tool_calls = max_tool_calls
         self.max_retries = 3
-        self.prompt_config_path = prompt_config_path  # Store for reloading
+        self.prompt_config_path = prompt_config_path
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
 
-        # Initialize Gemini client
-        self.client = genai.Client(api_key=self.api_key)
+        # Initialize OpenAI client
+        from openai import AsyncOpenAI
+
+        self.client = AsyncOpenAI(api_key=self.api_key)
 
         # Initialize context builder and action history tracking
         self.context_builder = ContextBuilder(self.logger, {})
-        self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
-        self.reactive_logs: deque = deque(maxlen=3)  # Store the last 3 reactive logs
-        self.last_historical_context = None  # Cache for historical actions context
+        self.action_history: deque = deque(maxlen=20)
+        self.reactive_logs: deque = deque(maxlen=3)
+        self.last_historical_context = None
 
         # Initialize tools
         self.tools = {}
@@ -630,7 +632,9 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.prompt_config = self._load_prompt_config()
         self.system_prompt = self._build_system_prompt()
 
-        self.logger.info(f"Initialized AgenticLLMReasoner and {len(self.tools)} tools available")
+        self.logger.info(
+            f"Initialized AgenticLLMReasoner with GPT-4 and {len(self.tools)} tools available"
+        )
 
     def _load_prompt_config(self) -> Dict[str, Any]:
         """Load prompt configuration from YAML file."""
@@ -802,7 +806,7 @@ Please analyze the system context and make adaptation decisions in JSON format:
     ) -> ReasoningResult:
         """Execute agentic reasoning with dynamic tool usage."""
         start_time = time.time()
-        reasoning_steps = ["Starting agentic LLM reasoning with Gemini Flash 2.5"]
+        reasoning_steps = ["Starting agentic LLM reasoning with GPT-4"]
         tool_calls_made = 0
 
         try:
@@ -814,34 +818,24 @@ Please analyze the system context and make adaptation decisions in JSON format:
             user_prompt = self._build_initial_prompt(context)
             reasoning_steps.append("Built initial analysis prompt")
 
-            # Start the reasoning loop with chat history
-            chat_history = [
-                types.Content(role="user", parts=[types.Part(text=self.system_prompt)]),
-                types.Content(
-                    role="model",
-                    parts=[
-                        types.Part(
-                            text="Understood. I will analyze system contexts and make adaptation decisions following the structured format with tool usage when needed."
-                        )
-                    ],
-                ),
-                types.Content(role="user", parts=[types.Part(text=user_prompt)]),
+            # Start the reasoning loop with messages
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
             ]
 
             final_action = None
 
-            for iteration in range(self.max_tool_calls + 1):  # +1 for final decision
+            for iteration in range(self.max_tool_calls + 1):
                 reasoning_steps.append(f"Reasoning iteration {iteration + 1}")
 
                 # Get LLM response
-                llm_response = await self._call_gemini(chat_history)
-                reasoning_steps.append(f"Received Gemini response (iteration {iteration + 1})")
-                self.logger.debug(f"Gemini Response (iteration {iteration + 1}): {llm_response}")
+                llm_response = await self._call_gpt(messages)
+                reasoning_steps.append(f"Received GPT-4 response (iteration {iteration + 1})")
+                self.logger.debug(f"GPT-4 Response (iteration {iteration + 1}): {llm_response}")
 
                 # Add assistant response to history
-                chat_history.append(
-                    types.Content(role="model", parts=[types.Part(text=llm_response)])
-                )
+                messages.append({"role": "assistant", "content": llm_response})
 
                 # Parse response for tool calls or final decision
                 tool_calls, action = self._parse_llm_response(llm_response)
@@ -853,7 +847,7 @@ Please analyze the system context and make adaptation decisions in JSON format:
                     f"Tool calls made: {tool_calls_made}, Max tool calls: {self.max_tool_calls}"
                 )
                 if tool_calls and tool_calls_made < self.max_tool_calls:
-                    # Execute tool calls (prioritize over action)
+                    # Execute tool calls
                     tool_results = []
                     for tool_call in tool_calls:
                         tool_name = tool_call.get("tool_name")
@@ -868,7 +862,6 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             tool_results.append(
                                 {"tool_name": tool_name, "parameters": parameters, "result": result}
                             )
-                            # self.logger.debug(f"Tool result: {result}")
                             tool_calls_made += 1
                         else:
                             reasoning_steps.append(f"Unknown tool requested: {tool_name}")
@@ -877,9 +870,7 @@ Please analyze the system context and make adaptation decisions in JSON format:
                     # Add tool results to conversation
                     if tool_results:
                         tool_results_text = "Tool Results:\n" + json.dumps(tool_results, indent=2)
-                        chat_history.append(
-                            types.Content(role="user", parts=[types.Part(text=tool_results_text)])
-                        )
+                        messages.append({"role": "user", "content": tool_results_text})
                         reasoning_steps.append(
                             f"Added {len(tool_results)} tool results to conversation"
                         )
@@ -887,15 +878,12 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             f"Feeding tool results back to LLM: {len(tool_results)} results"
                         )
                         self.logger.debug(f"Tool Results Text: {tool_results_text}")
-                        # Continue to next iteration to let LLM process the tool results
                         continue
                     else:
-                        # No valid tool calls were executed
                         reasoning_steps.append("No valid tool calls executed")
                         self.logger.warning("Tool calls were parsed but none were valid")
 
                 if action:
-                    # Final decision reached (only if no tool calls were executed)
                     final_action = action
                     reasoning_steps.append("Final decision reached")
                     self.logger.info(f"Final action determined: {action}")
@@ -903,23 +891,18 @@ Please analyze the system context and make adaptation decisions in JSON format:
 
                 # No tool calls and no action - force a decision
                 if not tool_calls and not action:
-                    chat_history.append(
-                        types.Content(
-                            role="user",
-                            parts=[
-                                types.Part(
-                                    text="Please provide your final decision and action in the required JSON format."
-                                )
-                            ],
-                        )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Please provide your final decision and action in the required JSON format.",
+                        }
                     )
-                    final_response = await self._call_gemini(chat_history)
+                    final_response = await self._call_gpt(messages)
                     _, final_action = self._parse_llm_response(final_response)
                     reasoning_steps.append("Forced final decision")
                     break
 
             # Ensure we have a valid action
-            # Normalize or fallback to NO_ACTION
             if final_action:
                 final_action = self._normalize_action(final_action)
             else:
@@ -936,12 +919,12 @@ Please analyze the system context and make adaptation decisions in JSON format:
 
             return ReasoningResult(
                 result=final_action,
-                confidence=0.8,  # Could be dynamic based on tool results
+                confidence=0.8,
                 reasoning_steps=reasoning_steps,
                 context=context,
                 execution_time=execution_time,
-                kb_queries_made=tool_calls_made,  # Approximate
-                dt_queries_made=0,  # Could track separately
+                kb_queries_made=tool_calls_made,
+                dt_queries_made=0,
             )
 
         except Exception as e:
@@ -1020,34 +1003,29 @@ Remember to follow the structured output format with tool calls if you need more
 
         return normalized
 
-    async def _call_gemini(self, chat_history: List[types.Content]) -> str:
-        """Call Gemini API with chat history."""
+    async def _call_gpt(self, messages: List[Dict[str, str]]) -> str:
+        """Call GPT-5 API with message history and medium reasoning effort."""
         for attempt in range(self.max_retries):
             try:
-                # Generate content with the chat history
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
+                response = await self.client.chat.completions.create(
                     model=self.model,
-                    contents=chat_history,
-                    config=types.GenerateContentConfig(
-                        temperature=self.temperature,
-                        max_output_tokens=self.max_tokens,
-                    ),
+                    messages=messages,
+                    max_completion_tokens=self.max_completion_tokens,
+                    reasoning_effort="medium",  # GPT-5 medium reasoning effort
                 )
 
-                # Extract text from response
-                if response and response.text:
-                    return response.text.strip()
+                if response and response.choices and len(response.choices) > 0:
+                    return response.choices[0].message.content.strip()
                 else:
-                    raise ValueError("Empty response from Gemini")
+                    raise ValueError("Empty response from GPT-5")
 
             except Exception as e:
-                self.logger.warning(f"Gemini call attempt {attempt + 1} failed: {e}")
+                self.logger.warning(f"GPT-5 call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
                     raise
-                await asyncio.sleep(2**attempt)  # Exponential backoff
+                await asyncio.sleep(2**attempt)
 
-        raise Exception("Gemini call failed after all retries")
+        raise Exception("GPT-5 call failed after all retries")
 
     def _parse_llm_response(
         self, response: str
@@ -1157,7 +1135,7 @@ Remember to follow the structured output format with tool calls if you need more
             snapshots = await kb_query.query_structured(
                 data_types=["observation"],
                 filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
-                limit=10,
+                limit=3,
             )
 
             # Query for recent adaptation decisions/actions

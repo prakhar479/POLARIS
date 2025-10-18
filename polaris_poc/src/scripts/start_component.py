@@ -1166,7 +1166,7 @@ async def start_meta_learner(args, config_path: Path):
     # Resolve prompt config path (relative to src/polaris/agents)
     script_dir = Path(__file__).parent
     src_dir = script_dir.parent
-    prompt_config_path = src_dir / "polaris" / "agents" / "prompt.yaml"
+    prompt_config_path = src_dir / "polaris" / "agents" / "agentic_reasoner_prompt.yaml"
 
     if not prompt_config_path.exists():
         logger.error(f"Prompt config not found: {prompt_config_path}")

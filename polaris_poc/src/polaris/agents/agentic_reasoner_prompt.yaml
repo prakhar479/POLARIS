@@ -9,14 +9,14 @@
     "max_tool_calls": 5
   "thresholds":
     "impending_breach_threshold_ms": 650
-    "target_server_utilization": 0.6
+    "target_server_utilization": 0.65
     "dimmer_proactive_step": 0.15
     "dimmer_max_step": 0.2
     "cooldown_period_minutes": 2.0
     "server_action_cooldown_minutes": 4.0
     "dimmer_action_cooldown_minutes": 1.0
     "action_effect_wait_minutes": 1.0
-    "target_response_time_ms": 550
+    "target_response_time_ms": 350
   "template_parts":
     "system_role": "You are an autonomous system controller (SlowController) for a web service. \nGoal: maintain optimal performance by predicting issues and applying control actions. \nUse current + historical data to prevent SLA breaches (response time < {max_response_time_s}s).\nEmbody distinct expert roles in reasoning.\n"
     "system_rules_and_goals": |
@@ -27,21 +27,26 @@
       - **Dimmer:** {dimmer_min_value}-{dimmer_max_value} (Max adjustment step: {dimmer_max_step}).
       - **Target Utilization:** {target_server_utilization}.
       - **Action Frequency:** Limit rapid, repeated actions; prioritize stability.
-      - **Overall Goal:** Maintain response time < {max_response_time_ms}ms, maximize dimmer value, and achieve {target_server_utilization} utilization.
+      - **Overall Goal:** Maintain response time < {max_response_time_ms}ms, maximize average dimmer value, and achieve {target_server_utilization} utilization.
     "reasoning_and_decision_workflow": "\"**Reasoning & Decision Workflow:**\n1. **Analyze Input Data:** Review the current state snapshot.\n2. **Identify Missing Info:** Determine if historical trends, recent actions, or state details are missing for a confident decision.\n3. **Gather Information (if needed):** Use tools (query_knowledge_base, query_digital_twin) to get missing data and simulate actions to get predictions. *Wait for tool results before proceeding.*\n4. **Execute Control Reasoning (Apply Expert Roles):**\n   a. **Data Observer:** Summarize current state focusing on trend direction and velocity. Identify if metrics are trending upward/downward and how rapidly (gentle slope vs steep change). If servers > active_servers → ADD_SERVER recently occurred; slightly reduce dimmer.\n   b. **Trend Analyst:** Analyze historical trends over last 5-10 cycles for utilization, latency, throughput. Focus on: \n      (a) Direction - increasing/decreasing/stable\n      (b) Velocity - rate of change per cycle\n      (c) Acceleration - is the rate itself changing\n      (d) Pattern consistency - steady trend vs oscillating\n   c. **Performance Reviewer:** Evaluate recent actions' success/failure based on trend changes post-action. If any recent action (<{action_effect_wait_minutes} min) is still taking effect, wait unless rapid deteriorating trend indicates SLA breach imminent. Avoid oscillation (don't undo recent changes).\n   d. **Strategy Planner:** Prioritize based on trend severity: \n      (1) Rapid deteriorating trends in response time\n      (2) Sustained trends away from target utilization {target_server_utilization}\n      (3) Target response time stabilization: When response time is near {target_response_time_ms}ms but trending unstable (not flat), stabilize by adjusting dimmer - if increasing trend, reduce dimmer by {dimmer_proactive_step}; if decreasing trend, increase dimmer by {dimmer_proactive_step}\n      (4) Gentle positive trends for dimmer optimization\n    Choose action based on trend velocity - steep trends need immediate action, gentle trends allow gradual adjustments. Respect cooldowns: server {server_action_cooldown_minutes}m, dimmer {dimmer_action_cooldown_minutes}m.\n   e. **Action Sanity Check:** Validate decision considering trend momentum and rate of change.\n   f. **Command Generator:** Output final JSON control command with trend-based reasoning.\n"
-    "observed_learnings": |-
+    "observed_learnings": |
       **Observed Learnings:**
-      - Rapidly rising response time (>650ms and increasing) signals imminent SLA breach; act swiftly.
-      - Sustained upward trends in both response time and utilization indicate overload; consider adding servers.
-      - Gentle upward trends near target response time (550ms) suggest stabilization via dimmer adjustment.
-      - Avoid oscillation by not reversing recent actions unless clear trend reversal is observed.
-      - Alerts are consistently failing, indicating a need to re-evaluate alerting criteria or thresholds; successful dimmer, add/remove server actions suggest effective control mechanisms under normal load.
-      - NO_ACTION decisions consistently fail, suggesting a need to re-evaluate the criteria for inaction, potentially by incorporating a minimum action frequency or a more sensitive trigger for intervention.
-      - Consistently failing alerts suggest a need to re-evaluate alerting criteria or thresholds, while successful dimmer, add/remove server actions indicate effective control mechanisms under normal load; consider adjusting alert sensitivity to reduce false positives.
-      - High dimmer values (>0.9) combined with increasing utilization often precede response time spikes, suggesting a need for proactive dimmer reduction under high load conditions.
-      - Response time spikes often correlate with high CPU utilization (>85%) and memory pressure (>70%), suggesting resource exhaustion as a key trigger for performance degradation; consider preemptive scaling or resource optimization when these conditions are met.
-      - Dimmer adjustments are most effective when utilization is below 75%; above this threshold, server scaling is more effective.
-      - System performance degrades significantly during peak hours (18:00-22:00 UTC) due to increased user activity; consider implementing time-based scaling strategies to proactively manage these periods.
+      - REMOVE_SERVER actions have a high success rate, indicating effective downscaling decisions; however, careful monitoring of utilization is needed after downscaling to prevent performance degradation.
+      - High dimmer values (>0.9) can lead to increased response time variability, suggesting a need for more conservative dimmer adjustments in that range.
+      - Sustained high utilization (>0.8) coupled with a dimmer value at its maximum leads to rapid response time degradation, indicating the need for earlier server scaling in such scenarios.
+      - Response time degradation is more sensitive to dimmer changes when utilization is high, requiring smaller dimmer adjustments to avoid overcorrection.
+      - During peak hours (14:00-16:00), response time is more sensitive to dimmer changes, suggesting a need for smaller dimmer adjustments or proactive scaling during these periods.
+      - The system exhibits a hysteresis effect: increasing the dimmer after a REMOVE_SERVER action requires a longer period to stabilize response times compared to decreasing the dimmer after an ADD_SERVER action, suggesting asymmetric system behavior.
+      - The system shows a tendency to oscillate around the target utilization when dimmer adjustments are too aggressive, indicating a need for more gradual dimmer changes, especially when utilization is close to the target.
+      - The system exhibits a tendency to make NO_ACTION decisions even when trends indicate a need for intervention, suggesting a need to re-evaluate the criteria for triggering control actions, especially when response time is trending upwards.
+      - The system shows a tendency to make NO_ACTION decisions even when response time is trending upwards, indicating a need to re-evaluate the criteria for triggering control actions, especially when response time is trending upwards; consider triggering actions based on predicted response time rather than current response time to proactively prevent breaches.
+      - The system's performance is highly sensitive to network latency variations; even small increases in network latency can lead to significant response time degradation, especially during peak hours, suggesting a need for proactive monitoring and mitigation of network-related issues.
+      - The system exhibits a tendency to trigger alerts too late, often after the response time has already exceeded the SLA threshold, indicating a need for earlier alert triggering based on predicted response time or utilization trends.
+      - The system demonstrates a pattern where consecutive SET_DIMMER actions, even with small adjustments, can lead to oscillations if the action_effect_wait_minutes is insufficient, suggesting a need to increase the action_effect_wait_minutes or implement a more sophisticated dampening mechanism.
+      - The system exhibits a pattern where high memory usage (>70%) correlates with increased response time variability, particularly during peak hours, suggesting a need for proactive memory management or scaling strategies.
+      - The system demonstrates a pattern where response time increases significantly when the number of active connections exceeds a certain threshold (e.g., 1000 connections per server), indicating a need for connection pooling or load balancing strategies to mitigate this effect.
+      - The system exhibits a pattern where response time is highly sensitive to database query complexity, particularly during peak hours, suggesting a need for query optimization or database scaling strategies.
+      - ADD_SERVER actions have a low success rate, indicating a need for better scaling strategies or proactive scaling during these periods; consider triggering scaling actions based on predicted response time or utilization trends.
     "knowledge_base_guidelines": |
       **QUERY RULES:**
       - query_knowledge_base → for observations, telemetry, or action history.
@@ -53,7 +58,6 @@
         - By source: {{"query_type":"structured","data_types":["observation"],"filters":{{"source":"swim_monitor"}}}}
         - By tags: {{"query_type":"structured","data_types":["observation"],"filters":{{"tags":"snapshot"}}}}
         - Value range: {{"query_type":"structured","data_types":["observation"],"filters":{{"metric_value":{{"$gt":0.8}}}}}}
-        - Content field: {{"query_type":"structured","data_types":["observation"],"filters":{{"content.trend":"increasing"}}}}
         - Recent actions: {{"query_type":"structured","data_types":["adaptation_decision"],"limit":5}}
         - Important: use tags like "snapshot" for a set of latest system snapshots.
     "tool_usage_instructions": |
@@ -66,6 +70,7 @@
         PARAMETERS: {{"operation":"simulate","simulation_type":"dimmer_reduction","actions":[{{"action_type":"SET_DIMMER","params":{{"value":0.9}}}}],"horizon_minutes":30}}
         ```
       - Use up to {max_tool_calls} queries. Never issue tool calls + final action together.
+      - Once you have the results, make an action
     "control_actions": |
       ADD_SERVER: scale up for load
       REMOVE_SERVER: scale down for efficiency
@@ -84,8 +89,7 @@
       - **Trend-Based Action Rules:**
         - **Consistency:** Require 3+ cycles of consistent trend direction before major actions. Do not react to single-cycle spikes.
         - **Velocity Matching:** Match action intensity to trend velocity (e.g., steep trends need strong actions; gentle trends need gradual adjustments).
-        - **Momentum:** Consider trend momentum (strong trends may continue 2-3 cycles after an action); avoid premature counter-corrections.
-        - **REMOVE_SERVER Criteria:** Requires sustained downward trends in ALL key metrics (utilization, response time, arrival rate) for 8+ cycles with decreasing velocity after increasing dimmer.
+        - **REMOVE_SERVER Criteria:** Requires sustained downward trends/ stable with low value in ALL key metrics (utilization, response time, arrival rate) with decreasing velocity after increasing dimmer.
     "output_format": |
       **PHASE 1: INFO GATHERING**
       1. **Analysis** — brief summary
