@@ -113,8 +113,10 @@ class SWIMKernel(BaseKernel):
         self.stream_buffer = deque(maxlen=1)
         self.batch_size = 1
 
-        self.action_cooldown_sec = 60  # The desired cool-down period
+        self.action_cooldown_sec = 60  # The desired cool-down period for fast controller
+        self.slow_action_cooldown_sec = 30  # The desired cool-down period for slow controller
         self.last_action_time = None
+        self.last_slow_action_time = None
 
     async def process_telemetry_event(self, msg):
         try:
@@ -221,17 +223,34 @@ class SWIMKernel(BaseKernel):
                     self.logger.warning("No action generated after 5-stream evaluation.")
             else:
                 # Switch to SlowController (Delegates to Reasoner)
+                current_time = time.time()
+                if (
+                    self.last_slow_action_time is not None
+                    and (current_time - self.last_slow_action_time) < self.slow_action_cooldown_sec
+                ):
+                    self.logger.info(
+                        f"Slow action skipped due to cooldown. "
+                        f"Next slow action allowed in {self.slow_action_cooldown_sec - (current_time - self.last_slow_action_time):.1f}s"
+                    )
+                    return
+
                 self.controller = self.slow_controller
                 self.logger.info("Switched to SlowController")
 
-                # Delegation logic for SlowController should be added here
-                # (You only have the placeholder for the slow path in process_telemetry_event)
-                # You might want to delegate the latest data here as well:
-                # await self.nats_client.publish(
-                #     "polaris.reasoner.kernel.requests",
-                #     json.dumps(telemetry_data).encode(),
-                # )
-                # self.logger.info("Delegated streaming telemetry to Reasoner")
+                # Delegate the latest data to Reasoner
+                latest_data = self.stream_buffer[-1]
+                await self.nats_client.publish(
+                    "polaris.reasoner.kernel.requests",
+                    json.dumps(latest_data).encode(),
+                )
+                self.logger.info("Delegated streaming telemetry to Reasoner")
+
+                # Update last slow action time to enforce the cool-down
+                self.last_slow_action_time = current_time
+                self.logger.info(
+                    f"Slow controller action delegated. "
+                    f"Cooldown of {self.slow_action_cooldown_sec}s initiated."
+                )
 
         except Exception as e:
             self.logger.error(f"Error processing streaming telemetry event {e}")
