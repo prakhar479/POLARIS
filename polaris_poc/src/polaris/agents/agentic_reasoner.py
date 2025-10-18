@@ -589,7 +589,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         prompt_config_path: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
-        self.api_key = "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"
+        self.api_key = api_key
         self.reasoning_type = reasoning_type
         self.model = model
         self.max_completion_tokens = max_completion_tokens
