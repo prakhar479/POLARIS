@@ -1,9 +1,9 @@
 """
-Agentic LLM Reasoner Implementation with Google Gemini Flash 2.5
+Agentic LLM Reasoner Implementation with Local LLM
 
 An autonomous agentic reasoner that can dynamically decide which tools to use
 (Knowledge Base queries, Digital Twin interactions) and make adaptation decisions
-based on its analysis. Uses Google Gemini Flash 2.5 as the reasoning engine.
+based on its analysis. Uses local LLM endpoint as the reasoning engine.
 """
 
 import json
@@ -17,9 +17,7 @@ from datetime import datetime, timezone, timedelta
 import tempfile
 import yaml
 import httpx
-
-from google import genai
-from google.genai import types
+import random
 
 from .reasoner_core import (
     ReasoningInterface,
@@ -574,7 +572,7 @@ class ContextBuilder:
 class AgenticLLMReasoner(ReasoningInterface):
     """
     Agentic LLM reasoner that can dynamically decide which tools to use
-    and make autonomous adaptation decisions using Google Gemini Flash 2.5.
+    and make autonomous adaptation decisions using local LLM endpoint.
     """
 
     def __init__(
@@ -583,13 +581,12 @@ class AgenticLLMReasoner(ReasoningInterface):
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
-        # model: str = "gemini-2.0-flash",
         model: str = "gpt-oss:20b",
         max_tokens: int = 8192,
-        temperature: float = 0.3,
+        temperature: float = 0.2,
         timeout: float = 600.0,
-        max_tool_calls: int = 5,
         base_url: str = "http://10.10.16.46:11435",
+        max_tool_calls: int = 5,
         prompt_config_path: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
@@ -599,18 +596,20 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
-        self.max_tool_calls = max_tool_calls
         self.base_url = base_url
-        self.max_retries = 3
+        self.max_tool_calls = max_tool_calls
+        self.max_retries = 5
+        self.initial_backoff = 2.0
         self.prompt_config_path = prompt_config_path  # Store for reloading
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
 
-        # Initialize Gemini client
-        # self.client = genai.Client(api_key=self.api_key)
+        self.logger.info(
+            f"Initializing AgenticLLMReasoner with model {model} at endpoint {self.base_url}"
+        )
 
         # Initialize context builder and action history tracking
         self.context_builder = ContextBuilder(self.logger, {})
-        self.action_history: deque = deque(maxlen=5)  # Store the last 5 actions
+        self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
         self.reactive_logs: deque = deque(maxlen=3)  # Store the last 3 reactive logs
         self.last_historical_context = None  # Cache for historical actions context
 
@@ -721,7 +720,7 @@ class AgenticLLMReasoner(ReasoningInterface):
                     tools_description += f"- {tool_name}: {tool.description}\n"
                     tools_description += f"  Parameters: {json.dumps(tool.parameters, indent=2)}\n"
             else:
-                tools_description = "\n\nNote: No external tools are currently available. You must make decisions based solely on the provided input data.\n"
+                tools_description = "\n\nNote: No external tools are currently available. You must make decisions based solely on the provided input data. Proceed directly to PHASE 2: FINAL DECISION.\n"
                 standalone_mode = " operating in standalone mode"
 
             # Prepare all template variables by combining constraints and thresholds
@@ -777,7 +776,7 @@ Control Actions Available:
 
 System Constraints:
 - Response time should stay below 1000ms
-- Utilization should be between 50-80%
+- Utilization should be between 50-85%
 - Server count should be between 1-10
 - Dimmer value should be between 0.0-1.0
 
@@ -790,6 +789,7 @@ IMPORTANT: Action Cooldowns
 Time Calculation:
 - All timestamps are in UTC format
 - Use the provided cooldown_status calculations instead of manually calculating time differences
+- The system automatically calculates minutes_since_last_action for you
 
 Please analyze the system context and make adaptation decisions in JSON format:
 {{
@@ -802,66 +802,12 @@ Please analyze the system context and make adaptation decisions in JSON format:
 }}
 """
 
-    async def _call_llm_with_history(self, conversation_history: List[Dict[str, str]]) -> str:
-        """Call the LLM with conversation history."""
-        # Convert conversation to a single prompt for simple LLM APIs
-        prompt_parts = []
-        for message in conversation_history:
-            role = message["role"]
-            content = message["content"]
-            if role == "system":
-                prompt_parts.append(f"System: {content}")
-            elif role == "user":
-                prompt_parts.append(f"User: {content}")
-            elif role == "assistant":
-                prompt_parts.append(f"Assistant: {content}")
-
-        full_prompt = "\n\n".join(prompt_parts)
-
-        endpoint_url = f"{self.base_url}/api/generate"
-        payload = {
-            "model": self.model,
-            "prompt": full_prompt,
-            "stream": False,
-            "max_tokens": self.max_tokens,
-            # "temperature": self.temperature,
-        }
-
-        headers = {"Content-Type": "application/json"}
-
-        for attempt in range(self.max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    response = await client.post(endpoint_url, json=payload, headers=headers)
-                    response.raise_for_status()
-
-                    response_data = response.json()
-                    print("RAW RESPONSE:", response_data)
-                    response_text = response_data.get("response", "").strip()
-
-                    if not response_text:
-                        # fallback to thinking if present
-                        response_text = response_data.get("thinking", "").strip()
-
-                    if not response_text:
-                        raise ValueError("Empty response from LLM")
-
-                    return response_text
-
-            except Exception as e:
-                self.logger.warning(f"LLM call attempt {attempt + 1} failed: {e}")
-                if attempt + 1 == self.max_retries:
-                    raise
-                await asyncio.sleep(2**attempt)  # Exponential backoff
-
-        raise Exception("LLM call failed after all retries")
-
     async def reason(
         self, context: ReasoningContext, knowledge: Optional[List[Dict[str, Any]]] = None
     ) -> ReasoningResult:
         """Execute agentic reasoning with dynamic tool usage."""
         start_time = time.time()
-        reasoning_steps = ["Starting agentic LLM reasoning with GPT OSS"]
+        reasoning_steps = ["Starting agentic LLM reasoning with local LLM"]
         tool_calls_made = 0
 
         try:
@@ -873,39 +819,14 @@ Please analyze the system context and make adaptation decisions in JSON format:
             user_prompt = self._build_initial_prompt(context)
             reasoning_steps.append("Built initial analysis prompt")
 
-            # Start the reasoning loop with chat history
-            # chat_history = [
-            #     types.Content(role="user", parts=[types.Part(text=self.system_prompt)]),
-            #     types.Content(
-            #         role="model",
-            #         parts=[
-            #             types.Part(
-            #                 text="Understood. I will analyze system contexts and make adaptation decisions following the structured format with tool usage when needed."
-            #             )
-            #         ],
-            #     ),
-            #     types.Content(role="user", parts=[types.Part(text=user_prompt)]),
-            # ]
-            conversation_history = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-
+            # Start the reasoning loop
             final_action = None
 
             for iteration in range(self.max_tool_calls + 1):  # +1 for final decision
                 reasoning_steps.append(f"Reasoning iteration {iteration + 1}")
 
                 # Get LLM response
-                # llm_response = await self._call_gemini(chat_history)
-                # reasoning_steps.append(f"Received Gemini response (iteration {iteration + 1})")
-                # self.logger.debug(f"Gemini Response (iteration {iteration + 1}): {llm_response}")
-
-                # # Add assistant response to history
-                # chat_history.append(
-                #     types.Content(role="model", parts=[types.Part(text=llm_response)])
-                # )
-                llm_response = await self._call_llm_with_history(conversation_history)
+                llm_response = await self._call_llm(self.system_prompt, user_prompt)
                 reasoning_steps.append(f"Received LLM response (iteration {iteration + 1})")
                 self.logger.debug(f"LLM Response (iteration {iteration + 1}): {llm_response}")
 
@@ -940,15 +861,15 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             reasoning_steps.append(f"Unknown tool requested: {tool_name}")
                             self.logger.warning(f"Unknown tool requested: {tool_name}")
 
-                    # Add tool results to conversation
+                    # Add tool results to next prompt
                     if tool_results:
                         tool_results_text = "Tool Results:\n" + json.dumps(tool_results, indent=2)
-                        conversation_history.append({"role": "assistant", "content": llm_response})
-                        tool_results_text = "Tool Results:\n" + json.dumps(tool_results, indent=2)
-                        conversation_history.append({"role": "user", "content": tool_results_text})
-                        reasoning_steps.append(
-                            f"Added {len(tool_results)} tool results to conversation"
+                        user_prompt += f"\n\n{tool_results_text}\n\nBased on these tool results, please provide your final decision and action in the required JSON format."
+                        reasoning_steps.append(f"Added {len(tool_results)} tool results to prompt")
+                        self.logger.info(
+                            f"Feeding tool results back to LLM: {len(tool_results)} results"
                         )
+                        self.logger.debug(f"Tool Results Text: {tool_results_text}")
                         # Continue to next iteration to let LLM process the tool results
                         continue
                     else:
@@ -965,26 +886,11 @@ Please analyze the system context and make adaptation decisions in JSON format:
 
                 # No tool calls and no action - force a decision
                 if not tool_calls and not action:
-                    # chat_history.append(
-                    #     types.Content(
-                    #         role="user",
-                    #         parts=[
-                    #             types.Part(
-                    #                 text="Please provide your final decision and action in the required JSON format."
-                    #             )
-                    #         ],
-                    #     )
-                    # )
-                    # final_response = await self._call_gemini(chat_history)
-                    conversation_history.append({"role": "assistant", "content": llm_response})
-                    conversation_history.append(
-                        {
-                            "role": "user",
-                            "content": "Please provide your final decision and action in the required JSON format.",
-                        }
+                    forced_prompt = (
+                        user_prompt
+                        + "\n\nPlease provide your final decision and action in the required JSON format."
                     )
-                    final_response = await self._call_llm_with_history(conversation_history)
-
+                    final_response = await self._call_llm(self.system_prompt, forced_prompt)
                     _, final_action = self._parse_llm_response(final_response)
                     reasoning_steps.append("Forced final decision")
                     break
@@ -1049,6 +955,11 @@ You should use these tools to gather more information before making decisions. F
 
 START BY USING TOOLS TO GATHER MORE INFORMATION!
 """
+        else:
+            tools_reminder = """
+NO TOOLS AVAILABLE: You must make a decision based solely on the provided data.
+Proceed directly to PHASE 2: FINAL DECISION with <thinking> and <json_output> blocks.
+"""
 
         # Build enhanced context with historical actions if available
         enhanced_context = context.input_data.copy()
@@ -1091,34 +1002,86 @@ Remember to follow the structured output format with tool calls if you need more
 
         return normalized
 
-    async def _call_gemini(self, chat_history: List[types.Content]) -> str:
-        """Call Gemini API with chat history."""
+    async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
+        """Calls the local LLM API endpoint."""
+        # Add explicit instruction for complete responses
+        enhanced_user_prompt = f"""{user_prompt}
+
+CRITICAL REMINDER: You must provide a complete response. Always include either:
+1. Tool calls if you need more information, OR
+2. A final decision with <thinking> and <json_output> blocks
+Never provide an empty or incomplete response."""
+
+        full_prompt = f"{system_prompt}\n\n{enhanced_user_prompt}"
+        endpoint_url = f"{self.base_url}/api/generate"
+
+        # Payload structure for Ollama-like APIs
+        payload = {
+            "model": self.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "max_tokens": self.max_tokens,
+        }
+
+        headers = {"Content-Type": "application/json"}
+
         for attempt in range(self.max_retries):
             try:
-                # Generate content with the chat history
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=chat_history,
-                    config=types.GenerateContentConfig(
-                        temperature=self.temperature,
-                        max_output_tokens=self.max_tokens,
-                    ),
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    self.logger.info(f"Sending request to local LLM at {endpoint_url}")
+                    response = await client.post(endpoint_url, json=payload, headers=headers)
+                    response.raise_for_status()  # Raise an exception for 4xx/5xx errors
+
+                    self.logger.info(f"Raw response: {response.text}")
+
+                    response_data = response.json()
+                    response_text = response_data.get("response", "").strip()
+
+                    if not response_text:
+                        # Check if there's content in thinking or other fields
+                        thinking_content = response_data.get("thinking", "").strip()
+                        if thinking_content:
+                            self.logger.warning("Response field empty but found thinking content")
+                            response_text = thinking_content
+                        else:
+                            # Check for any non-empty field as fallback
+                            for field, value in response_data.items():
+                                if isinstance(value, str) and value.strip():
+                                    self.logger.warning(
+                                        f"Response field empty, using content from '{field}' field"
+                                    )
+                                    response_text = value.strip()
+                                    break
+
+                            if not response_text:
+                                self.logger.error(
+                                    f"Empty response field! Available fields: {list(response_data.keys())}"
+                                )
+                                raise ValueError("LLM response JSON was empty or malformed.")
+
+                    self.logger.info(f"LLM response received on attempt {attempt + 1}")
+                    return response_text
+
+            except (
+                httpx.RequestError,
+                httpx.HTTPStatusError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as e:
+                self.logger.warning(
+                    f"Local LLM API call failed with error: {e}. Attempt {attempt + 1}/{self.max_retries}."
                 )
-
-                # Extract text from response
-                if response and response.text:
-                    return response.text.strip()
-                else:
-                    raise ValueError("Empty response from Gemini")
-
-            except Exception as e:
-                self.logger.warning(f"Gemini call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
+                    self.logger.error("Max retries reached. Failing the LLM operation.")
                     raise
-                await asyncio.sleep(2**attempt)  # Exponential backoff
 
-        raise Exception("Gemini call failed after all retries")
+                backoff_time = self.initial_backoff * (2**attempt)
+                jitter = random.uniform(0, backoff_time * 0.1)
+                delay = backoff_time + jitter
+                self.logger.info(f"Retrying in {delay:.2f} seconds...")
+                await asyncio.sleep(delay)
+
+        raise Exception("LLM call failed after all retries.")
 
     def _parse_llm_response(
         self, response: str
@@ -1175,39 +1138,108 @@ Remember to follow the structured output format with tool calls if you need more
 
             i += 1
 
-        # Second pass: look for final action JSON
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
+        # Second pass: look for JSON in <json_output> blocks (could be tool calls array or action object)
+        if "<json_output" in response:
+            if "</json_output>" in response:
+                # Standard format
+                start = response.find("<json_output>") + len("<json_output>")
+                end = response.find("</json_output>")
+                json_str = response[start:end].strip()
+            else:
+                # Handle format like <json_output<|message|>
+                start = response.find("<json_output")
+                if start != -1:
+                    # Find the end of the tag
+                    tag_end = response.find(">", start) + 1
+                    # Extract everything after the tag
+                    json_str = response[tag_end:].strip()
 
-            # Look for JSON action (more robust detection)
-            if line.startswith("{") and not action:
-                # Try to parse JSON action
-                json_lines = []
-                brace_count = 0
-
-                # Collect all lines that form a complete JSON object
-                while i < len(lines):
-                    current_line = lines[i]
-                    json_lines.append(current_line)
-
-                    # Count braces to find complete JSON
-                    brace_count += current_line.count("{") - current_line.count("}")
-
-                    if brace_count == 0 and len(json_lines) > 0:
-                        break
-                    i += 1
-
+            if json_str:
                 try:
-                    json_str = "\n".join(json_lines)
-                    parsed_action = json.loads(json_str)
-                    # Validate it looks like an action
-                    if isinstance(parsed_action, dict) and "action_type" in parsed_action:
-                        action = parsed_action
+                    parsed_json = json.loads(json_str)
+
+                    # Check if it's a tool calls array
+                    if isinstance(parsed_json, list):
+                        # Handle tool calls array format
+                        for tool_call in parsed_json:
+                            if isinstance(tool_call, dict) and "tool_name" in tool_call:
+                                tool_calls.append(
+                                    {
+                                        "tool_name": tool_call["tool_name"],
+                                        "parameters": tool_call.get("parameters", {}),
+                                    }
+                                )
+                    # Check if it's an action object
+                    elif isinstance(parsed_json, dict) and "action_type" in parsed_json:
+                        action = parsed_json
                 except json.JSONDecodeError:
                     pass
 
-            i += 1
+        # Fallback: look for any JSON object in the response (like llm_reasoner does)
+        if not action and not tool_calls:
+            self.logger.warning(
+                "No <json_output> tags found. Falling back to extracting first JSON object."
+            )
+
+            # Find first complete JSON object
+            json_start = response.find("{")
+            if json_start != -1:
+                # Find matching closing brace
+                brace_count = 0
+                json_end = json_start
+                for i, char in enumerate(response[json_start:], json_start):
+                    if char == "{":
+                        brace_count += 1
+                    elif char == "}":
+                        brace_count -= 1
+                        if brace_count == 0:
+                            json_end = i + 1
+                            break
+
+                if json_end > json_start:
+                    try:
+                        json_str = response[json_start:json_end]
+                        parsed_json = json.loads(json_str)
+
+                        # Check if it's a tool calls array
+                        if isinstance(parsed_json, list):
+                            for tool_call in parsed_json:
+                                if isinstance(tool_call, dict) and "tool_name" in tool_call:
+                                    tool_calls.append(
+                                        {
+                                            "tool_name": tool_call["tool_name"],
+                                            "parameters": tool_call.get("parameters", {}),
+                                        }
+                                    )
+                        # Check if it's an action object
+                        elif isinstance(parsed_json, dict) and "action_type" in parsed_json:
+                            action = parsed_json
+                    except json.JSONDecodeError as e:
+                        self.logger.warning(f"Failed to parse JSON fallback: {e}")
+                        pass
+
+        # Fallback: if no action found but we have thinking content, try to extract action from thinking
+        if not action and not tool_calls and "<thinking>" in response and "</thinking>" in response:
+            thinking_start = response.find("<thinking>") + len("<thinking>")
+            thinking_end = response.find("</thinking>")
+            thinking_content = response[thinking_start:thinking_end].strip()
+
+            # Look for action mentions in thinking content
+            action_keywords = ["ADD_SERVER", "REMOVE_SERVER", "SET_DIMMER", "NO_ACTION"]
+            for keyword in action_keywords:
+                if keyword in thinking_content.upper():
+                    self.logger.warning(
+                        f"Found {keyword} in thinking block but no JSON action - creating fallback action"
+                    )
+                    action = {
+                        "action_type": keyword,
+                        "source": "agentic_reasoner",
+                        "action_id": str(uuid.uuid4()),
+                        "params": {},
+                        "priority": "medium",
+                        "reasoning": f"Extracted from thinking content: {thinking_content[:100]}...",
+                    }
+                    break
 
         return tool_calls, action
 
@@ -1234,7 +1266,7 @@ Remember to follow the structured output format with tool calls if you need more
             # Query for recent adaptation decisions/actions
             actions = await kb_query.query_structured(
                 data_types=["adaptation_decision"],
-                limit=3,
+                limit=8,
             )
 
             # Convert action history deque to list

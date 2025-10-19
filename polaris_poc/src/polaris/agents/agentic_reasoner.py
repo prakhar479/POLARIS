@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 import tempfile
 import yaml
+from pathlib import Path
 
 from google import genai
 from google.genai import types
@@ -44,6 +45,31 @@ from .reasoner_core import ReasoningType
 from .improved_grpc_client import ImprovedGRPCDigitalTwinClient
 
 
+class PerformanceLogger:
+    """Simple performance logger for overhead metrics."""
+
+    def __init__(self, log_dir: str = "logs/overhead"):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.log_dir / "performance_metrics.jsonl"
+
+    def log_metric(self, metric_type: str, duration_ms: float, details: Dict[str, Any] = None):
+        """Log a performance metric to file."""
+        try:
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "metric_type": metric_type,
+                "duration_ms": round(duration_ms, 3),
+                "details": details or {},
+            }
+
+            with open(self.log_file, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            # Don't let logging errors break the main flow
+            print(f"Performance logging error: {e}")
+
+
 class AgenticTool:
     """Base class for tools that the agentic reasoner can use."""
 
@@ -60,7 +86,12 @@ class AgenticTool:
 class KnowledgeBaseTool(AgenticTool):
     """Tool for querying the knowledge base."""
 
-    def __init__(self, kb_query: KnowledgeQueryInterface, logger: logging.Logger):
+    def __init__(
+        self,
+        kb_query: KnowledgeQueryInterface,
+        logger: logging.Logger,
+        perf_logger: PerformanceLogger,
+    ):
         super().__init__(
             name="query_knowledge_base",
             description="Query the knowledge base for historical data, observations, and telemetry",
@@ -89,9 +120,11 @@ class KnowledgeBaseTool(AgenticTool):
         )
         self.kb_query = kb_query
         self.logger = logger
+        self.perf_logger = perf_logger
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Execute knowledge base query."""
+        start_time = time.time()
         try:
             query_type = kwargs.get("query_type", "structured")
             limit = kwargs.get("limit", 10)
@@ -110,12 +143,29 @@ class KnowledgeBaseTool(AgenticTool):
             else:
                 return {"success": False, "error": f"Unknown query type: {query_type}"}
 
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "kb_query",
+                duration_ms,
+                {
+                    "query_type": query_type,
+                    "result_count": len(results) if results else 0,
+                    "limit": limit,
+                },
+            )
+
             return {
                 "success": True,
                 "results": results or [],
                 "count": len(results) if results else 0,
             }
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "kb_query_error",
+                duration_ms,
+                {"error": str(e), "query_type": kwargs.get("query_type", "unknown")},
+            )
             self.logger.error(f"Knowledge base query failed: {e}")
             return {"success": False, "error": str(e)}
 
@@ -123,7 +173,12 @@ class KnowledgeBaseTool(AgenticTool):
 class DigitalTwinTool(AgenticTool):
     """Tool for interacting with the digital twin."""
 
-    def __init__(self, dt_interface: DigitalTwinInterface, logger: logging.Logger):
+    def __init__(
+        self,
+        dt_interface: DigitalTwinInterface,
+        logger: logging.Logger,
+        perf_logger: PerformanceLogger,
+    ):
         super().__init__(
             name="query_digital_twin",
             description="Query the digital twin for system state, simulations, and diagnostics",
@@ -156,12 +211,22 @@ class DigitalTwinTool(AgenticTool):
         )
         self.dt_interface = dt_interface
         self.logger = logger
+        self.perf_logger = perf_logger
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Execute digital twin operation."""
+        start_time = time.time()
+        operation = kwargs.get("operation", "query")
+
         try:
             # Check if digital twin interface is available
             if not self.dt_interface:
+                duration_ms = (time.time() - start_time) * 1000
+                self.perf_logger.log_metric(
+                    "dt_error",
+                    duration_ms,
+                    {"error": "interface_not_available", "operation": operation},
+                )
                 return {"success": False, "error": "Digital twin interface not available"}
 
             # Ensure connection is established with better error handling
@@ -170,13 +235,30 @@ class DigitalTwinTool(AgenticTool):
                 try:
                     await asyncio.wait_for(self.dt_interface.connect(), timeout=15.0)
                     if not self.dt_interface.stub:
+                        duration_ms = (time.time() - start_time) * 1000
+                        self.perf_logger.log_metric(
+                            "dt_connection_error",
+                            duration_ms,
+                            {"error": "connection_failed", "operation": operation},
+                        )
                         return {"success": False, "error": "Failed to connect to digital twin"}
                 except asyncio.TimeoutError:
+                    duration_ms = (time.time() - start_time) * 1000
+                    self.perf_logger.log_metric(
+                        "dt_connection_error",
+                        duration_ms,
+                        {"error": "connection_timeout", "operation": operation},
+                    )
                     return {"success": False, "error": "Digital twin connection timeout"}
                 except Exception as e:
+                    duration_ms = (time.time() - start_time) * 1000
+                    self.perf_logger.log_metric(
+                        "dt_connection_error",
+                        duration_ms,
+                        {"error": f"connection_exception: {str(e)}", "operation": operation},
+                    )
                     return {"success": False, "error": f"Digital twin connection failed: {str(e)}"}
 
-            operation = kwargs.get("operation", "query")
             self.logger.debug(f"Executing digital twin operation: {operation}")
 
             if operation == "query":
@@ -221,9 +303,27 @@ class DigitalTwinTool(AgenticTool):
                 )
                 response = await self.dt_interface.diagnose(diagnosis)
             else:
+                duration_ms = (time.time() - start_time) * 1000
+                self.perf_logger.log_metric(
+                    "dt_error",
+                    duration_ms,
+                    {"error": f"unknown_operation: {operation}", "operation": operation},
+                )
                 return {"success": False, "error": f"Unknown operation: {operation}"}
 
+            duration_ms = (time.time() - start_time) * 1000
+
             if response:
+                self.perf_logger.log_metric(
+                    "dt_operation",
+                    duration_ms,
+                    {
+                        "operation": operation,
+                        "success": response.success,
+                        "confidence": response.confidence,
+                    },
+                )
+
                 result = {
                     "success": response.success,
                     "result": response.result,
@@ -240,9 +340,16 @@ class DigitalTwinTool(AgenticTool):
 
                 return result
             else:
+                self.perf_logger.log_metric(
+                    "dt_error", duration_ms, {"error": "no_response", "operation": operation}
+                )
                 return {"success": False, "error": "No response from digital twin"}
 
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "dt_error", duration_ms, {"error": str(e), "operation": operation}
+            )
             self.logger.error(f"Digital twin operation failed: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
@@ -582,8 +689,8 @@ class AgenticLLMReasoner(ReasoningInterface):
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
-        model: str = "gpt-5",
-        max_completion_tokens: int = 8192,
+        model: str = "gemini-2.0-flash",
+        max_tokens: int = 8192,
         temperature: float = 0.3,
         max_tool_calls: int = 5,
         prompt_config_path: Optional[str] = None,
@@ -592,31 +699,36 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.api_key = api_key
         self.reasoning_type = reasoning_type
         self.model = model
-        self.max_completion_tokens = max_completion_tokens
+        self.max_tokens = max_tokens
         self.temperature = temperature
         self.max_tool_calls = max_tool_calls
         self.max_retries = 3
-        self.prompt_config_path = prompt_config_path
+        self.prompt_config_path = prompt_config_path  # Store for reloading
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
 
-        # Initialize OpenAI client
-        from openai import AsyncOpenAI
+        # Initialize performance logger
+        self.perf_logger = PerformanceLogger()
 
-        self.client = AsyncOpenAI(api_key=self.api_key)
+        # Initialize Gemini client
+        self.client = genai.Client(api_key=api_key)
 
         # Initialize context builder and action history tracking
         self.context_builder = ContextBuilder(self.logger, {})
-        self.action_history: deque = deque(maxlen=20)
-        self.reactive_logs: deque = deque(maxlen=3)
-        self.last_historical_context = None
+        self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
+        self.reactive_logs: deque = deque(maxlen=3)  # Store the last 3 reactive logs
+        self.last_historical_context = None  # Cache for historical actions context
 
         # Initialize tools
         self.tools = {}
         if kb_query_interface:
-            self.tools["query_knowledge_base"] = KnowledgeBaseTool(kb_query_interface, self.logger)
+            self.tools["query_knowledge_base"] = KnowledgeBaseTool(
+                kb_query_interface, self.logger, self.perf_logger
+            )
             self.logger.info("Knowledge Base tool initialized")
         if dt_interface:
-            self.tools["query_digital_twin"] = DigitalTwinTool(dt_interface, self.logger)
+            self.tools["query_digital_twin"] = DigitalTwinTool(
+                dt_interface, self.logger, self.perf_logger
+            )
             self.logger.info("Digital Twin tool initialized")
 
         if not self.tools:
@@ -632,9 +744,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.prompt_config = self._load_prompt_config()
         self.system_prompt = self._build_system_prompt()
 
-        self.logger.info(
-            f"Initialized AgenticLLMReasoner with GPT-4 and {len(self.tools)} tools available"
-        )
+        self.logger.info(f"Initialized AgenticLLMReasoner and {len(self.tools)} tools available")
 
     def _load_prompt_config(self) -> Dict[str, Any]:
         """Load prompt configuration from YAML file."""
@@ -805,37 +915,66 @@ Please analyze the system context and make adaptation decisions in JSON format:
         self, context: ReasoningContext, knowledge: Optional[List[Dict[str, Any]]] = None
     ) -> ReasoningResult:
         """Execute agentic reasoning with dynamic tool usage."""
-        start_time = time.time()
-        reasoning_steps = ["Starting agentic LLM reasoning with GPT-4"]
+        overall_start_time = time.time()
+        reasoning_steps = ["Starting agentic LLM reasoning with Gemini Flash 2.5"]
         tool_calls_made = 0
+
+        # Performance tracking
+        tool_call_timings = []
+        llm_call_timings = []
 
         try:
             # Query for historical actions and snapshots to build enhanced context
+            hist_start_time = time.time()
             await self._gather_historical_context()
+            hist_duration_ms = (time.time() - hist_start_time) * 1000
+            self.perf_logger.log_metric("historical_context_gathering", hist_duration_ms)
             reasoning_steps.append("Gathered historical actions context")
 
             # Initial analysis
             user_prompt = self._build_initial_prompt(context)
             reasoning_steps.append("Built initial analysis prompt")
 
-            # Start the reasoning loop with messages
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt},
+            # Start the reasoning loop with chat history
+            chat_history = [
+                types.Content(role="user", parts=[types.Part(text=self.system_prompt)]),
+                types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text="Understood. I will analyze system contexts and make adaptation decisions following the structured format with tool usage when needed."
+                        )
+                    ],
+                ),
+                types.Content(role="user", parts=[types.Part(text=user_prompt)]),
             ]
 
             final_action = None
 
-            for iteration in range(self.max_tool_calls + 1):
+            for iteration in range(self.max_tool_calls + 1):  # +1 for final decision
                 reasoning_steps.append(f"Reasoning iteration {iteration + 1}")
 
                 # Get LLM response
-                llm_response = await self._call_gpt(messages)
-                reasoning_steps.append(f"Received GPT-4 response (iteration {iteration + 1})")
-                self.logger.debug(f"GPT-4 Response (iteration {iteration + 1}): {llm_response}")
+                llm_start_time = time.time()
+                llm_response = await self._call_gemini(chat_history)
+                llm_duration_ms = (time.time() - llm_start_time) * 1000
+                llm_call_timings.append(llm_duration_ms)
+                self.perf_logger.log_metric(
+                    "llm_call",
+                    llm_duration_ms,
+                    {
+                        "iteration": iteration + 1,
+                        "model": self.model,
+                        "response_length": len(llm_response),
+                    },
+                )
+                reasoning_steps.append(f"Received Gemini response (iteration {iteration + 1})")
+                self.logger.debug(f"Gemini Response (iteration {iteration + 1}): {llm_response}")
 
                 # Add assistant response to history
-                messages.append({"role": "assistant", "content": llm_response})
+                chat_history.append(
+                    types.Content(role="model", parts=[types.Part(text=llm_response)])
+                )
 
                 # Parse response for tool calls or final decision
                 tool_calls, action = self._parse_llm_response(llm_response)
@@ -847,7 +986,7 @@ Please analyze the system context and make adaptation decisions in JSON format:
                     f"Tool calls made: {tool_calls_made}, Max tool calls: {self.max_tool_calls}"
                 )
                 if tool_calls and tool_calls_made < self.max_tool_calls:
-                    # Execute tool calls
+                    # Execute tool calls (prioritize over action)
                     tool_results = []
                     for tool_call in tool_calls:
                         tool_name = tool_call.get("tool_name")
@@ -858,10 +997,24 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             self.logger.info(
                                 f"Executing tool '{tool_name}' with parameters: {parameters}"
                             )
+                            tool_start_time = time.time()
                             result = await self.tools[tool_name].execute(**parameters)
+                            tool_duration_ms = (time.time() - tool_start_time) * 1000
+                            tool_call_timings.append(tool_duration_ms)
+                            self.perf_logger.log_metric(
+                                "tool_call_total",
+                                tool_duration_ms,
+                                {
+                                    "tool_name": tool_name,
+                                    "iteration": iteration + 1,
+                                    "parameters": str(parameters)[:100],  # Truncate for logging
+                                },
+                            )
+
                             tool_results.append(
                                 {"tool_name": tool_name, "parameters": parameters, "result": result}
                             )
+                            # self.logger.debug(f"Tool result: {result}")
                             tool_calls_made += 1
                         else:
                             reasoning_steps.append(f"Unknown tool requested: {tool_name}")
@@ -870,7 +1023,9 @@ Please analyze the system context and make adaptation decisions in JSON format:
                     # Add tool results to conversation
                     if tool_results:
                         tool_results_text = "Tool Results:\n" + json.dumps(tool_results, indent=2)
-                        messages.append({"role": "user", "content": tool_results_text})
+                        chat_history.append(
+                            types.Content(role="user", parts=[types.Part(text=tool_results_text)])
+                        )
                         reasoning_steps.append(
                             f"Added {len(tool_results)} tool results to conversation"
                         )
@@ -878,12 +1033,15 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             f"Feeding tool results back to LLM: {len(tool_results)} results"
                         )
                         self.logger.debug(f"Tool Results Text: {tool_results_text}")
+                        # Continue to next iteration to let LLM process the tool results
                         continue
                     else:
+                        # No valid tool calls were executed
                         reasoning_steps.append("No valid tool calls executed")
                         self.logger.warning("Tool calls were parsed but none were valid")
 
                 if action:
+                    # Final decision reached (only if no tool calls were executed)
                     final_action = action
                     reasoning_steps.append("Final decision reached")
                     self.logger.info(f"Final action determined: {action}")
@@ -891,18 +1049,32 @@ Please analyze the system context and make adaptation decisions in JSON format:
 
                 # No tool calls and no action - force a decision
                 if not tool_calls and not action:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "Please provide your final decision and action in the required JSON format.",
-                        }
+                    chat_history.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(
+                                    text="Please provide your final decision and action in the required JSON format."
+                                )
+                            ],
+                        )
                     )
-                    final_response = await self._call_gpt(messages)
+                    llm_start_time = time.time()
+                    final_response = await self._call_gemini(chat_history)
+                    llm_duration_ms = (time.time() - llm_start_time) * 1000
+                    llm_call_timings.append(llm_duration_ms)
+                    self.perf_logger.log_metric(
+                        "llm_call_final",
+                        llm_duration_ms,
+                        {"model": self.model, "forced_decision": True},
+                    )
+
                     _, final_action = self._parse_llm_response(final_response)
                     reasoning_steps.append("Forced final decision")
                     break
 
             # Ensure we have a valid action
+            # Normalize or fallback to NO_ACTION
             if final_action:
                 final_action = self._normalize_action(final_action)
             else:
@@ -915,21 +1087,52 @@ Please analyze the system context and make adaptation decisions in JSON format:
                 )
                 reasoning_steps.append("Fallback to NO_ACTION")
 
-            execution_time = time.time() - start_time
+            overall_duration_ms = (time.time() - overall_start_time) * 1000
+
+            # Log comprehensive overhead metrics
+            self.perf_logger.log_metric(
+                "end_to_end_reasoning",
+                overall_duration_ms,
+                {
+                    "tool_calls_made": tool_calls_made,
+                    "llm_calls_made": len(llm_call_timings),
+                    "final_action_type": final_action.get("action_type"),
+                    "total_tool_time_ms": sum(tool_call_timings),
+                    "total_llm_time_ms": sum(llm_call_timings),
+                    "avg_tool_time_ms": (
+                        sum(tool_call_timings) / len(tool_call_timings) if tool_call_timings else 0
+                    ),
+                    "avg_llm_time_ms": (
+                        sum(llm_call_timings) / len(llm_call_timings) if llm_call_timings else 0
+                    ),
+                },
+            )
+
+            execution_time = time.time() - overall_start_time
 
             return ReasoningResult(
                 result=final_action,
-                confidence=0.8,
+                confidence=0.8,  # Could be dynamic based on tool results
                 reasoning_steps=reasoning_steps,
                 context=context,
                 execution_time=execution_time,
-                kb_queries_made=tool_calls_made,
-                dt_queries_made=0,
+                kb_queries_made=tool_calls_made,  # Approximate
+                dt_queries_made=0,  # Could track separately
             )
 
         except Exception as e:
+            overall_duration_ms = (time.time() - overall_start_time) * 1000
+            self.perf_logger.log_metric(
+                "reasoning_error",
+                overall_duration_ms,
+                {
+                    "error": str(e),
+                    "tool_calls_made": tool_calls_made,
+                    "llm_calls_made": len(llm_call_timings),
+                },
+            )
             self.logger.error(f"Agentic reasoning failed: {e}", exc_info=True)
-            execution_time = time.time() - start_time
+            execution_time = time.time() - overall_start_time
 
             return ReasoningResult(
                 result={
@@ -1003,29 +1206,68 @@ Remember to follow the structured output format with tool calls if you need more
 
         return normalized
 
-    async def _call_gpt(self, messages: List[Dict[str, str]]) -> str:
-        """Call GPT-5 API with message history and medium reasoning effort."""
+    async def _call_gemini(self, chat_history: List[types.Content]) -> str:
+        """Call Gemini API with chat history."""
         for attempt in range(self.max_retries):
+            call_start_time = time.time()
             try:
-                response = await self.client.chat.completions.create(
+                # Generate content with the chat history
+                response = await asyncio.to_thread(
+                    self.client.models.generate_content,
                     model=self.model,
-                    messages=messages,
-                    max_completion_tokens=self.max_completion_tokens,
-                    reasoning_effort="medium",  # GPT-5 medium reasoning effort
+                    contents=chat_history,
+                    config=types.GenerateContentConfig(
+                        temperature=self.temperature,
+                        max_output_tokens=self.max_tokens,
+                    ),
                 )
 
-                if response and response.choices and len(response.choices) > 0:
-                    return response.choices[0].message.content.strip()
+                call_duration_ms = (time.time() - call_start_time) * 1000
+
+                # Extract text from response
+                if response and response.text:
+                    self.perf_logger.log_metric(
+                        "gemini_api_call",
+                        call_duration_ms,
+                        {
+                            "attempt": attempt + 1,
+                            "success": True,
+                            "response_length": len(response.text),
+                            "model": self.model,
+                        },
+                    )
+                    return response.text.strip()
                 else:
-                    raise ValueError("Empty response from GPT-5")
+                    self.perf_logger.log_metric(
+                        "gemini_api_call",
+                        call_duration_ms,
+                        {
+                            "attempt": attempt + 1,
+                            "success": False,
+                            "error": "empty_response",
+                            "model": self.model,
+                        },
+                    )
+                    raise ValueError("Empty response from Gemini")
 
             except Exception as e:
-                self.logger.warning(f"GPT-5 call attempt {attempt + 1} failed: {e}")
+                call_duration_ms = (time.time() - call_start_time) * 1000
+                self.perf_logger.log_metric(
+                    "gemini_api_call",
+                    call_duration_ms,
+                    {
+                        "attempt": attempt + 1,
+                        "success": False,
+                        "error": str(e),
+                        "model": self.model,
+                    },
+                )
+                self.logger.warning(f"Gemini call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
                     raise
-                await asyncio.sleep(2**attempt)
+                await asyncio.sleep(2**attempt)  # Exponential backoff
 
-        raise Exception("GPT-5 call failed after all retries")
+        raise Exception("Gemini call failed after all retries")
 
     def _parse_llm_response(
         self, response: str
@@ -1120,6 +1362,7 @@ Remember to follow the structured output format with tool calls if you need more
 
     async def _gather_historical_context(self):
         """Gather historical actions and snapshots to build enhanced context."""
+        start_time = time.time()
         try:
             # Use direct KB query interface like in llm_reasoner.py
             if not self.tools.get("query_knowledge_base") or not hasattr(
@@ -1127,21 +1370,39 @@ Remember to follow the structured output format with tool calls if you need more
             ):
                 self.logger.warning("Knowledge base interface not available for historical context")
                 self.last_historical_context = None
+                duration_ms = (time.time() - start_time) * 1000
+                self.perf_logger.log_metric(
+                    "historical_context_error", duration_ms, {"error": "kb_interface_not_available"}
+                )
                 return
 
             kb_query = self.tools["query_knowledge_base"].kb_query
 
             # Query for recent snapshots using the same pattern as llm_reasoner.py
+            snapshots_start_time = time.time()
             snapshots = await kb_query.query_structured(
                 data_types=["observation"],
                 filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
                 limit=3,
             )
+            snapshots_duration_ms = (time.time() - snapshots_start_time) * 1000
+            self.perf_logger.log_metric(
+                "historical_snapshots_query",
+                snapshots_duration_ms,
+                {"result_count": len(snapshots) if snapshots else 0},
+            )
 
             # Query for recent adaptation decisions/actions
+            actions_start_time = time.time()
             actions = await kb_query.query_structured(
                 data_types=["adaptation_decision"],
                 limit=8,
+            )
+            actions_duration_ms = (time.time() - actions_start_time) * 1000
+            self.perf_logger.log_metric(
+                "historical_actions_query",
+                actions_duration_ms,
+                {"result_count": len(actions) if actions else 0},
             )
 
             # Convert action history deque to list
@@ -1150,8 +1411,15 @@ Remember to follow the structured output format with tool calls if you need more
 
             # Build context using ContextBuilder
             if snapshots or actions:
+                context_build_start_time = time.time()
                 historical_context = self.context_builder.build_context_from_kb_results(
                     snapshots, action_history_list, reactive_logs_list, actions
+                )
+                context_build_duration_ms = (time.time() - context_build_start_time) * 1000
+                self.perf_logger.log_metric(
+                    "context_building",
+                    context_build_duration_ms,
+                    {"snapshots_count": len(snapshots or []), "actions_count": len(actions or [])},
                 )
 
                 # Extract only the historical actions summary for the prompt
@@ -1163,7 +1431,20 @@ Remember to follow the structured output format with tool calls if you need more
                 self.last_historical_context = None
                 self.logger.info("No historical data available for context building")
 
+            total_duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "historical_context_total",
+                total_duration_ms,
+                {
+                    "success": True,
+                    "snapshots_available": len(snapshots) if snapshots else 0,
+                    "actions_available": len(actions) if actions else 0,
+                },
+            )
+
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric("historical_context_error", duration_ms, {"error": str(e)})
             self.logger.error(f"Failed to gather historical context: {e}")
             self.last_historical_context = None
 
