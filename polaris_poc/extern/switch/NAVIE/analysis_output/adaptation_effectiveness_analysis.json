@@ -1,0 +1,90 @@
+{
+  "ADAMLS": {
+    "avg_model_diversity": 3.2777777777777777,
+    "model_diversity_trend": [
+      3,
+      2,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      4,
+      5,
+      4,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2
+    ],
+    "stability_metrics": {
+      "confidence_cv": 0.18687983853972215,
+      "utility_cv": Infinity,
+      "model_processing_time_cv": 1.2496103301522514
+    },
+    "total_unique_models": 5
+  },
+  "NAIVE": {
+    "avg_model_diversity": 2.111111111111111,
+    "model_diversity_trend": [
+      3,
+      2,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      2,
+      2,
+      2,
+      2,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "stability_metrics": {
+      "confidence_cv": 0.2306159393310997,
+      "utility_cv": Infinity,
+      "model_processing_time_cv": 1.516184604896838
+    },
+    "total_unique_models": 4
+  },
+  "POLARIS": {
+    "avg_model_diversity": 3.473684210526316,
+    "model_diversity_trend": [
+      4,
+      5,
+      5,
+      5,
+      3,
+      4,
+      4,
+      3,
+      2,
+      3,
+      4,
+      3,
+      4,
+      4,
+      4,
+      3,
+      2,
+      2,
+      2
+    ],
+    "stability_metrics": {
+      "confidence_cv": 0.22944705374221747,
+      "utility_cv": Infinity,
+      "model_processing_time_cv": 1.344409504328034
+    },
+    "total_unique_models": 5
+  }
+}

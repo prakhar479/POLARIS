@@ -48,8 +48,23 @@ from .meta_learner_agent import (
 class MetaLearnerLLM(BaseMetaLearnerAgent):
     """Balanced LLM-based meta-learner for threshold optimization and observation storage."""
 
-    # Define immutable system constraints
-    FIXED_CONSTRAINTS = {"min_servers", "max_servers", "dimmer_min_value", "dimmer_max_value"}
+    # Define immutable system constraints - SWITCH-specific
+    FIXED_CONSTRAINTS = {
+        # Model identifiers (should never be changed)
+        "yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x",
+        "model_names", "model_identifiers",
+
+        # Utility function bounds (fundamental to utility calculation)
+        "utility_Rmin", "utility_Rmax", "utility_Cmin", "utility_Cmax",
+        "utility_wd", "utility_we",
+
+        # System limits (should not be changed by meta learning)
+        "min_model_switch_interval_s", "max_model_switches_per_hour",
+        "stabilization_time_s",
+
+        # Legacy constraints (for backward compatibility with SWIM)
+        "min_servers", "max_servers", "dimmer_min_value", "dimmer_max_value"
+    }
 
     def __init__(
         self,
@@ -58,7 +73,7 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
         prompt_config_path: str,
         config_path: str,
         nats_url: Optional[str] = None,
-        update_interval_seconds: float = 600.0,  # 10 minutes - more conservative interval
+        update_interval_seconds: float = 20.0,  # 10 minutes - more conservative interval
         model: str = "gemini-2.0-flash",
         temperature: float = 0.2,  # Lower temperature for more conservative, deterministic decisions
         max_tokens: int = 2048,
@@ -486,12 +501,10 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
             self.logger.error(f"Meta-learning cycle failed: {e}", exc_info=True)
             return False
 
-    def _build_system_prompt(self) -> str:
-        """Build system prompt emphasizing balanced, data-driven changes."""
 
     def _build_system_prompt(self) -> str:
         """Build system prompt emphasizing balanced optimization and observation storage."""
-        return f"""You are an expert systems engineer and prompt engineer specializing in adaptive system optimization and pattern recognition. Your role is to improve system performance through both parameter tuning and intelligent observation storage.
+        return f"""You are an expert systems engineer specializing in adaptive system optimization and pattern recognition. Your role is to improve system performance through both parameter tuning and intelligent observation storage.
 
 **DECISION FRAMEWORK:**
 1. **OBSERVATION STORAGE** - When you identify new patterns or insights that aren't captured yet
@@ -503,17 +516,18 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
 - Templates: {self.current_template_parts}
 
 **OBSERVATION STORAGE (when new patterns emerge):**
-Store brief insights in `observed_learnings` when you discover:
-- Performance correlations: "How CPU, memory, and response time relate"
-- Operational patterns: "What kinds of loads cause spikes"  
-- Adaptation learnings: "What kind of actions worked well under what conditions"
+Store insights in `adaptive_phrases` when you discover:
+- Performance correlations: "Response degrades when CPU > 85%"
+- Operational patterns: "traffic spikes need proactive scaling"  
+- Adaptation learnings: "Gradual dimmer more effective than sudden"
 
 **THRESHOLD TUNING (when parameters are clearly wrong):**
 Look for these signs that thresholds need adjustment:
 - Response time targets consistently exceeded or never approached
-- Utilization thresholds causing unnecessary scaling or failing to scale
-- Dimmer controls not matching performance vs user experience trade-offs
-- Cooldown timings causing delays or instability
+- Confidence thresholds causing inappropriate model switches
+- Utility function parameters not reflecting actual performance trade-offs
+- CPU thresholds triggering unnecessary model changes or failing to respond
+- Model switching intervals causing instability or delays
 - Change by max {self.max_change_percent}% per cycle
 
 **TEMPLATE REFINEMENT (only for significant performance improvements):**
@@ -537,10 +551,10 @@ Both Threshold Adjustment AND Pattern Storage (data shows misaligned parameter +
 ```json
 {{
   "thresholds": {{
-    "utilization_scale_up_threshold_percent": 75
+    "target_response_time_ms": 450
   }},
   "template_parts": {{
-    "observed_learnings": "Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience."
+    "adaptive_phrases": "Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience. Memory pressure correlates with response time degradation."
   }}
 }}
 ```
@@ -551,35 +565,21 @@ Threshold Too High (Response time target 800ms but system averages 600ms):
     "target_response_time_ms": 650
   }}
 }}
-```json
-{{
-  "template_parts": {{
-    "some other template part": "old contents + new clarification/slight refinement"
-  }}
-}}
+```
 
-### TASK
-Analyze the provided decision data and determine whether to **tune thresholds**, **refine templates**, **apply both**, or **make no change**.
 
----
+**DECISION CRITERIA:**
+- **Tune Thresholds**: If current parameters clearly don't match system behavior patterns (too high/low/never triggered)
+- **Store Patterns**: If you discover new correlations, behaviors, or insights not yet captured
+- **Both Valid**: Make both changes if they are independently supported by strong evidence
+- **Return {{}}**: Only when parameters seem well-calibrated AND no new patterns emerge
 
-### DECISION CRITERIA
-1. **Tune Thresholds** Only if current parameters clearly mismatch system behavior (too high, too low, or never triggered).
-2. **Refine Templates** Only if reasoning or structure shows repeated logical gaps or misaligned decisions.
-3. **Combine Both** If both conditions above are independently supported by strong evidence.
-4. **Return {{}}** When:
-   - Thresholds are well-calibrated
-   - No new behavior patterns are observed
-   - Reasoning is already sound and consistent
-
-### OUTPUT REQUIREMENTS
-- Output must be **valid JSON**, properly formatted.
-- Evaluate **thresholds**, **patterns**, and **templates** with equal rigor.
-- Only propose changes when **clearly supported by evidence**.
-- For **template changes**, include the **entire revised text**, not just fragments.
-- Keep the response **concise and non-redundant** — suitable for direct use as a prompt.
-- Provide a **brief justification** for each decision (1 sentence).
-"""
+**OUTPUT REQUIREMENTS:**
+- JSON must be valid and properly formatted  
+- Focus on changes with strongest evidence (threshold, pattern, or both)
+- Give equal consideration to both threshold optimization and pattern storage
+- Only make changes when clearly justified by the data
+- Justify your choice based on what the data clearly shows"""
 
     def _build_user_prompt(self, telemetry_summary: Dict[str, Any]) -> str:
         """Build user prompt with telemetry context."""
@@ -622,33 +622,34 @@ Analyze the provided decision data and determine whether to **tune thresholds**,
 **ANALYSIS FOCUS:**
 
 **PATTERN DISCOVERY CHECK:**  
-Look for new insights not yet captured in observed_learnings:
+Look for new insights not yet captured in adaptive_phrases:
 - Performance correlations (CPU, memory, response time relationships)
-- User behavior patterns (dimmer thresholds)
+- User behavior patterns (abandonment, tolerance thresholds)
 - Operational patterns (time-based load, cascade effects)
-- Change the current content to add new observation and given final, summarized and brief text 
 - Successful adaptation strategies under specific conditions
 
 **THRESHOLD MISALIGNMENT CHECK:**
-Examine if current thresholds match actual system behavior:
+Only when patterns are already well-captured, examine if current thresholds match actual system behavior:
 - Are response time targets appropriate for observed performance?
 - Do utilization thresholds trigger scaling at right times?  
 - Are dimmer controls calibrated for performance vs user experience?
 - Do cooldown periods cause delays or allow instability?
 
-**TEMPLATE REFINEMENT CHECK:**
-Analyze if reasoning structure or constraints need minor improvements:
-- Are decision failures due to missing reasoning steps or unclear logic?
-- Would small clarifications significantly improve decision quality?
-
 **DECISION PRIORITY:**
-1. **Capture New Patterns**: If you discover insights not yet stored, add them to observed_learnings  
+1. **Capture New Patterns**: If you discover insights not yet stored, add them to adaptive_phrases  
 2. **Fix Parameter Misalignment**: If thresholds clearly don't match system behavior, adjust them
-3. **Refine Decision Templates**: If reasoning structure or constraints have clear gaps causing repeated failures
-You should make ANY COMBINATION of changes if strongly supported by data
-4. **No Changes**: Return {{}} only if parameters are well-aligned AND no new patterns are evident AND reasoning is sound
+You should make BOTH changes if strongly supported by data
+3. **No Changes**: Return {{}} only if parameters are well-aligned AND no new patterns are evident
 
-- "Append and give final phrase (old+new) to store in observed_learnings"
+**EXAMPLES OF CLEAR THRESHOLD ISSUES:**
+- Target response time 1000ms but system consistently runs at 400ms → Lower target
+- Utilization threshold 90% but scaling happens at 60% → Adjust threshold
+- Dimmer reduction at 2s but users tolerate 1s → Reduce threshold
+
+**EXAMPLES OF PATTERN INSIGHTS:**
+- "Response time spikes correlate with CPU > 85%"
+- "Server additions during spikes improve latency"
+- "Dimmer reduction gives faster recovery than addition of server, but is less impactful"
 """
 
         return prompt
@@ -695,17 +696,55 @@ You should make ANY COMBINATION of changes if strongly supported by data
 
             # Validation rules (min, max) - used as hints, not strict requirements
             known_rules = {
-                "max_response_time_s": (0.5, 5.0),
+                # Response time thresholds (seconds)
+                "max_response_time_s": (0.1, 2.0),
+                "target_response_time_ms": (300, 1000),
+                "critical_response_time_s": (0.5, 1.5),
+                "good_response_time_s": (0.05, 0.5),
+
+                # Confidence thresholds (0-1 scale)
+                "min_confidence": (0.3, 0.7),
+                "target_confidence": (0.7, 0.9),
+                "low_confidence_threshold": (0.4, 0.7),
+                "high_confidence_threshold": (0.8, 0.95),
+
+                # CPU utilization thresholds (0-1 scale)
+                "max_cpu_utilization": (0.8, 0.98),
+                "high_cpu_threshold": (0.7, 0.9),
+                "low_cpu_threshold": (0.3, 0.7),
+                "target_cpu_utilization": (0.5, 0.8),
+
+                # Utility function parameters
+                "utility_Rmin": (0.05, 0.2),           # Best response time
+                "utility_Rmax": (0.5, 2.0),            # Worst acceptable response time
+                "utility_Cmin": (0.3, 0.6),            # Worst acceptable confidence
+                "utility_Cmax": (0.8, 1.0),            # Best confidence
+                "utility_wd": (0.3, 0.7),             # Response time weight
+                "utility_we": (0.3, 0.7),             # Confidence weight
+
+                # Utility thresholds
+                "target_utility": (0.6, 0.9),
+                "low_utility_threshold": (0.3, 0.6),
+                "critical_utility": (0.1, 0.4),
+
+                # Model switching constraints
+                "min_model_switch_interval_s": (1.0, 5.0),
+                "max_model_switches_per_hour": (10, 60),
+                "stabilization_time_s": (2.0, 10.0),
+
+                # Adaptation timing
+                "cooldown_period_minutes": (1, 10),
+                "performance_monitoring_window_minutes": (5, 30),
+
+                # Legacy SWIM constraints (for backward compatibility)
                 "max_response_time_ms": (500, 5000),
                 "dimmer_reduction_threshold_s": (0.3, 2.0),
-                "target_response_time_ms": (300, 2000),
                 "acceptable_response_time_variance": (0.05, 0.3),
                 "dimmer_max_step": (0.05, 0.5),
                 "utilization_scale_up_threshold_percent": (70, 95),
                 "utilization_scale_down_target_percent": (30, 70),
                 "utilization_optimal_range_min": (40, 70),
                 "utilization_optimal_range_max": (60, 85),
-                "cooldown_period_minutes": (1, 15),
             }
 
             # Cooldown parameters (now adjustable for smarter timing)

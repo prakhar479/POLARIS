@@ -136,7 +136,18 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 },
             )
 
-            grpc_metadata = {k: str(v) for k, v in query_response.metadata.items()}
+            # FIXED: Safe metadata handling (same as Simulate method)
+            safe_metadata = {}
+            if query_response.metadata:
+                self.logger.debug(f"Converting query metadata: {query_response.metadata}")
+                for key, value in query_response.metadata.items():
+                    try:
+                        # Ensure all metadata values are strings for gRPC compatibility
+                        safe_metadata[str(key)] = str(value)
+                        self.logger.debug(f"Query metadata conversion: {key}={value} ({type(value).__name__}) -> {str(value)} (str)")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to convert query metadata key '{key}' with value '{value}' to string: {e}")
+                        safe_metadata[str(key)] = "conversion_failed"
 
             grpc_response = digital_twin_pb2.QueryResponse(
                 query_id=query_response.query_id,
@@ -145,7 +156,7 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 confidence=query_response.confidence,
                 explanation=query_response.explanation,
                 timestamp=query_response.timestamp,
-                metadata=grpc_metadata,
+                metadata=safe_metadata,
             )
 
             # Update metrics
@@ -186,6 +197,9 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 "Returning error response for failed query", extra={"query_id": query_id}
             )
 
+            # FIXED: Safe error metadata handling
+            error_metadata = {"error": str(e)}
+            
             return digital_twin_pb2.QueryResponse(
                 query_id=query_id,
                 success=False,
@@ -193,7 +207,7 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 confidence=0.0,
                 explanation=f"Query failed: {str(e)}",
                 timestamp=datetime.now(timezone.utc).isoformat(),
-                metadata={"error": str(e)},
+                metadata=error_metadata,
             )
 
     async def Simulate(
@@ -220,6 +234,13 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                     "actions_count": len(request.actions),
                 },
             )
+            
+            # Log detailed action information for debugging
+            for i, action in enumerate(request.actions):
+                self.logger.debug(f"Action {i}: action_id={action.action_id}, action_type={action.action_type}, target={action.target}")
+                self.logger.debug(f"Action {i} params: {dict(action.params)}")
+                for param_key, param_value in action.params.items():
+                    self.logger.debug(f"Action {i} param '{param_key}': '{param_value}' (type: {type(param_value).__name__})")
 
             # Convert gRPC actions to internal format
             actions = []
@@ -248,61 +269,42 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
             )
 
             # Execute simulation through World Model
-            sim_response = await self.world_model.simulate(sim_request)
+            self.logger.debug(f"Calling world model simulate with request: {sim_request.simulation_id}")
+            try:
+                sim_response = await self.world_model.simulate(sim_request)
+                self.logger.debug(f"World model simulate completed successfully: {sim_response.success}")
+            except Exception as world_model_error:
+                self.logger.error(f"World model simulate failed: {world_model_error}", exc_info=True)
+                raise
 
-            self.logger.debug(
-                f"World Model simulation completed, response: {sim_response.to_dict()} ",
-            )
-
-            # Convert future states to gRPC format
+            # Convert future states to gRPC format with safe type conversion
             grpc_future_states = []
 
             for state in sim_response.future_states:
                 if isinstance(state, dict):
-                    # Extract predicted values from the state metrics
-                    grpc_metrics = {}
-                    state_data = state.get("state", {})
-
-                    # Calculate average confidence from all metrics
-                    confidences = []
-                    description_parts = []
-
-                    for metric_name, metric_data in state_data.items():
-                        if isinstance(metric_data, dict) and "predicted_value" in metric_data:
-                            grpc_metrics[metric_name] = metric_data["predicted_value"]
-
-                            # Collect confidence for averaging
-                            if "confidence" in metric_data:
-                                confidences.append(metric_data["confidence"])
-
-                            # Build description with remaining metrics
-                            desc_parts = []
-                            if "predicted_velocity" in metric_data:
-                                desc_parts.append(f"velocity: {metric_data['predicted_velocity']}")
-                            if "uncertainty" in metric_data:
-                                desc_parts.append(f"uncertainty: {metric_data['uncertainty']}")
-                            if "confidence" in metric_data:
-                                desc_parts.append(f"confidence: {metric_data['confidence']}")
-
-                            if desc_parts:
-                                description_parts.append(f"{metric_name} ({', '.join(desc_parts)})")
-                        else:
-                            # Fallback for simple numeric values
-                            grpc_metrics[metric_name] = (
-                                float(metric_data) if metric_data is not None else 0.0
-                            )
-
-                    # Calculate average confidence
-                    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-
-                    # Create description string with all metric details
-                    description = "; ".join(description_parts) if description_parts else ""
-
+                    # Safely convert metrics to map<string, double>
+                    safe_metrics = {}
+                    state_metrics = state.get("metrics", {})
+                    if isinstance(state_metrics, dict):
+                        for key, value in state_metrics.items():
+                            try:
+                                # Convert to double/float for gRPC compatibility
+                                safe_metrics[str(key)] = float(value)
+                            except (ValueError, TypeError) as e:
+                                self.logger.warning(f"Failed to convert metric '{key}' with value '{value}' to double: {e}")
+                                safe_metrics[str(key)] = 0.0
+                    
+                    # Safely convert confidence
+                    try:
+                        safe_confidence = float(state.get("confidence", 0.0))
+                    except (ValueError, TypeError):
+                        safe_confidence = 0.0
+                    
                     grpc_state = digital_twin_pb2.PredictedState(
-                        timestamp=state.get("timestamp", ""),
-                        metrics=grpc_metrics,
-                        confidence=avg_confidence,
-                        description=description,
+                        timestamp=str(state.get("timestamp", "")),
+                        metrics=safe_metrics,
+                        confidence=safe_confidence,
+                        description=str(state.get("description", "")),
                     )
                     grpc_future_states.append(grpc_state)
             self.logger.debug(
@@ -332,7 +334,17 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
             )
             grpc_metadata = {k: str(v) for k, v in sim_response.metadata.items()}
 
-            # Convert internal response to gRPC format
+            # Convert internal response to gRPC format with safe metadata handling
+            safe_metadata = {}
+            if sim_response.metadata:
+                for key, value in sim_response.metadata.items():
+                    try:
+                        # Ensure all metadata values are strings for gRPC compatibility
+                        safe_metadata[str(key)] = str(value)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to convert metadata key '{key}' with value '{value}' to string: {e}")
+                        safe_metadata[str(key)] = "conversion_failed"
+            
             grpc_response = digital_twin_pb2.SimulationResponse(
                 simulation_id=sim_response.simulation_id,
                 success=sim_response.success,
@@ -344,7 +356,7 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 explanation=sim_response.explanation,
                 impact_estimates=grpc_impact,
                 timestamp=sim_response.timestamp,
-                metadata=grpc_metadata,  # <- all values are strings now
+                metadata=safe_metadata,
             )
 
             self.logger.debug(
@@ -459,7 +471,28 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
 
                 grpc_hypotheses.append(grpc_hypothesis)
 
-            grpc_metadata = {k: str(v) for k, v in diag_response.metadata.items()}
+            # FIXED: Safe metadata handling (same as Simulate method)
+            safe_metadata = {}
+            if diag_response.metadata:
+                self.logger.debug(f"Converting diagnosis metadata: {diag_response.metadata}")
+                for key, value in diag_response.metadata.items():
+                    try:
+                        # Ensure all metadata values are strings for gRPC compatibility
+                        safe_metadata[str(key)] = str(value)
+                        self.logger.debug(f"Diagnosis metadata conversion: {key}={value} ({type(value).__name__}) -> {str(value)} (str)")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to convert diagnosis metadata key '{key}' with value '{value}' to string: {e}")
+                        safe_metadata[str(key)] = "conversion_failed"
+
+            # FIXED: Safe supporting_evidence handling
+            safe_supporting_evidence = []
+            if diag_response.supporting_evidence:
+                for evidence in diag_response.supporting_evidence:
+                    try:
+                        safe_supporting_evidence.append(str(evidence))
+                    except Exception as e:
+                        self.logger.warning(f"Failed to convert supporting evidence '{evidence}' to string: {e}")
+                        safe_supporting_evidence.append("evidence_conversion_failed")
 
             # Convert internal response to gRPC format
             grpc_response = digital_twin_pb2.DiagnosisResponse(
@@ -469,9 +502,9 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 causal_chain=diag_response.causal_chain,
                 confidence=diag_response.confidence,
                 explanation=diag_response.explanation,
-                supporting_evidence=diag_response.supporting_evidence,
+                supporting_evidence=safe_supporting_evidence,
                 timestamp=diag_response.timestamp,
-                metadata=grpc_metadata,
+                metadata=safe_metadata,
             )
 
             # Update metrics
@@ -500,6 +533,9 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 extra={"diagnosis_id": request.diagnosis_id, "error": str(e)},
             )
 
+            # FIXED: Safe error metadata handling
+            error_metadata = {"error": str(e)}
+            
             # Return error response
             return digital_twin_pb2.DiagnosisResponse(
                 diagnosis_id=request.diagnosis_id or str(uuid.uuid4()),
@@ -510,7 +546,7 @@ class DigitalTwinService(digital_twin_pb2_grpc.DigitalTwinServicer):
                 explanation=f"Diagnosis failed: {str(e)}",
                 supporting_evidence=[],
                 timestamp=datetime.now(timezone.utc).isoformat(),
-                metadata={"error": str(e)},
+                metadata=error_metadata,
             )
 
     async def Manage(

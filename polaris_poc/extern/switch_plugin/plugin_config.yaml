@@ -1,0 +1,283 @@
+# Switch System Plugin Configuration for POLARIS
+# ================================================
+# This configuration defines how POLARIS interacts with the Switch YOLO system
+
+# =============================================================================
+# System Identification
+# =============================================================================
+system_name: "switch_yolo"
+system_type: "ml_adaptive_system"
+version: "1.0.0"
+description: "YOLO model switching system for adaptive object detection"
+
+# =============================================================================
+# Connection Configuration
+# =============================================================================
+connection:
+  type: "http"
+  host: "localhost"
+  port: 3001
+  timeout: 10.0
+  max_retries: 3
+  retry_base_delay: 1.0
+  retry_max_delay: 5.0
+  
+  # Health check configuration
+  health_check:
+    enabled: true
+    endpoint: "/api/latest_metrics_data"
+    interval: 30.0
+    timeout: 5.0
+
+# =============================================================================
+# Implementation Configuration
+# =============================================================================
+implementation:
+  connector_class: "SwitchSystemConnector"
+  connector_module: "switch_connector"
+  
+  # Switch-specific file paths
+  model_file_path: "model.csv"
+  monitor_file_path: "monitor.csv"
+  knowledge_file_path: "knowledge.csv"
+  metrics_file_path: "metrics.csv"
+
+# =============================================================================
+# Available Actions
+# =============================================================================
+actions:
+  - name: "SWITCH_MODEL"
+    description: "Switch to a different YOLO model"
+    command_template: "switch_model"
+    parameters:
+      - name: "model"
+        type: "string"
+        required: true
+        allowed_values: ["yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x"]
+        description: "Target YOLO model to switch to"
+    
+  - name: "UPDATE_KNOWLEDGE"
+    description: "Update model switching thresholds"
+    command_template: "update_knowledge"
+    parameters:
+      - name: "thresholds"
+        type: "object"
+        required: true
+        description: "Model threshold configuration"
+    
+  - name: "START_PROCESSING"
+    description: "Start image processing pipeline"
+    command_template: "start_processing"
+    
+  - name: "STOP_PROCESSING"
+    description: "Stop image processing pipeline"
+    command_template: "stop_processing"
+    
+  - name: "RESTART_PROCESSING"
+    description: "Restart image processing pipeline"
+    command_template: "restart_processing"
+
+# =============================================================================
+# Monitoring Configuration
+# =============================================================================
+monitoring:
+  interval: 30.0
+  strategies:
+    batch_collection: true
+    parallel_collection: false
+    max_concurrent: 1
+    error_handling: "skip"
+  
+  # Metrics to collect
+  metrics:
+    # Performance metrics
+    - name: "image_processing_time"
+      command: "get_latest_metrics"
+      unit: "seconds"
+      type: "float"
+      category: "performance"
+      
+    - name: "model_processing_time"
+      command: "get_latest_metrics"
+      unit: "seconds"
+      type: "float"
+      category: "performance"
+      
+    - name: "confidence"
+      command: "get_latest_metrics"
+      unit: "ratio"
+      type: "float"
+      category: "performance"
+      
+    - name: "utility"
+      command: "get_latest_metrics"
+      unit: "score"
+      type: "float"
+      category: "performance"
+      
+    - name: "cpu_usage"
+      command: "get_latest_metrics"
+      unit: "percent"
+      type: "float"
+      category: "system"
+      
+    - name: "detection_boxes"
+      command: "get_latest_metrics"
+      unit: "count"
+      type: "integer"
+      category: "performance"
+      
+    - name: "total_processed"
+      command: "get_latest_metrics"
+      unit: "count"
+      type: "integer"
+      category: "performance"
+      
+    - name: "current_model"
+      command: "get_current_model"
+      unit: "string"
+      type: "string"
+      category: "model"
+  
+  # Derived metrics
+  derived_metrics:
+    - name: "cpu_efficiency"
+      formula: "(1.0 / image_processing_time) / (cpu_usage / 100.0) if cpu_usage > 0 and image_processing_time > 0 else 0"
+      unit: "efficiency_ratio"
+      category: "derived"
+      
+    - name: "model_efficiency"
+      formula: "1.0 / model_processing_time if model_processing_time > 0 else 0"
+      unit: "inferences_per_second"
+      category: "derived"
+      
+    - name: "model_overhead_ratio"
+      formula: "model_processing_time / image_processing_time if image_processing_time > 0 and model_processing_time > 0 else 0"
+      unit: "ratio"
+      category: "derived"
+      
+    - name: "detection_rate"
+      formula: "detection_boxes / image_processing_time if image_processing_time > 0 else 0"
+      unit: "detections_per_second"
+      category: "derived"
+      
+    - name: "system_load_factor"
+      formula: "min(cpu_usage / 100.0, 1.0) if cpu_usage > 0 else 0"
+      unit: "ratio"
+      category: "derived"
+
+# =============================================================================
+# Switch System Specific Configuration
+# =============================================================================
+switch_system:
+  # Available YOLO models
+  available_models:
+    - "yolov5n"
+    - "yolov5s"
+    - "yolov5m"
+    - "yolov5l"
+    - "yolov5x"
+  
+  # Model characteristics (for optimization)
+  model_characteristics:
+    yolov5n:
+      response_time: 0.05
+      confidence: 0.65
+      cpu_factor: 1.0
+      accuracy_rating: 0.6
+    yolov5s:
+      response_time: 0.10
+      confidence: 0.75
+      cpu_factor: 1.5
+      accuracy_rating: 0.7
+    yolov5m:
+      response_time: 0.20
+      confidence: 0.82
+      cpu_factor: 2.5
+      accuracy_rating: 0.8
+    yolov5l:
+      response_time: 0.40
+      confidence: 0.88
+      cpu_factor: 4.0
+      accuracy_rating: 0.85
+    yolov5x:
+      response_time: 0.80
+      confidence: 0.92
+      cpu_factor: 6.0
+      accuracy_rating: 0.9
+  
+  # Utility function parameters
+  utility:
+    Rmin: 0.1     # Best response time (seconds)
+    Rmax: 1.0     # Worst acceptable response time
+    Cmin: 0.5     # Worst acceptable confidence
+    Cmax: 1.0     # Best confidence
+    wd: 0.5       # Response time weight
+    we: 0.5       # Confidence weight
+    pdv: 5.0      # Response time penalty scale
+    pev: 5.0      # Confidence penalty scale
+  
+  # Performance targets
+  targets:
+    target_utility: 0.8
+    low_utility_threshold: 0.4
+    critical_utility: 0.2
+    response_time_good: 0.2
+    response_time_acceptable: 0.5
+    response_time_critical: 0.9
+    confidence_low: 0.55
+    confidence_acceptable: 0.75
+    confidence_high: 0.85
+    cpu_utilization_low: 50.0
+    cpu_utilization_high: 85.0
+    cpu_utilization_max: 95.0
+  
+  # Monitoring settings
+  monitor_interval: 30.0
+  max_history_size: 100
+  
+  # File paths
+  model_file_path: "model.csv"
+  monitor_file_path: "monitor.csv"
+  knowledge_file_path: "knowledge.csv"
+  metrics_file_path: "metrics.csv"
+
+# =============================================================================
+# Verification Rules
+# =============================================================================
+verification:
+  rules:
+    - id: "valid_model_check"
+      type: "safety"
+      severity: "high"
+      description: "Ensure only valid YOLO models are selected"
+      condition: "params.model in ['yolov5n', 'yolov5s', 'yolov5m', 'yolov5l', 'yolov5x']"
+      
+    - id: "cpu_overload_protection"
+      type: "resource"
+      severity: "high"
+      description: "Prevent model switches that would overload CPU"
+      condition: "cpu_usage < 90 OR target_model_is_lighter"
+      
+    - id: "utility_degradation_check"
+      type: "performance"
+      severity: "medium"
+      description: "Warn about switches that may decrease utility"
+      condition: "predicted_utility > current_utility * 0.9"
+
+# =============================================================================
+# Telemetry Configuration
+# =============================================================================
+telemetry:
+  subjects:
+    metrics: "polaris.switch.metrics"
+    model_events: "polaris.switch.model_events"
+    performance: "polaris.switch.performance"
+    utility: "polaris.switch.utility"
+    actions: "polaris.switch.actions"
+  
+  publishing:
+    batch_size: 10
+    batch_timeout: 2.0
+    enable_streaming: true
+    queue_size: 200

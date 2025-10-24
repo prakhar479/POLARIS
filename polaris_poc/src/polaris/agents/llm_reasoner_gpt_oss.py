@@ -44,7 +44,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         prompt_config: Dict[str, Any],  # <-- New parameter for the config
         prompt_config_path: Optional[str] = None,  # <-- Add path to reload config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
-        model: str = "gpt-oss:20b",
+        model: str = "gemini-2.5-flash",
         max_tokens: int = 2048,
         temperature: float = 0.2,
         timeout: float = 600.0,

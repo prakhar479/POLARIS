@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 import tempfile
 import yaml
+import sys
 from pathlib import Path
 
 from google import genai
@@ -29,6 +30,13 @@ from .reasoner_core import (
 )
 
 from collections import deque
+
+from collections import deque
+
+# Add config/prompts to path for dynamic prompt loading
+config_prompts_path = Path(__file__).parent.parent.parent / "config" / "prompts"
+if str(config_prompts_path) not in sys.path:
+    sys.path.insert(0, str(config_prompts_path))
 
 from .reasoner_agent import (
     KnowledgeQueryInterface,
@@ -260,6 +268,11 @@ class DigitalTwinTool(AgenticTool):
                     return {"success": False, "error": f"Digital twin connection failed: {str(e)}"}
 
             self.logger.debug(f"Executing digital twin operation: {operation}")
+            self.logger.debug(f"Operation parameters: {kwargs}")
+            
+            # Log parameter types for debugging
+            for key, value in kwargs.items():
+                self.logger.debug(f"Parameter {key}: {value} (type: {type(value).__name__})")
 
             if operation == "query":
                 query = DTQuery(
@@ -273,7 +286,12 @@ class DigitalTwinTool(AgenticTool):
                 raw_actions = kwargs.get("actions", [])
                 formatted_actions = []
 
-                for action in raw_actions:
+                self.logger.debug(f"Raw actions received: {raw_actions}")
+                self.logger.debug(f"Raw actions types: {[type(a) for a in raw_actions]}")
+
+                for i, action in enumerate(raw_actions):
+                    self.logger.debug(f"Processing action {i}: {action} (type: {type(action)})")
+
                     if isinstance(action, str):
                         # Convert string action to proper action dictionary
                         action_dict = {
@@ -283,11 +301,15 @@ class DigitalTwinTool(AgenticTool):
                             "params": {},
                         }
                         formatted_actions.append(action_dict)
+                        self.logger.debug(f"Converted string action to: {action_dict}")
                     elif isinstance(action, dict):
                         # Already a dictionary, use as-is
                         formatted_actions.append(action)
+                        self.logger.debug(f"Using dict action as-is: {action}")
                     else:
-                        self.logger.warning(f"Unknown action format: {action}")
+                        self.logger.warning(f"Unknown action format: {action} (type: {type(action)})")
+
+                self.logger.debug(f"Formatted actions: {formatted_actions}")
 
                 simulation = DTSimulation(
                     simulation_type=kwargs.get("simulation_type", "forecast"),
@@ -338,6 +360,11 @@ class DigitalTwinTool(AgenticTool):
                 if hasattr(response, "hypotheses") and response.hypotheses:
                     result["hypotheses"] = response.hypotheses
 
+                self.logger.debug(f"Digital twin response received: success={response.success}, confidence={response.confidence}")
+                if not response.success:
+                    self.logger.error(f"Digital twin operation failed: {response.explanation}")
+                    self.logger.error(f"Digital twin metadata: {response.metadata}")
+                
                 return result
             else:
                 self.perf_logger.log_metric(
@@ -679,21 +706,24 @@ class ContextBuilder:
 
 class AgenticLLMReasoner(ReasoningInterface):
     """
-    Agentic LLM reasoner that can dynamically decide which tools to use
-    and make autonomous adaptation decisions using Google Gemini Flash 2.5.
+    Agentic LLM-based reasoner using Google Gemini Flash 2.5.
+
+    This reasoner can autonomously decide when to use tools (Knowledge Base, Digital Twin)
+    and make adaptation decisions based on its analysis.
+
+    System-agnostic implementation: Loads prompts dynamically based on managed system type.
     """
 
     def __init__(
         self,
         api_key: str,
-        reasoning_type: ReasoningType,
+        config: Dict[str, Any],
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
         model: str = "gemini-2.0-flash",
         max_tokens: int = 8192,
         temperature: float = 0.3,
         max_tool_calls: int = 5,
-        prompt_config_path: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
         self.api_key = api_key
@@ -703,171 +733,49 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.temperature = temperature
         self.max_tool_calls = max_tool_calls
         self.max_retries = 3
-        self.prompt_config_path = prompt_config_path  # Store for reloading
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
 
-        # Initialize performance logger
-        self.perf_logger = PerformanceLogger()
-
         # Initialize Gemini client
-        self.client = genai.Client(api_key=api_key)
-
-        # Initialize context builder and action history tracking
-        self.context_builder = ContextBuilder(self.logger, {})
-        self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
-        self.reactive_logs: deque = deque(maxlen=3)  # Store the last 3 reactive logs
-        self.last_historical_context = None  # Cache for historical actions context
+        self.client = genai.Client(api_key=self.api_key)
 
         # Initialize tools
         self.tools = {}
         if kb_query_interface:
-            self.tools["query_knowledge_base"] = KnowledgeBaseTool(
-                kb_query_interface, self.logger, self.perf_logger
-            )
+            self.tools["query_knowledge_base"] = KnowledgeBaseTool(kb_query_interface, self.logger)
             self.logger.info("Knowledge Base tool initialized")
         if dt_interface:
-            self.tools["query_digital_twin"] = DigitalTwinTool(
-                dt_interface, self.logger, self.perf_logger
-            )
+            self.tools["query_digital_twin"] = DigitalTwinTool(dt_interface, self.logger)
             self.logger.info("Digital Twin tool initialized")
 
-        if not self.tools:
-            self.logger.warning(
-                "No tools available - agentic reasoner will have limited capabilities"
-            )
-        else:
+        if self.tools:
             self.logger.info(
                 f"Agentic reasoner initialized with {len(self.tools)} tools: {list(self.tools.keys())}"
             )
+
+        # Load system-specific prompts dynamically
+        self.system_name = system_name or config.get("system_name", "generic")
+        self._load_system_prompts()
 
         # System prompt for the agentic reasoner
         self.prompt_config = self._load_prompt_config()
         self.system_prompt = self._build_system_prompt()
 
-        self.logger.info(f"Initialized AgenticLLMReasoner and {len(self.tools)} tools available")
-
-    def _load_prompt_config(self) -> Dict[str, Any]:
-        """Load prompt configuration from YAML file."""
-        try:
-            # Use stored prompt_config_path if available, otherwise use default
-            if self.prompt_config_path:
-                prompt_file_path = self.prompt_config_path
-            else:
-                # Get the directory where this file is located
-                current_dir = os.path.dirname(__file__)
-                prompt_file_path = os.path.join(current_dir, "agentic_reasoner_prompt.yaml")
-
-            with open(prompt_file_path, "r", encoding="utf-8") as file:
-                config = yaml.safe_load(file)
-                return config.get("prompt_config", {})
-        except Exception as e:
-            self.logger.error(f"Failed to load prompt configuration: {e}")
-            # Return a minimal fallback configuration
-            return {
-                "fixed_constraints": {},
-                "thresholds": {},
-                "template_parts": {},
-                "template": "You are an autonomous adaptive system controller.",
-            }
-
-    def reload_prompt_config(self) -> bool:
-        """Reload prompt configuration from file."""
-        if not self.prompt_config_path:
-            self.logger.warning("No prompt_config_path set, cannot reload config")
-            return False
-
-        try:
-            self.logger.info(f"Reloading prompt config from {self.prompt_config_path}")
-            old_config = self.prompt_config.copy()
-
-            # Reload the config
-            self.prompt_config = self._load_prompt_config()
-
-            # Rebuild the system prompt with new config
-            self.system_prompt = self._build_system_prompt()
-
-            self.logger.info(f"✅ Prompt config reloaded successfully")
-            self.logger.info(f"   Old config keys: {list(old_config.keys())}")
-            self.logger.info(f"   New config keys: {list(self.prompt_config.keys())}")
-
-            # Log specific changes
-            if "thresholds" in old_config and "thresholds" in self.prompt_config:
-                old_thresholds = old_config.get("thresholds", {})
-                new_thresholds = self.prompt_config.get("thresholds", {})
-                if old_thresholds != new_thresholds:
-                    self.logger.info(f"   Thresholds updated: {old_thresholds} -> {new_thresholds}")
-
-            if "template_parts" in old_config and "template_parts" in self.prompt_config:
-                old_template_parts = old_config.get("template_parts", {})
-                new_template_parts = self.prompt_config.get("template_parts", {})
-                if old_template_parts != new_template_parts:
-                    self.logger.info(
-                        f"   Template parts updated: {list(new_template_parts.keys())}"
-                    )
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to reload prompt config: {e}", exc_info=True)
-            return False
+        self.logger.info(
+            f"Initialized AgenticLLMReasoner with Gemini Flash 2.5 and {len(self.tools)} tools available"
+        )
 
     def _build_system_prompt(self) -> str:
-        """Build the system prompt for the agentic reasoner using YAML configuration."""
-        try:
-            # Get configuration sections
-            fixed_constraints = self.prompt_config.get("fixed_constraints", {})
-            thresholds = self.prompt_config.get("thresholds", {})
-            template_parts = self.prompt_config.get("template_parts", {})
-            template = self.prompt_config.get("template", "")
+        """Build the system prompt for the agentic reasoner."""
+        tools_description = ""
+        if self.tools:
+            tools_description = "\n\nAvailable Tools:\n"
+            for tool_name, tool in self.tools.items():
+                tools_description += f"- {tool_name}: {tool.description}\n"
+                tools_description += f"  Parameters: {json.dumps(tool.parameters, indent=2)}\n"
+        else:
+            tools_description = "\n\nNote: No external tools are currently available. You must make decisions based solely on the provided input data.\n"
 
-            # Build tools description
-            tools_description = ""
-            standalone_mode = ""
-            if self.tools:
-                tools_description = "\n\nAvailable Tools:\n"
-                for tool_name, tool in self.tools.items():
-                    tools_description += f"- {tool_name}: {tool.description}\n"
-                    tools_description += f"  Parameters: {json.dumps(tool.parameters, indent=2)}\n"
-            else:
-                tools_description = "\n\nNote: No external tools are currently available. You must make decisions based solely on the provided input data.\n"
-                standalone_mode = " operating in standalone mode"
-
-            # Prepare all template variables by combining constraints and thresholds
-            template_vars = {}
-            template_vars.update(fixed_constraints)
-            template_vars.update(thresholds)
-            template_vars["tools_description"] = tools_description
-            template_vars["standalone_mode"] = standalone_mode
-
-            # Format each template part with variables
-            formatted_parts = {}
-            for part_name, part_content in template_parts.items():
-                try:
-                    formatted_parts[part_name] = part_content.format(**template_vars)
-                except KeyError as e:
-                    self.logger.warning(
-                        f"Missing variable {e} in template part '{part_name}', using unformatted content"
-                    )
-                    formatted_parts[part_name] = part_content
-
-            # Format the main template with all parts and variables
-            all_template_vars = {}
-            all_template_vars.update(template_vars)
-            all_template_vars.update(formatted_parts)
-
-            try:
-                return template.format(**all_template_vars)
-            except KeyError as e:
-                self.logger.error(f"Missing variable {e} in main template, using fallback")
-                return self._build_fallback_prompt(tools_description, standalone_mode)
-
-        except Exception as e:
-            self.logger.error(f"Failed to build system prompt from YAML: {e}")
-            return self._build_fallback_prompt("", " operating in standalone mode")
-
-    def _build_fallback_prompt(self, tools_description: str, standalone_mode: str) -> str:
-        """Build a fallback system prompt if YAML loading fails."""
-        return f"""You are an autonomous adaptive system controller{standalone_mode} for making adaptation decisions.
+        return f"""You are an autonomous adaptive system controller{"" if self.tools else " operating in standalone mode"} for making adaptation decisions.
 
 Your role is to:
 1. Analyze the current system situation
@@ -876,6 +784,44 @@ Your role is to:
 4. Generate appropriate control actions
 
 {tools_description}
+
+KNOWLEDGE BASE QUERY GUIDELINES:
+When using query_knowledge_base tool, follow these patterns:
+
+1. **For recent observations/aggregated telemetry**:
+   - query_type: "structured"
+   - data_types: ["observation"]
+   - Optional filters for specific metrics
+
+2. **For raw telemetry events**:
+   - query_type: "structured" 
+   - data_types: ["raw_telemetry_event"]
+   - Use filters to specify metric_name if needed
+
+3. **For adaptation decisions history**:
+   - query_type: "structured"
+   - data_types: ["adaptation_decision"]
+
+4. **For natural language search**:
+   - query_type: "natural_language"
+   - query_text: "your search terms"
+
+Valid data_types: ["raw_telemetry_event", "adaptation_decision", "system_goal", "learned_pattern", "observation", "system_info", "generic_fact"]
+
+IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
+- If you need additional information to make a good decision, you MUST use the available tools
+- Always try to gather more context before making decisions when tools are available
+- Use tools to check historical patterns, system state, or run simulations
+- Tool usage is STRONGLY ENCOURAGED when tools are available
+
+Decision Making Process:
+1. First, analyze the input data to understand the current situation
+2. Determine what additional information you need (historical data, simulations, diagnostics)
+3. Use tools to gather that information (this step is CRITICAL)
+4. Wait for tool results and analyze them
+5. Synthesize all information to make an adaptation decision
+6. Generate the appropriate control action
+7. You cannot make server decisions too frequently
 
 Control Actions Available:
 - ADD_SERVER: Add a server to handle increased load
@@ -889,26 +835,104 @@ System Constraints:
 - Server count should be between 1-10
 - Dimmer value should be between 0.0-1.0
 
-IMPORTANT: Action Cooldowns
-- ADD_SERVER and REMOVE_SERVER actions have a 2-minute cooldown period
-- Check the 'cooldown_status' in the historical_actions_summary to see if cooldowns have expired
-- If cooldown_expired is false, DO NOT take that action type
-- The cooldown_remaining_minutes field shows exactly how much time is left
+CRITICAL WORKFLOW RULES:
+1. **NEVER provide both tool calls AND action in the same response**
+2. **If you need tools, ONLY provide tool calls - NO action**
+3. **Wait for tool results, then provide your final action**
+4. **Tool calls are processed iteratively - you can make up to 5 tool calls total**
+5. **Each tool call response will be provided back to you before you can make more calls**
 
-Time Calculation:
-- All timestamps are in UTC format
-- Use the provided cooldown_status calculations instead of manually calculating time differences
-- The system automatically calculates minutes_since_last_action for you
+MANDATORY OUTPUT FORMAT:
 
-Please analyze the system context and make adaptation decisions in JSON format:
+**PHASE 1 - INFORMATION GATHERING (if tools needed):**
+Your response should contain:
+
+1. **Analysis**: Brief analysis of the current situation
+
+2. **Tool Usage Decision**: 
+   - State what information you need and which tools you will use
+   - Be specific about what you hope to learn
+
+3. **Tool Calls**: Use this EXACT format for each tool call:
+   ```
+   TOOL_CALL: tool_name
+   PARAMETERS: {{"param1": "value1", "param2": "value2"}}
+   ```
+
+**PHASE 2 - FINAL DECISION (after tool results received):**
+Your response should contain:
+
+1. **Analysis**: Analysis of tool results and current situation
+
+2. **Final Decision**: Your decision and reasoning based on all available information
+
+3. **Action**: The control action in JSON format:
+   ```json
+   {{
+     "action_type": "ACTION_TYPE",
+     "source": "agentic_reasoner",
+     "action_id": "generated-uuid",
+     "params": {{}},
+     "priority": "low|medium|high",
+     "reasoning": "Brief explanation of the decision"
+   }}
+   ```
+
+EXAMPLES:
+
+**Example 1 - PHASE 1 (Information Gathering):**
+```
+**Analysis**: System utilization is at 95% with response time at 850ms, approaching the 1000ms threshold.
+
+**Tool Usage Decision**: I need historical patterns and system diagnostics to make an informed decision about whether to reduce the dimmer.
+
+**Tool Calls**:
+TOOL_CALL: query_knowledge_base
+PARAMETERS: {{"query_type": "structured", "data_types": ["observation"], "limit": 5}}
+
+TOOL_CALL: query_digital_twin
+PARAMETERS: {{"operation": "simulate", "simulation_type": "dimmer_reduction", "actions": [{{"action_type": "SET_DIMMER", "params": {{"value": 0.9}}}}], "horizon_minutes": 30}}
+```
+
+**Example 1 - PHASE 2 (After receiving tool results):**
+```
+**Analysis**: Tool results show consistent high utilization trend in recent observations. Simulation indicates reducing dimmer to 0.7 will bring response time to 650ms while maintaining acceptable service levels.
+
+**Final Decision**: Based on simulation results showing dimmer reduction will effectively address the performance issue without significant service impact.
+
+**Action**:
 {{
-  "action_type": "ACTION_TYPE",
+  "action_type": "SET_DIMMER",
   "source": "agentic_reasoner", 
-  "action_id": "generated-uuid",
-  "params": {{}},
-  "priority": "low|medium|high",
-  "reasoning": "Brief explanation of the decision"
+  "action_id": "dimmer-reduction-001",
+  "params": {{"value": 0.7}},
+  "priority": "medium",
+  "reasoning": "Reducing dimmer from 0.9 to 0.7 to prevent response time breach while maintaining service quality"
 }}
+```
+
+**Example 2 - Direct Action (when sufficient information available):**
+```
+**Analysis**: System has 1 server with 99% utilization and response time of 1200ms, clearly exceeding the 1000ms threshold.
+
+**Final Decision**: This is a clear capacity bottleneck requiring immediate scaling. No additional tools needed as the situation is unambiguous.
+
+**Action**:
+{{
+  "action_type": "ADD_SERVER",
+  "source": "agentic_reasoner",
+  "action_id": "emergency-scale-001", 
+  "params": {{"server_type": "compute", "count": 1}},
+  "priority": "high",
+  "reasoning": "Emergency scaling due to severe capacity bottleneck with response time far exceeding threshold"
+}}
+```
+
+CRITICAL REMINDERS:
+1. **NEVER provide tool calls AND action in the same response**
+2. **If you use tools, wait for results before providing action**
+3. **Tool results will be provided back to you in subsequent messages**
+4. **You can make multiple rounds of tool calls (up to 5 total) before final action**
 """
 
     async def reason(
@@ -1238,16 +1262,6 @@ Remember to follow the structured output format with tool calls if you need more
                     )
                     return response.text.strip()
                 else:
-                    self.perf_logger.log_metric(
-                        "gemini_api_call",
-                        call_duration_ms,
-                        {
-                            "attempt": attempt + 1,
-                            "success": False,
-                            "error": "empty_response",
-                            "model": self.model,
-                        },
-                    )
                     raise ValueError("Empty response from Gemini")
 
             except Exception as e:
@@ -1566,11 +1580,13 @@ def create_agentic_reasoner_agent(
     for reasoning_type in AgentReasoningType:
         agentic_reasoner = AgenticLLMReasoner(
             api_key=llm_api_key,
-            reasoning_type=reasoning_type,
+            # reasoning_type=reasoning_type,
+            config=config,
             kb_query_interface=agent.kb_query,
             dt_interface=agent.dt_query,
             prompt_config_path=agentic_prompt_config_path,
             logger=logger,
+            system_name="switch_yolo",
         )
 
         agent.add_reasoning_implementation(reasoning_type, agentic_reasoner)
@@ -1676,6 +1692,7 @@ def create_agentic_reasoner_with_bayesian_world_model(
             agentic_reasoner = AgenticLLMReasoner(
                 api_key=llm_api_key,
                 reasoning_type=reasoning_type,
+                config=config,
                 kb_query_interface=agent.kb_query,
                 dt_interface=agent.dt_query,
                 prompt_config_path=agentic_prompt_config_path,

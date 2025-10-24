@@ -885,7 +885,7 @@ async def start_reasoner(args, config_path: Path):
         nats_url=None,
         logger=logger,
         mode="llm",
-        llm_config_path="/home/vyakhya/Desktop/serc/self_adapt/POLARIS/polaris_poc/src/polaris/agents/prompt.yaml",
+        llm_config_path="/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/config/prompt_config.yaml",
     )
 
     # Setup shutdown handling
@@ -1165,8 +1165,8 @@ async def start_meta_learner(args, config_path: Path):
 
     # Resolve prompt config path (relative to src/polaris/agents)
     script_dir = Path(__file__).parent
-    src_dir = script_dir.parent
-    prompt_config_path = src_dir / "polaris" / "agents" / "agentic_reasoner_prompt.yaml"
+    src_dir = script_dir.parent.parent
+    prompt_config_path = src_dir / "config" / "prompt_config.yaml"
 
     if not prompt_config_path.exists():
         logger.error(f"Prompt config not found: {prompt_config_path}")
