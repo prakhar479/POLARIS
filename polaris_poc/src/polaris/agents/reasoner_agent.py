@@ -821,6 +821,8 @@ class ReasonerAgent(NATSReasonerBase):
         host = grpc_config.get("host")
         port = grpc_config.get("port")
 
+        system_name=self.config.get("system_name", "generic")
+
         if host and port:
             dt_grpc_address = f"{host}:{port}"
             self.dt_query: Optional[DigitalTwinInterface] = GRPCDigitalTwinClient(

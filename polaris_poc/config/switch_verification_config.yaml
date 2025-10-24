@@ -1,0 +1,356 @@
+# SWITCH System Verification Configuration
+# ========================================
+# Verification constraints and policies specifically designed for
+# the SWITCH ML-enabled YOLO model switching system
+
+# System identification
+system_name: "switch_yolo"
+system_version: "1.0.0"
+
+# =============================================================================
+# Verification Settings - SWITCH Optimized
+# =============================================================================
+settings:
+  # Default timeout for verification requests (seconds)
+  default_timeout_sec: 15.0  # Shorter for model switching
+
+  # Maximum concurrent verifications (lower for model switches)
+  max_concurrent: 3
+
+  # Queue size for verification requests
+  queue_size: 500
+
+  # Enable Digital Twin integration for predictive verification
+  enable_digital_twin: true
+
+  # Enable formal verification methods (disabled for performance)
+  enable_formal_verification: false
+
+  # Verification performance settings
+  performance:
+    # Cache verification results for repeated actions (seconds)
+    result_cache_ttl: 60  # Shorter for dynamic model switching
+
+    # Maximum verification time before timeout (seconds)
+    max_verification_time: 30  # Faster for model decisions
+
+    # Enable parallel constraint checking
+    parallel_checking: true
+
+    # Enable predictive verification using Digital Twin
+    enable_predictive_verification: true
+
+# =============================================================================
+# Safety Constraints - SWITCH Specific
+# =============================================================================
+# Define system safety constraints that must be validated before action execution
+constraints:
+  # Response time constraints
+  - id: "response_time_safety"
+    type: "performance"
+    severity: "high"
+    description: "Prevent actions that would cause excessive response time"
+    condition: "predicted_response_time <= 1.0"  # Max 1 second
+    violation_message: "Action would cause response time > 1.0s"
+    suggested_fix: "Consider lighter YOLO model or reduce load"
+
+  # Confidence constraints
+  - id: "confidence_safety"
+    type: "quality"
+    severity: "medium"
+    description: "Ensure minimum detection confidence is maintained"
+    condition: "predicted_confidence >= 0.5"  # Min 50% confidence
+    violation_message: "Action would reduce confidence below 50%"
+    suggested_fix: "Consider heavier YOLO model for better accuracy"
+
+  # CPU utilization constraints
+  - id: "cpu_utilization_safety"
+    type: "resource"
+    severity: "high"
+    description: "Prevent actions that would cause excessive CPU utilization"
+    condition: "predicted_cpu_utilization <= 0.95"  # Max 95% CPU
+    violation_message: "Action would exceed CPU utilization limit (95%)"
+    suggested_fix: "Consider lighter YOLO model or reduce processing load"
+
+  # Utility function constraints
+  - id: "utility_safety"
+    type: "optimization"
+    severity: "medium"
+    description: "Ensure actions maintain acceptable utility levels"
+    condition: "predicted_utility >= 0.4"  # Min acceptable utility
+    violation_message: "Action would reduce utility below 0.4"
+    suggested_fix: "Choose model that balances speed and accuracy better"
+
+  # Model switching frequency constraints
+  - id: "switching_frequency_safety"
+    type: "stability"
+    severity: "medium"
+    description: "Prevent excessive model switching that could cause instability"
+    condition: "recent_model_switches <= 5"  # Max 5 switches in last 10 minutes
+    violation_message: "Too many model switches recently"
+    suggested_fix: "Wait for system stabilization before switching again"
+
+# =============================================================================
+# Verification Policies - SWITCH Optimized
+# =============================================================================
+policies:
+  # Model switching policy
+  model_switching:
+    enabled: true
+    verification_level: "strict"
+    timeout_sec: 10.0
+    required_checks:
+      - "response_time_safety"
+      - "cpu_utilization_safety"
+      - "utility_safety"
+    optional_checks:
+      - "confidence_safety"
+      - "switching_frequency_safety"
+
+  # Utility optimization policy
+  utility_optimization:
+    enabled: true
+    verification_level: "moderate"
+    timeout_sec: 15.0
+    required_checks:
+      - "utility_safety"
+      - "response_time_safety"
+    optional_checks:
+      - "cpu_utilization_safety"
+      - "confidence_safety"
+
+  # Emergency response policy (for critical violations)
+  emergency_response:
+    enabled: true
+    verification_level: "minimal"
+    timeout_sec: 5.0
+    required_checks:
+      - "response_time_safety"
+    optional_checks:
+      - "cpu_utilization_safety"
+
+# =============================================================================
+# Threshold Definitions - SWITCH Specific
+# =============================================================================
+thresholds:
+  # Response time thresholds (seconds)
+  response_time:
+    excellent: 0.1    # < 100ms
+    good: 0.3         # < 300ms
+    acceptable: 0.8   # < 800ms
+    poor: 1.0         # > 1.0s (needs attention)
+
+  # Confidence thresholds (0-1 scale)
+  confidence:
+    excellent: 0.9    # > 90%
+    good: 0.8         # > 80%
+    acceptable: 0.6   # > 60%
+    poor: 0.5         # < 50% (needs attention)
+
+  # CPU utilization thresholds (0-1 scale)
+  cpu_utilization:
+    excellent: 0.5    # < 50%
+    good: 0.7         # < 70%
+    acceptable: 0.85  # < 85%
+    poor: 0.95        # > 95% (critical)
+
+  # Utility thresholds (0-1 scale)
+  utility:
+    excellent: 0.9    # > 90%
+    good: 0.8         # > 80%
+    acceptable: 0.6   # > 60%
+    poor: 0.4         # < 40% (needs attention)
+
+  # Model switching thresholds
+  model_switching:
+    min_interval_s: 2.0         # Minimum time between switches
+    max_per_hour: 30            # Maximum switches per hour
+    stabilization_time_s: 5.0   # Time for effects to settle
+
+# =============================================================================
+# Verification Rules - SWITCH Context
+# =============================================================================
+rules:
+  # YOLO model performance rules
+  model_performance:
+    - condition: "yolov5n.response_time <= 0.1"
+      action: "allow"
+      message: "YOLOv5n meets response time requirements"
+
+    - condition: "yolov5s.response_time <= 0.2 and yolov5s.confidence >= 0.7"
+      action: "allow"
+      message: "YOLOv5s provides good balance of speed and accuracy"
+
+    - condition: "yolov5m.response_time <= 0.4 and yolov5m.confidence >= 0.8"
+      action: "allow"
+      message: "YOLOv5m suitable for medium accuracy requirements"
+
+    - condition: "yolov5l.response_time <= 0.8 and yolov5l.confidence >= 0.85"
+      action: "allow"
+      message: "YOLOv5l suitable for high accuracy requirements"
+
+    - condition: "yolov5x.response_time <= 1.5 and yolov5x.confidence >= 0.9"
+      action: "allow"
+      message: "YOLOv5x suitable for maximum accuracy requirements"
+
+  # Utility function validation rules
+  utility_validation:
+    - condition: "utility_score >= 0.8"
+      action: "approve"
+      message: "Utility score indicates optimal performance"
+
+    - condition: "utility_score >= 0.6 and utility_score < 0.8"
+      action: "review"
+      message: "Utility score acceptable but could be improved"
+
+    - condition: "utility_score < 0.6"
+      action: "reject"
+      message: "Utility score too low - action may harm performance"
+
+  # Model switching validation rules
+  model_switching_validation:
+    - condition: "switch_interval >= 2.0"
+      action: "allow"
+      message: "Model switching interval meets stability requirements"
+
+    - condition: "recent_switches <= 5 and switch_interval >= 1.0"
+      action: "review"
+      message: "Recent switching activity - verify stability"
+
+# =============================================================================
+# Monitoring and Alerting - SWITCH Specific
+# =============================================================================
+monitoring:
+  # Metrics to monitor for verification health
+  health_metrics:
+    - "verification_success_rate"
+    - "average_verification_time"
+    - "constraint_violation_rate"
+    - "false_positive_rate"
+
+  # Alert thresholds
+  alerts:
+    verification_success_rate:
+      warning: 0.8    # < 80% success rate
+      critical: 0.6   # < 60% success rate
+
+    average_verification_time:
+      warning: 10.0   # > 10 seconds average
+      critical: 20.0  # > 20 seconds average
+
+    constraint_violation_rate:
+      warning: 0.1    # > 10% violations
+      critical: 0.2   # > 20% violations
+
+# =============================================================================
+# Integration Settings - SWITCH Optimized
+# =============================================================================
+integration:
+  # Digital Twin integration for predictive verification
+  digital_twin:
+    enabled: true
+    prediction_horizon_seconds: 60    # 1 minute ahead
+    confidence_threshold: 0.7         # 70% confidence required
+
+  # Knowledge Base integration for historical analysis
+  knowledge_base:
+    enabled: true
+    query_timeout_sec: 10.0
+    max_historical_samples: 100
+
+  # Reasoner integration for complex verification
+  reasoner:
+    enabled: false  # Disabled for performance - use for complex cases only
+    timeout_sec: 30.0
+    max_retries: 2
+
+# =============================================================================
+# Logging and Debugging - SWITCH Context
+# =============================================================================
+logging:
+  # Log level (DEBUG, INFO, WARNING, ERROR)
+  level: "DEBUG"
+
+  # Enable detailed constraint checking logs
+  detailed_constraint_logs: true
+
+  # Enable verification decision logs
+  verification_decision_logs: true
+
+  # Log file path
+  log_file: "logs/verification_adapter.log"
+
+  # Log format
+  format: "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(message)s"
+
+# =============================================================================
+# Performance Optimization - SWITCH Specific
+# =============================================================================
+optimization:
+  # Enable constraint caching for frequently checked constraints
+  enable_constraint_caching: true
+  constraint_cache_ttl: 30  # 30 seconds
+
+  # Enable result caching for repeated verification requests
+  enable_result_caching: true
+  result_cache_ttl: 60  # 1 minute
+
+  # Enable parallel verification for independent constraints
+  enable_parallel_verification: true
+  max_parallel_workers: 3
+
+  # Adaptive timeout based on system load
+  adaptive_timeout: true
+  timeout_adjustment_factor: 1.5  # Increase timeout by 50% under load
+
+# =============================================================================
+# SWITCH-Specific Verification Examples
+# =============================================================================
+examples:
+  # Example 1: Model switching from yolov5s to yolov5l
+  model_switch_example:
+    action: "switch_model"
+    parameters:
+      current_model: "yolov5s"
+      target_model: "yolov5l"
+    verification_result: "approved"
+    reasoning: "YOLOv5l provides better accuracy (0.88 vs 0.75) with acceptable response time increase (0.4s vs 0.1s)"
+
+  # Example 2: Emergency response for high CPU
+  emergency_response_example:
+    action: "switch_model"
+    parameters:
+      current_model: "yolov5x"
+      target_model: "yolov5n"
+    verification_result: "approved"
+    reasoning: "Critical CPU utilization (95%) requires immediate downgrade to lightest model"
+
+  # Example 3: Utility optimization
+  utility_optimization_example:
+    action: "switch_model"
+    parameters:
+      current_model: "yolov5m"
+      target_model: "yolov5s"
+    verification_result: "approved"
+    reasoning: "YOLOv5s provides better utility score (0.82 vs 0.76) with lower CPU usage"
+
+# =============================================================================
+# Configuration Validation
+# =============================================================================
+validation:
+  # Enable configuration validation on startup
+  enable_self_validation: true
+
+  # Required configuration sections
+  required_sections:
+    - "settings"
+    - "constraints"
+    - "policies"
+    - "thresholds"
+
+  # Configuration version for compatibility checking
+  config_version: "1.0.0"
+  min_compatible_version: "1.0.0"
+
+  # Enable runtime configuration validation
+  enable_runtime_validation: false

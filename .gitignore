@@ -5,6 +5,12 @@
 .kiro
 .coverage
 node_modules/
+data/
+unzipped/
+*.zip
+*.csv
+build/
+*.pt
 
 coverage.json
 htmlcov

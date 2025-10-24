@@ -80,7 +80,7 @@ digital_twin:
 agentic_reasoner:
   # LLM Configuration
   llm:
-    model: "gpt-oss:20b"
+    model: "gemini-2.0-flash"
     base_url: "http://10.10.16.46:11435"
     max_tokens: 1024
     temperature: 0.3

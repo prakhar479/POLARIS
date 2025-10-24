@@ -1,0 +1,8 @@
+{
+  "experiment_id": "adamls",
+  "start_time": "2025-10-19 22:42:31",
+  "end_time": "2025-10-19 22:43:23",
+  "duration_seconds": 51.48512077331543,
+  "total_metrics_recorded": 0,
+  "approach": "AdaMLs"
+}

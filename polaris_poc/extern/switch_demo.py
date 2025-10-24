@@ -19,7 +19,8 @@ import time
 # Add parent directory to path to import from polaris
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from switch_connector import SwitchSystemConnector
+# Import from the switch_plugin directory
+from switch_plugin.connector import SwitchSystemConnector
 from polaris.common.config import ConfigurationManager
 
 
@@ -166,9 +167,11 @@ async def run_full_demo():
     connector = None
 
     try:
-        config_path = Path(__file__).parent
+        # Load config from switch_plugin directory
+        config_path = Path(__file__).parent / "switch_plugin"
         system_config = config_manager.load_plugin_config(config_path)
-        logger.info("Configuration loaded successfully.")
+        logger.info(f"Configuration loaded from: {config_path}")
+        logger.info(f"System name: {system_config.get('system_name', 'N/A')}")
 
         connector = SwitchSystemConnector(system_config, logger)
 
@@ -204,8 +207,11 @@ async def run_health_monitoring():
     connector = None
 
     try:
-        config_path = Path(__file__).parent
+        # Load config from switch_plugin directory
+        config_path = Path(__file__).parent / "switch_plugin"
         system_config = config_manager.load_plugin_config(config_path)
+        logger.info(f"Configuration loaded from: {config_path}")
+        
         connector = SwitchSystemConnector(system_config, logger)
         await connector.connect()
 

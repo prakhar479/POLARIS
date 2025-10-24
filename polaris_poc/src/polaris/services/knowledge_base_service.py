@@ -142,11 +142,22 @@ class KnowledgeBaseService:
         try:
             data = json.loads(msg.data.decode())
 
-            # Create KBEntry for telemetry event
+            # Get the metric value
+            metric_value = data.get("value")
+
+            # Only create KBEntry for numeric values (float or int)
+            # Skip non-numeric values like model names, strings, etc.
+            if not isinstance(metric_value, (int, float)) or metric_value is None:
+                self.logger.debug(
+                    f"Skipping non-numeric telemetry metric: {data.get('name')} = {metric_value} (type: {type(metric_value)})"
+                )
+                return
+
+            # Create KBEntry for telemetry event (only for numeric values)
             entry = KBEntry(
                 data_type=KBDataType.RAW_TELEMETRY_EVENT,
                 metric_name=data.get("name"),
-                metric_value=data.get("value"),
+                metric_value=metric_value,
                 source=data.get("source"),
                 summary=f"Telemetry: {data.get('name')} = {data.get('value')} {data.get('unit', '')}",
                 content=data,
@@ -208,11 +219,24 @@ class KnowledgeBaseService:
 
             # Process each event in the batch
             events = data.get("events", [])
+            processed_count = 0
+
             for event_data in events:
+                # Get the metric value
+                metric_value = event_data.get("value")
+
+                # Only create KBEntry for numeric values (float or int)
+                # Skip non-numeric values like model names, strings, etc.
+                if not isinstance(metric_value, (int, float)) or metric_value is None:
+                    self.logger.debug(
+                        f"Skipping non-numeric telemetry metric in batch: {event_data.get('name')} = {metric_value} (type: {type(metric_value)})"
+                    )
+                    continue
+
                 entry = KBEntry(
                     data_type=KBDataType.RAW_TELEMETRY_EVENT,
                     metric_name=event_data.get("name"),
-                    metric_value=event_data.get("value"),
+                    metric_value=metric_value,
                     source=event_data.get("source"),
                     summary=f"Telemetry: {event_data.get('name')} = {event_data.get('value')} {event_data.get('unit', '')}",
                     content=event_data,
@@ -221,10 +245,12 @@ class KnowledgeBaseService:
 
                 self.kb.store(entry)
                 self.stats["events_processed"] += 1
+                processed_count += 1
 
             self.stats["last_event_time"] = time.time()
 
-            self.logger.debug(f"📦 Processed batch of {len(events)} telemetry events")
+            if processed_count > 0:
+                self.logger.debug(f"📦 Processed batch of {processed_count} numeric telemetry events")
 
         except Exception as e:
             self.logger.error(f"❌ Error processing telemetry batch: {e}")

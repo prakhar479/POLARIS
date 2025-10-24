@@ -551,14 +551,11 @@ class SwitchSystemConnector(ManagedSystemConnector):
         """
         try:
             metrics = await self._get_latest_metrics()
-
-            print("-"*50)
-            print(metrics)
-            print("-"*50)
             
             # Extract key metrics based on the Switch system's metric structure
             performance = {
                 "image_processing_time": float(metrics.get("image_processing_time", 0.0)),
+                "model_processing_time": float(metrics.get("model_processing_time", 0.0)),
                 "confidence": float(metrics.get("confidence", 0.0)),
                 "utility": float(metrics.get("utility", 0.0)),
                 "cpu_usage": float(metrics.get("cpu_usage", 0.0)),
@@ -572,9 +569,59 @@ class SwitchSystemConnector(ManagedSystemConnector):
             self.logger.error(f"Failed to get performance metrics: {e}")
             return {
                 "image_processing_time": 0.0,
+                "model_processing_time": 0.0,
                 "confidence": 0.0,
                 "utility": 0.0,
                 "cpu_usage": 0.0,
                 "detection_boxes": 0,
                 "total_processed": 0
+            }
+    
+    async def get_comprehensive_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive system metrics including logs and derived data.
+        
+        Returns:
+            Dictionary containing all available metrics
+        """
+        try:
+            # Get all available data
+            current_model = await self._get_current_model()
+            latest_metrics = await self._get_latest_metrics()
+            latest_logs = await self._get_latest_logs()
+            
+            # Combine all metrics
+            comprehensive = {
+                # Model information
+                "current_model": current_model,
+                "available_models": self.available_models,
+                
+                # Core performance metrics
+                "image_processing_time": float(latest_metrics.get("image_processing_time", 0.0)),
+                "model_processing_time": float(latest_metrics.get("model_processing_time", 0.0)),
+                "confidence": float(latest_metrics.get("confidence", 0.0)),
+                "utility": float(latest_metrics.get("utility", 0.0)),
+                "cpu_usage": float(latest_metrics.get("cpu_usage", 0.0)),
+                "detection_boxes": int(latest_metrics.get("detection_boxes", 0)),
+                "total_processed": int(latest_metrics.get("total_processed", 0)),
+                
+                # System metrics from logs
+                "memory_usage": float(latest_logs.get("memory_usage", 0.0)),
+                "disk_usage": float(latest_logs.get("disk_usage", 0.0)),
+                "network_io": float(latest_logs.get("network_io", 0.0)),
+                "process_count": int(latest_logs.get("process_count", 0)),
+                
+                # Metadata
+                "timestamp": time.time(),
+                "system_name": "switch_yolo"
+            }
+            
+            return comprehensive
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get comprehensive metrics: {e}")
+            return {
+                "error": str(e),
+                "timestamp": time.time(),
+                "current_model": "unknown",
+                "system_name": "switch_yolo"
             }

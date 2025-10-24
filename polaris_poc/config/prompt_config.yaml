@@ -1,0 +1,228 @@
+prompt_config:
+  thresholds:
+    max_response_time_s: 1.0
+    target_response_time_ms: 500.0
+    critical_response_time_s: 0.9
+    good_response_time_s: 0.2
+    min_confidence: 0.55
+    target_confidence: 0.8
+    low_confidence_threshold: 0.55
+    high_confidence_threshold: 0.85
+    max_cpu_utilization: 0.95
+    high_cpu_threshold: 0.9
+    low_cpu_threshold: 0.5
+    target_cpu_utilization: 0.7
+    utility_Rmin: 0.1
+    utility_Rmax: 1.0
+    utility_Cmin: 0.5
+    utility_Cmax: 1.0
+    utility_wd: 0.5
+    utility_we: 0.5
+    target_utility: 0.75
+    low_utility_threshold: 0.63
+    critical_utility: 0.2
+    min_model_switch_interval_s: 2.0
+    max_model_switches_per_hour: 30
+    stabilization_time_s: 5.0
+    cooldown_period_minutes: 2
+    max_consecutive_failures: 6.6
+    high_impact_action_confidence: 0.99
+    medium_impact_action_confidence: 0.6
+    low_impact_action_confidence: 0.45
+    performance_monitoring_window_minutes: 10
+    min_samples_for_trend: 3
+    utility_optimization_enabled: true
+    utility_improvement_threshold: 0.1255371286268
+    utility_stability_window_minutes: 5
+  template_parts:
+    system_name: SWITCH_YOLO
+    system_description: ML-enabled adaptive system with YOLO model switching for utility
+      maximization
+    model_profiles:
+      yolov5n:
+        response_time_s: 0.05
+        confidence: 0.65
+        cpu_factor: 1.0
+        description: Fastest model, lowest accuracy
+      yolov5s:
+        response_time_s: 0.1
+        confidence: 0.75
+        cpu_factor: 1.5
+        description: Balanced model, good default
+      yolov5m:
+        response_time_s: 0.2
+        confidence: 0.82
+        cpu_factor: 2.5
+        description: Medium accuracy, moderate speed
+      yolov5l:
+        response_time_s: 0.4
+        confidence: 0.88
+        cpu_factor: 4.0
+        description: High accuracy, slower
+      yolov5x:
+        response_time_s: 0.8
+        confidence: 0.92
+        cpu_factor: 6.0
+        description: Highest accuracy, slowest
+    adaptive_phrases: The persistent failure of NO_ACTION adaptations and the system's
+      preference for YOLOv5N and YOLOv5S suggest the utility function may be over-penalizing
+      response time. Adjusting the utility function weights to slightly favor confidence
+      over response time may improve overall system performance and reduce adaptation
+      thrashing. Shifting the utility weights to favor confidence (utility_we = 0.55,
+      utility_wd = 0.45) may reduce adaptation thrashing and allow the system to explore
+      higher-confidence models without significant response time penalties.
+    decision_framework: 'SWITCH ADAPTATION DECISION FRAMEWORK:
+
+
+      PRIORITY 1 - CRITICAL SAFETY (Immediate Action Required):
+
+      - CPU > 95% utilization
+
+      - Response time > 0.95s (95% of Rmax)
+
+      - Utility < 0.2 (critical underperformance)
+
+      - Action: Aggressive downgrade (skip 1-2 model levels)
+
+
+      PRIORITY 2 - CONSTRAINT VIOLATIONS (High Priority):
+
+      - CPU > 85% utilization
+
+      - Response time > 0.9s (near Rmax)
+
+      - Utility < 0.4 (significant underperformance)
+
+      - Action: Single-step downgrade to lighter model
+
+
+      PRIORITY 3 - UTILITY OPTIMIZATION (Medium Priority):
+
+      - Utility < 0.7 but > 0.4
+
+      - Current model not maximizing utility function
+
+      - Sufficient headroom for optimization
+
+      - Action: Calculate expected utility for adjacent models, select optimal
+
+
+      PRIORITY 4 - QUALITY IMPROVEMENT (Low Priority):
+
+      - Confidence < 0.55 AND response time < 0.2s
+
+      - CPU utilization < 70% (spare resources)
+
+      - System stable and performing well
+
+      - Action: Upgrade to heavier model for better accuracy
+
+
+      PRIORITY 5 - OPPORTUNISTIC OPTIMIZATION (Lowest Priority):
+
+      - Utility > 0.8 (excellent performance)
+
+      - CPU < 50% (significant spare capacity)
+
+      - Response time < 0.2s (excellent speed)
+
+      - Action: Try heavier model to improve quality further
+
+
+      PRIORITY 6 - MAINTAIN STATUS QUO:
+
+      - Utility > 0.7 (acceptable performance)
+
+      - All constraints satisfied
+
+      - System operating within bounds
+
+      - Action: NO_ACTION (system optimized)
+
+      '
+    utility_function_explanation: "UTILITY FUNCTION (Primary Optimization Objective):\n\
+      \nFormula: utility = we \xD7 conf_score + wd \xD7 rt_score - penalties\n\nWhere:\n\
+      - conf_score = (C - Cmin) / (Cmax - Cmin)    # Normalized confidence [0, 1]\n\
+      - rt_score = (Rmax - r) / (Rmax - Rmin)      # Normalized RT (inverted) [0,\
+      \ 1]\n- we = 0.5 (confidence weight), wd = 0.5 (response time weight)\n- Cmin\
+      \ = 0.5, Cmax = 1.0 (confidence bounds)\n- Rmin = 0.1s, Rmax = 1.0s (response\
+      \ time bounds)\n\nRange: [-\u221E, 1], higher is better\nTarget: > 0.8 (excellent),\
+      \ Acceptable: 0.4-0.8, Critical: < 0.4\n\nOptimization Strategy:\n1. Balance\
+      \ RT and Confidence equally (50/50 weights)\n2. Penalize constraint violations\
+      \ severely\n3. Find model that maximizes utility given current workload\n"
+    monitoring_criteria: 'SWITCH SYSTEM MONITORING CRITERIA:
+
+
+      PERFORMANCE METRICS TO TRACK:
+
+      - image_processing_time (response time in seconds)
+
+      - confidence (detection accuracy 0-1)
+
+      - utility (combined performance score)
+
+      - cpu_usage (CPU utilization percentage)
+
+      - detection_boxes (number of detected objects)
+
+      - total_processed (throughput metric)
+
+
+      ADAPTATION SUCCESS INDICATORS:
+
+      - Utility improvement > 0.05 after adaptation
+
+      - Response time reduction without confidence loss
+
+      - Confidence improvement without RT penalty
+
+      - Constraint violations resolved within 2 cycles
+
+      - No adaptation thrashing (oscillation)
+
+
+      FAILURE INDICATORS:
+
+      - Utility consistently < 0.4 despite adaptations
+
+      - Constraint violations persisting > 3 cycles
+
+      - Adaptation thrashing (frequent model switches)
+
+      - Performance degradation after adaptations
+
+      - Emergency stops triggered frequently
+
+
+      STABILITY INDICATORS:
+
+      - Utility stable > 0.7 for 10+ minutes
+
+      - Model switches < 30 per hour
+
+      - Constraint violations < 5% of time
+
+      - Consistent performance within bounds
+
+      - No emergency interventions required
+
+      '
+meta_learning:
+  update_interval_minutes: 10
+  min_samples_for_analysis: 10
+  max_retries: 3
+  analysis_window_hours: 2
+  trend_analysis_window_minutes: 30
+  max_change_percent: 10.0
+  min_confidence_threshold: 0.7
+  enable_pattern_recognition: true
+  pattern_similarity_threshold: 0.8
+  enable_utility_optimization: true
+  utility_optimization_weight: 0.6
+  enable_model_switching_analysis: true
+  switching_effectiveness_threshold: 0.05
+  enable_adaptive_phrase_storage: true
+  max_adaptive_phrases: 20
+  enable_safety_validation: true
+  require_human_approval: false
+  rollback_on_failure: true

@@ -231,7 +231,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
-        model: str = "gpt-oss:20b",
+        model: str = "gemini-2.5-flash",
         max_tokens: int = 1024,
         temperature: float = 0.3,
         timeout: float = 600.0,
