@@ -135,7 +135,7 @@ class DigitalTwinConfigManager:
             DigitalTwinConfigError: If World Model config loading fails
         """
         config_path = Path(
-            "/home/vyakhya/Desktop/serc/self_adapt/POLARIS/polaris_poc/config/bayesian_world_model_config.yaml"
+            "POLARIS/polaris_poc/config/bayesian_world_model_config.yaml"
         )
 
         if not config_path.exists():

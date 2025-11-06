@@ -42,7 +42,7 @@ class LLMReasoningImplementation(ReasoningInterface):
         api_key: str,
         reasoning_type: ReasoningType,
         prompt_config: Dict[str, Any],  # <-- New parameter for the config
-        prompt_config_path: Optional[str] = "/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/config/prompt_config.yaml",  # <-- Add path to reload config
+        prompt_config_path: Optional[str] = "POLARIS/polaris_poc/config/prompt_config.yaml",  # <-- Add path to reload config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         model: str = "gpt-oss:20b",
         max_tokens: int = 2048,

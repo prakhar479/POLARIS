@@ -885,7 +885,7 @@ async def start_reasoner(args, config_path: Path):
         nats_url=None,
         logger=logger,
         mode="llm",
-        llm_config_path="/home/prakhar/dev/prakhar479/POLARIS/polaris_poc/config/prompt_config.yaml",
+        llm_config_path="POLARIS/polaris_poc/config/prompt_config.yaml",
     )
 
     # Setup shutdown handling
