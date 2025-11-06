@@ -9,9 +9,10 @@ based on its analysis. Uses Google Gemini Flash 2.5 as the reasoning engine.
 import json
 import asyncio
 import time
+from urllib import response
 import uuid
 import os
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import logging
 from datetime import datetime, timezone, timedelta
 import tempfile
@@ -43,6 +44,27 @@ from .reasoner_agent import (
 
 from .reasoner_core import ReasoningType
 from .improved_grpc_client import ImprovedGRPCDigitalTwinClient
+
+
+class TokenUsageLogger:
+    """Logs average token usage per reasoning decision."""
+
+    def __init__(self, log_dir: str = "."):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.log_dir / "token_usage.jsonl"
+
+    def log_average_tokens(
+        self, avg_input_tokens: float, avg_output_tokens: float, details: Dict[str, Any]
+    ):
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "avg_input_tokens": round(avg_input_tokens, 2),
+            "avg_output_tokens": round(avg_output_tokens, 2),
+            "details": details,
+        }
+        with open(self.log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
 
 
 class PerformanceLogger:
@@ -705,18 +727,24 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.max_retries = 3
         self.prompt_config_path = prompt_config_path  # Store for reloading
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
+        self.local_action_history: deque = deque(maxlen=3)  # Store last 3 local actions
 
         # Initialize performance logger
         self.perf_logger = PerformanceLogger()
+        self.token_logger = TokenUsageLogger()
 
         # Initialize Gemini client
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=self.api_key)
 
         # Initialize context builder and action history tracking
         self.context_builder = ContextBuilder(self.logger, {})
         self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
         self.reactive_logs: deque = deque(maxlen=3)  # Store the last 3 reactive logs
         self.last_historical_context = None  # Cache for historical actions context
+
+        # Self-cooldown mechanism
+        self.last_action_time = None
+        self.action_cooldown_seconds = 70.0
 
         # Initialize tools
         self.tools = {}
@@ -746,6 +774,25 @@ class AgenticLLMReasoner(ReasoningInterface):
 
         self.logger.info(f"Initialized AgenticLLMReasoner and {len(self.tools)} tools available")
 
+    def _is_in_cooldown(self) -> bool:
+        """Check if the agentic reasoner is currently in cooldown period."""
+        if self.last_action_time is None:
+            return False
+
+        current_time = time.time()
+        time_since_last_action = current_time - self.last_action_time
+        return time_since_last_action < self.action_cooldown_seconds
+
+    def _get_cooldown_remaining(self) -> float:
+        """Get remaining cooldown time in seconds."""
+        if self.last_action_time is None:
+            return 0.0
+
+        current_time = time.time()
+        time_since_last_action = current_time - self.last_action_time
+        remaining = self.action_cooldown_seconds - time_since_last_action
+        return max(0.0, remaining)
+
     def _load_prompt_config(self) -> Dict[str, Any]:
         """Load prompt configuration from YAML file."""
         try:
@@ -769,6 +816,34 @@ class AgenticLLMReasoner(ReasoningInterface):
                 "template_parts": {},
                 "template": "You are an autonomous adaptive system controller.",
             }
+
+    def _add_to_local_history(self, action: Dict[str, Any], timestamp: Optional[str] = None):
+        """Add an action to the local action history with timestamp."""
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc).isoformat()
+
+        history_entry = {
+            "timestamp": timestamp,
+            "action_type": action.get("action_type"),
+            "params": action.get("params", {}),
+            "reasoning": action.get("reasoning", ""),
+            "priority": action.get("priority", "medium"),
+        }
+
+        self.local_action_history.append(history_entry)
+        self.logger.debug(f"Added action to local history: {action.get('action_type')}")
+
+    def _format_local_history(self) -> str:
+        """Format local action history for inclusion in prompts."""
+        if not self.local_action_history:
+            return "No recent local actions."
+
+        formatted_entries = []
+        for idx, entry in enumerate(self.local_action_history, 1):
+            # time_ago = self._calculate_time_ago(entry["timestamp"])
+            formatted_entries.append(f"{idx}. [ {entry['action_type']} - {entry['reasoning']}")
+
+        return "\n".join(formatted_entries)
 
     def reload_prompt_config(self) -> bool:
         """Reload prompt configuration from file."""
@@ -879,7 +954,6 @@ Your role is to:
 
 Control Actions Available:
 - ADD_SERVER: Add a server to handle increased load
-- REMOVE_SERVER: Remove a server to reduce costs
 - SET_DIMMER: Adjust the dimmer value (0.0-1.0) to control optional content
 - NO_ACTION: Take no action if system is operating optimally
 
@@ -890,7 +964,7 @@ System Constraints:
 - Dimmer value should be between 0.0-1.0
 
 IMPORTANT: Action Cooldowns
-- ADD_SERVER and REMOVE_SERVER actions have a 2-minute cooldown period
+- SERVER actions have a 2-minute cooldown period
 - Check the 'cooldown_status' in the historical_actions_summary to see if cooldowns have expired
 - If cooldown_expired is false, DO NOT take that action type
 - The cooldown_remaining_minutes field shows exactly how much time is left
@@ -922,14 +996,43 @@ Please analyze the system context and make adaptation decisions in JSON format:
         # Performance tracking
         tool_call_timings = []
         llm_call_timings = []
+        token_usage_records = []
 
         try:
-            # Query for historical actions and snapshots to build enhanced context
+            # Check if we're in cooldown period
+            if self._is_in_cooldown():
+                cooldown_remaining = self._get_cooldown_remaining()
+                self.logger.info(
+                    f"Agentic reasoner in cooldown - {cooldown_remaining:.1f}s remaining. Returning NO_ACTION."
+                )
+
+                no_action = {
+                    "action_type": "NO_ACTION",
+                    "source": "agentic_reasoner",
+                    "action_id": str(uuid.uuid4()),
+                    "params": {},
+                    "priority": "low",
+                    "reasoning": f"In cooldown period - {cooldown_remaining:.1f}s remaining after last action",
+                }
+
+                execution_time = time.time() - overall_start_time
+                return ReasoningResult(
+                    result=no_action,
+                    confidence=1.0,  # High confidence in cooldown enforcement
+                    reasoning_steps=reasoning_steps
+                    + [f"Enforced cooldown - {cooldown_remaining:.1f}s remaining"],
+                    context=context,
+                    execution_time=execution_time,
+                    kb_queries_made=0,
+                    dt_queries_made=0,
+                )
+            # Skip heavy historical context gathering - use fresh telemetry from kernel
             hist_start_time = time.time()
-            await self._gather_historical_context()
+            # Use current telemetry data directly instead of querying old KB data
+            # This ensures we work with fresh data from the monitor/kernel
             hist_duration_ms = (time.time() - hist_start_time) * 1000
-            self.perf_logger.log_metric("historical_context_gathering", hist_duration_ms)
-            reasoning_steps.append("Gathered historical actions context")
+            self.perf_logger.log_metric("current_context_processing", hist_duration_ms)
+            reasoning_steps.append("Using current telemetry data from kernel")
 
             # Initial analysis
             user_prompt = self._build_initial_prompt(context)
@@ -956,7 +1059,8 @@ Please analyze the system context and make adaptation decisions in JSON format:
 
                 # Get LLM response
                 llm_start_time = time.time()
-                llm_response = await self._call_gemini(chat_history)
+                llm_response, inp, op = await self._call_gemini(chat_history)
+                token_usage_records.append((inp, op))
                 llm_duration_ms = (time.time() - llm_start_time) * 1000
                 llm_call_timings.append(llm_duration_ms)
                 self.perf_logger.log_metric(
@@ -1060,7 +1164,8 @@ Please analyze the system context and make adaptation decisions in JSON format:
                         )
                     )
                     llm_start_time = time.time()
-                    final_response = await self._call_gemini(chat_history)
+                    final_response, inp, op = await self._call_gemini(chat_history)
+                    token_usage_records.append((inp, op))
                     llm_duration_ms = (time.time() - llm_start_time) * 1000
                     llm_call_timings.append(llm_duration_ms)
                     self.perf_logger.log_metric(
@@ -1077,6 +1182,14 @@ Please analyze the system context and make adaptation decisions in JSON format:
             # Normalize or fallback to NO_ACTION
             if final_action:
                 final_action = self._normalize_action(final_action)
+                self._add_to_local_history(final_action, datetime.now(timezone.utc).isoformat())
+
+                # Start cooldown period for actions that are not NO_ACTION
+                if final_action.get("action_type") != "NO_ACTION":
+                    self.last_action_time = time.time()
+                    self.logger.info(
+                        f"Action '{final_action.get('action_type')}' taken - Starting {self.action_cooldown_seconds}s cooldown period"
+                    )
             else:
                 final_action = self._normalize_action(
                     {
@@ -1109,6 +1222,21 @@ Please analyze the system context and make adaptation decisions in JSON format:
             )
 
             execution_time = time.time() - overall_start_time
+
+            # --- Average token usage logging ---
+            if token_usage_records:
+                avg_input = sum(i for i, _ in token_usage_records) / len(token_usage_records)
+                avg_output = sum(o for _, o in token_usage_records) / len(token_usage_records)
+                self.token_logger.log_average_tokens(
+                    avg_input,
+                    avg_output,
+                    {
+                        "model": self.model,
+                        "decision_id": context.session_id,
+                        "reasoning_type": self.reasoning_type.value,
+                        "llm_calls_made": len(token_usage_records),
+                    },
+                )
 
             return ReasoningResult(
                 result=final_action,
@@ -1150,41 +1278,68 @@ Please analyze the system context and make adaptation decisions in JSON format:
             )
 
     def _build_initial_prompt(self, context: ReasoningContext) -> str:
-        """Build the initial prompt for the reasoning session with historical actions context."""
+        """Build the initial prompt for the reasoning session with current telemetry data."""
         tools_reminder = ""
         if self.tools:
             tools_reminder = f"""
-IMPORTANT: You have access to the following tools that can provide additional information:
-{', '.join(self.tools.keys())}
+    IMPORTANT: You have access to the following tools that can provide additional information:
+    {', '.join(self.tools.keys())}
 
-You should use these tools to gather more information before making decisions. For example:
-- Use 'query_knowledge_base' to get historical data and trends
-- Use 'query_digital_twin' to run simulations or get current system state
-- Always try to gather more context before acting
+    You should use these tools to gather more information before making decisions. For example:
+    - Use 'query_knowledge_base' to get historical data and trends
+    - Use 'query_digital_twin' to run simulations or get current system state
+    - Always try to gather more context before acting
 
-START BY USING TOOLS TO GATHER MORE INFORMATION!
-"""
+    START BY USING TOOLS TO GATHER MORE INFORMATION!
+    """
 
-        # Build enhanced context with historical actions if available
-        enhanced_context = context.input_data.copy()
+        # Use current telemetry data from kernel - this is the most up-to-date system state
+        current_telemetry = context.input_data.copy()
 
-        # Add historical actions context if available
-        if hasattr(self, "last_historical_context") and self.last_historical_context:
-            enhanced_context["historical_actions_summary"] = self.last_historical_context
+        # Extract key metrics from current telemetry for easy reference
+        current_state = current_telemetry.get("current_state", {})
+        self.logger.info(f"Current state for prompt: {current_state}")
+        active_servers = current_state.get("active_servers", "unknown")
+        total_servers = current_state.get("servers", "unknown")
+        avg_response_time = current_state.get("average_response_time", "unknown")
+        server_utilization = current_state.get("server_utilization", "unknown")
+        arrival_rate = current_state.get("arrival_rate", "unknown")
+        servers = current_state.get("servers", "unknown")
+        max_servers = current_state.get("max_servers", "unknown")
 
-        return f"""Current System Context:
-{json.dumps(enhanced_context, indent=2)}
+        self.logger.info(f"Building initial prompt with telemetry: {current_telemetry}")
 
-Session ID: {context.session_id}
-Reasoning Type: {context.reasoning_type.value}
-Timestamp: {datetime.fromtimestamp(context.timestamp).isoformat()}
+        # NEW: Add local action history to context
+        local_history_text = self._format_local_history()
 
-{tools_reminder}
+        return f"""CURRENT SYSTEM TELEMETRY (Real-time from Monitor/Kernel):
+    Full Telemetry Data: {current_state}
+    
+    Key Current Metrics:
+    - Active Servers: {active_servers}/{total_servers}
+    - Average Response Time: {avg_response_time}
+    - Server Utilization: {server_utilization}
+    - Snapshot Source: {current_telemetry.get("snapshot_source", "unknown")}
+    - Cycle ID: {current_telemetry.get("cycle_id", "unknown")}
 
-Please analyze this situation and determine what actions, if any, should be taken to maintain optimal system performance.
+    Session ID: {context.session_id}
+    Reasoning Type: {context.reasoning_type.value}
+    Timestamp: {datetime.fromtimestamp(context.timestamp).isoformat()}
 
-Remember to follow the structured output format with tool calls if you need more information!
-"""
+    Recent Local Actions (Last 3 Decisions):
+    {local_history_text}
+    
+    IMPORTANT: The agentic reasoner has a self-imposed 60-second cooldown after taking any action.
+    During cooldown, it will automatically return NO_ACTION to prevent rapid successive interventions.
+
+    {tools_reminder}
+
+    Please analyze this situation and determine what actions, if any, should be taken to maintain optimal system performance.
+
+    Consider your recent local actions to avoid repeating ineffective decisions or violating cooldown constraints.
+
+    Remember to follow the structured output format with tool calls if you need more information!
+    """
 
     def _normalize_action(self, raw_action: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure the action matches the expected format."""
@@ -1206,7 +1361,7 @@ Remember to follow the structured output format with tool calls if you need more
 
         return normalized
 
-    async def _call_gemini(self, chat_history: List[types.Content]) -> str:
+    async def _call_gemini(self, chat_history: List[types.Content]) -> Tuple[str, int, int]:
         """Call Gemini API with chat history."""
         for attempt in range(self.max_retries):
             call_start_time = time.time()
@@ -1226,6 +1381,10 @@ Remember to follow the structured output format with tool calls if you need more
 
                 # Extract text from response
                 if response and response.text:
+                    self.logger.info(response.usage_metadata)
+                    input_tokens = response.usage_metadata.prompt_token_count
+
+                    output_tokens = response.usage_metadata.candidates_token_count
                     self.perf_logger.log_metric(
                         "gemini_api_call",
                         call_duration_ms,
@@ -1234,9 +1393,12 @@ Remember to follow the structured output format with tool calls if you need more
                             "success": True,
                             "response_length": len(response.text),
                             "model": self.model,
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
                         },
                     )
-                    return response.text.strip()
+                    return response.text.strip(), input_tokens, output_tokens
+
                 else:
                     self.perf_logger.log_metric(
                         "gemini_api_call",

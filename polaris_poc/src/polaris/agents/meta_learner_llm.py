@@ -508,7 +508,7 @@ Store brief insights in `observed_learnings` when you discover:
 - Operational patterns: "What kinds of loads cause spikes"  
 - Adaptation learnings: "What kind of actions worked well under what conditions"
 
-**THRESHOLD TUNING (when parameters are clearly wrong):**
+**THRESHOLD TUNING (when parameters are clearly wrong):** DO THIS ACTIVELY
 Look for these signs that thresholds need adjustment:
 - Response time targets consistently exceeded or never approached
 - Utilization thresholds causing unnecessary scaling or failing to scale
@@ -522,33 +522,21 @@ You may make LIMITED modifications to `reasoning_structure` or `constraints` ONL
 - Evidence shows a specific reasoning gap that could be filled
 
 TEMPLATE MODIFICATION RULES:
-- Keep the same overall structure
 - Only add clarifications, don't remove core logic
 - For constraints: only add clarifying details, never remove safety constraints
 - Maximum 1-2 sentence additions per modification then give final updated text
-- Must be directly supported by strong performance evidence
 - You CANNOT change tool calling examples or logic
+- You CANNOT be redundant - keep it concise
 
 **FIXED CONSTRAINTS (NEVER CHANGE):**
 {', '.join(self.FIXED_CONSTRAINTS)}
 
 **EXAMPLES:**
-Both Threshold Adjustment AND Pattern Storage (data shows misaligned parameter + new insight):
-```json
-{{
-  "thresholds": {{
-    "utilization_scale_up_threshold_percent": 75
-  }},
-  "template_parts": {{
-    "observed_learnings": "Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience."
-  }}
-}}
-```
 Threshold Too High (Response time target 800ms but system averages 600ms):
 ```json
 {{
   "thresholds": {{
-    "target_response_time_ms": 650
+    "target_response_time_ms": 450
   }}
 }}
 ```json
@@ -558,13 +546,23 @@ Threshold Too High (Response time target 800ms but system averages 600ms):
   }}
 }}
 
+Both Threshold Adjustment AND Pattern Storage (data shows misaligned parameter + new insight):
+```json
+{{
+  "thresholds": {{
+    "target_server_utilization": 75
+  }},
+  "template_parts": {{
+    "observed_learnings": "- Scaling at 85% CPU causes 3s delay - early scaling at 75% improves user experience."
+  }}
+}}
+```
+
 ### TASK
 Analyze the provided decision data and determine whether to **tune thresholds**, **refine templates**, **apply both**, or **make no change**.
 
----
-
 ### DECISION CRITERIA
-1. **Tune Thresholds** Only if current parameters clearly mismatch system behavior (too high, too low, or never triggered).
+1. **Tune Thresholds** Only if current parameters mismatch system behavior (too high, too low, or never triggered).
 2. **Refine Templates** Only if reasoning or structure shows repeated logical gaps or misaligned decisions.
 3. **Combine Both** If both conditions above are independently supported by strong evidence.
 4. **Return {{}}** When:
@@ -577,7 +575,7 @@ Analyze the provided decision data and determine whether to **tune thresholds**,
 - Evaluate **thresholds**, **patterns**, and **templates** with equal rigor.
 - Only propose changes when **clearly supported by evidence**.
 - For **template changes**, include the **entire revised text**, not just fragments.
-- Keep the response **concise and non-redundant** — suitable for direct use as a prompt.
+- Keep the response **concise and NON-redundant** — suitable for direct use as a prompt.
 - Provide a **brief justification** for each decision (1 sentence).
 """
 
@@ -1099,7 +1097,7 @@ def create_meta_learner_agent(
     prompt_config_path: str,
     config_path: str,
     nats_url: Optional[str] = None,
-    update_interval_seconds: float = 600.0,  # Conservative 10-minute interval
+    update_interval_seconds: float = 660.0,  # Conservative 10-minute interval
     model: str = "gemini-2.0-flash",
     max_change_percent: float = 10.0,  # Conservative 10% max change
     logger: Optional[logging.Logger] = None,

@@ -114,7 +114,7 @@ class SWIMKernel(BaseKernel):
         self.batch_size = 1
 
         self.action_cooldown_sec = 60  # The desired cool-down period for fast controller
-        self.slow_action_cooldown_sec = 30  # The desired cool-down period for slow controller
+        self.slow_action_cooldown_sec = 5  # The desired cool-down period for slow controller
         self.last_action_time = None
         self.last_slow_action_time = None
 
@@ -166,7 +166,7 @@ class SWIMKernel(BaseKernel):
             )
 
             # Decide which controller to use based on average
-            if avg_resp_time > 1:
+            if avg_resp_time > 0.75:
                 # Switch to FastController
 
                 current_time = time.time()
@@ -239,11 +239,18 @@ class SWIMKernel(BaseKernel):
 
                 # Delegate the latest data to Reasoner
                 latest_data = self.stream_buffer[-1]
+
+                # Add timestamp to track freshness
+                latest_data["kernel_timestamp"] = time.time()
+                latest_data["kernel_delegation_note"] = "Fresh telemetry from monitor via kernel"
+
                 await self.nats_client.publish(
                     "polaris.reasoner.kernel.requests",
                     json.dumps(latest_data).encode(),
                 )
-                self.logger.info("Delegated streaming telemetry to Reasoner")
+                self.logger.info(
+                    f"Delegated fresh streaming telemetry to Reasoner - Cycle ID: {latest_data.get('cycle_id', 'unknown')}"
+                )
 
                 # Update last slow action time to enforce the cool-down
                 self.last_slow_action_time = current_time

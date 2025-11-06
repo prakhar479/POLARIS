@@ -1,24 +1,25 @@
 """
-Agentic LLM Reasoner Implementation with Google Gemini Flash 2.5
+Agentic LLM Reasoner Implementation with OpenAI GPT
 
 An autonomous agentic reasoner that can dynamically decide which tools to use
 (Knowledge Base queries, Digital Twin interactions) and make adaptation decisions
-based on its analysis. Uses Google Gemini Flash 2.5 as the reasoning engine.
+based on its analysis. Uses OpenAI GPT as the reasoning engine.
 """
 
 import json
 import asyncio
 import time
+from urllib import response
 import uuid
 import os
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import logging
 from datetime import datetime, timezone, timedelta
 import tempfile
 import yaml
+from pathlib import Path
 
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 
 from .reasoner_core import (
     ReasoningInterface,
@@ -44,6 +45,53 @@ from .reasoner_core import ReasoningType
 from .improved_grpc_client import ImprovedGRPCDigitalTwinClient
 
 
+class TokenUsageLogger:
+    """Logs average token usage per reasoning decision."""
+
+    def __init__(self, log_dir: str = "."):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.log_dir / "token_usage.jsonl"
+
+    def log_average_tokens(
+        self, avg_input_tokens: float, avg_output_tokens: float, details: Dict[str, Any]
+    ):
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "avg_input_tokens": round(avg_input_tokens, 2),
+            "avg_output_tokens": round(avg_output_tokens, 2),
+            "avg_reasoning_tokens": details.get("avg_reasoning_tokens", 0),
+            "details": details,
+        }
+        with open(self.log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+
+class PerformanceLogger:
+    """Simple performance logger for overhead metrics."""
+
+    def __init__(self, log_dir: str = "logs_gpt/overhead"):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.log_dir / "performance_metrics.jsonl"
+
+    def log_metric(self, metric_type: str, duration_ms: float, details: Dict[str, Any] = None):
+        """Log a performance metric to file."""
+        try:
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "metric_type": metric_type,
+                "duration_ms": round(duration_ms, 3),
+                "details": details or {},
+            }
+
+            with open(self.log_file, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            # Don't let logging errors break the main flow
+            print(f"Performance logging error: {e}")
+
+
 class AgenticTool:
     """Base class for tools that the agentic reasoner can use."""
 
@@ -60,7 +108,12 @@ class AgenticTool:
 class KnowledgeBaseTool(AgenticTool):
     """Tool for querying the knowledge base."""
 
-    def __init__(self, kb_query: KnowledgeQueryInterface, logger: logging.Logger):
+    def __init__(
+        self,
+        kb_query: KnowledgeQueryInterface,
+        logger: logging.Logger,
+        perf_logger: PerformanceLogger,
+    ):
         super().__init__(
             name="query_knowledge_base",
             description="Query the knowledge base for historical data, observations, and telemetry",
@@ -89,9 +142,11 @@ class KnowledgeBaseTool(AgenticTool):
         )
         self.kb_query = kb_query
         self.logger = logger
+        self.perf_logger = perf_logger
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Execute knowledge base query."""
+        start_time = time.time()
         try:
             query_type = kwargs.get("query_type", "structured")
             limit = kwargs.get("limit", 10)
@@ -110,12 +165,29 @@ class KnowledgeBaseTool(AgenticTool):
             else:
                 return {"success": False, "error": f"Unknown query type: {query_type}"}
 
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "kb_query",
+                duration_ms,
+                {
+                    "query_type": query_type,
+                    "result_count": len(results) if results else 0,
+                    "limit": limit,
+                },
+            )
+
             return {
                 "success": True,
                 "results": results or [],
                 "count": len(results) if results else 0,
             }
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "kb_query_error",
+                duration_ms,
+                {"error": str(e), "query_type": kwargs.get("query_type", "unknown")},
+            )
             self.logger.error(f"Knowledge base query failed: {e}")
             return {"success": False, "error": str(e)}
 
@@ -123,7 +195,12 @@ class KnowledgeBaseTool(AgenticTool):
 class DigitalTwinTool(AgenticTool):
     """Tool for interacting with the digital twin."""
 
-    def __init__(self, dt_interface: DigitalTwinInterface, logger: logging.Logger):
+    def __init__(
+        self,
+        dt_interface: DigitalTwinInterface,
+        logger: logging.Logger,
+        perf_logger: PerformanceLogger,
+    ):
         super().__init__(
             name="query_digital_twin",
             description="Query the digital twin for system state, simulations, and diagnostics",
@@ -156,12 +233,22 @@ class DigitalTwinTool(AgenticTool):
         )
         self.dt_interface = dt_interface
         self.logger = logger
+        self.perf_logger = perf_logger
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Execute digital twin operation."""
+        start_time = time.time()
+        operation = kwargs.get("operation", "query")
+
         try:
             # Check if digital twin interface is available
             if not self.dt_interface:
+                duration_ms = (time.time() - start_time) * 1000
+                self.perf_logger.log_metric(
+                    "dt_error",
+                    duration_ms,
+                    {"error": "interface_not_available", "operation": operation},
+                )
                 return {"success": False, "error": "Digital twin interface not available"}
 
             # Ensure connection is established with better error handling
@@ -170,13 +257,30 @@ class DigitalTwinTool(AgenticTool):
                 try:
                     await asyncio.wait_for(self.dt_interface.connect(), timeout=15.0)
                     if not self.dt_interface.stub:
+                        duration_ms = (time.time() - start_time) * 1000
+                        self.perf_logger.log_metric(
+                            "dt_connection_error",
+                            duration_ms,
+                            {"error": "connection_failed", "operation": operation},
+                        )
                         return {"success": False, "error": "Failed to connect to digital twin"}
                 except asyncio.TimeoutError:
+                    duration_ms = (time.time() - start_time) * 1000
+                    self.perf_logger.log_metric(
+                        "dt_connection_error",
+                        duration_ms,
+                        {"error": "connection_timeout", "operation": operation},
+                    )
                     return {"success": False, "error": "Digital twin connection timeout"}
                 except Exception as e:
+                    duration_ms = (time.time() - start_time) * 1000
+                    self.perf_logger.log_metric(
+                        "dt_connection_error",
+                        duration_ms,
+                        {"error": f"connection_exception: {str(e)}", "operation": operation},
+                    )
                     return {"success": False, "error": f"Digital twin connection failed: {str(e)}"}
 
-            operation = kwargs.get("operation", "query")
             self.logger.debug(f"Executing digital twin operation: {operation}")
 
             if operation == "query":
@@ -221,9 +325,27 @@ class DigitalTwinTool(AgenticTool):
                 )
                 response = await self.dt_interface.diagnose(diagnosis)
             else:
+                duration_ms = (time.time() - start_time) * 1000
+                self.perf_logger.log_metric(
+                    "dt_error",
+                    duration_ms,
+                    {"error": f"unknown_operation: {operation}", "operation": operation},
+                )
                 return {"success": False, "error": f"Unknown operation: {operation}"}
 
+            duration_ms = (time.time() - start_time) * 1000
+
             if response:
+                self.perf_logger.log_metric(
+                    "dt_operation",
+                    duration_ms,
+                    {
+                        "operation": operation,
+                        "success": response.success,
+                        "confidence": response.confidence,
+                    },
+                )
+
                 result = {
                     "success": response.success,
                     "result": response.result,
@@ -240,9 +362,16 @@ class DigitalTwinTool(AgenticTool):
 
                 return result
             else:
+                self.perf_logger.log_metric(
+                    "dt_error", duration_ms, {"error": "no_response", "operation": operation}
+                )
                 return {"success": False, "error": "No response from digital twin"}
 
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "dt_error", duration_ms, {"error": str(e), "operation": operation}
+            )
             self.logger.error(f"Digital twin operation failed: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
@@ -353,7 +482,7 @@ class ContextBuilder:
         )
 
         system_goals_and_constraints = {
-            "goals": {"target_utilization": 1, "target_response_time_ms_weighted": 900.0},
+            "goals": {"target_utilization": 0.8, "target_response_time_ms_weighted": 750.0},
             "constraints": {"max_servers": 3, "min_servers": 1, "cooldown_period_minutes": 2},
         }
 
@@ -573,7 +702,7 @@ class ContextBuilder:
 class AgenticLLMReasoner(ReasoningInterface):
     """
     Agentic LLM reasoner that can dynamically decide which tools to use
-    and make autonomous adaptation decisions using Google Gemini Flash 2.5.
+    and make autonomous adaptation decisions using OpenAI GPT.
     """
 
     def __init__(
@@ -596,27 +725,35 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.temperature = temperature
         self.max_tool_calls = max_tool_calls
         self.max_retries = 3
-        self.prompt_config_path = prompt_config_path
+        self.prompt_config_path = prompt_config_path  # Store for reloading
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
 
-        # Initialize OpenAI client
-        from openai import AsyncOpenAI
+        # Initialize performance logger
+        self.perf_logger = PerformanceLogger()
+        self.token_logger = TokenUsageLogger()
 
+        # Initialize OpenAI client
         self.client = AsyncOpenAI(api_key=self.api_key)
 
         # Initialize context builder and action history tracking
         self.context_builder = ContextBuilder(self.logger, {})
-        self.action_history: deque = deque(maxlen=20)
-        self.reactive_logs: deque = deque(maxlen=3)
-        self.last_historical_context = None
+        self.action_history = deque(maxlen=20)  # Store the last 20 actions
+        # Local short history maintained for fast context (last 3 actions)
+        self.local_action_history = deque(maxlen=3)
+        self.reactive_logs = deque(maxlen=3)  # Store the last 3 reactive logs
+        self.last_historical_context = None  # Cache for historical actions context
 
         # Initialize tools
         self.tools = {}
         if kb_query_interface:
-            self.tools["query_knowledge_base"] = KnowledgeBaseTool(kb_query_interface, self.logger)
+            self.tools["query_knowledge_base"] = KnowledgeBaseTool(
+                kb_query_interface, self.logger, self.perf_logger
+            )
             self.logger.info("Knowledge Base tool initialized")
         if dt_interface:
-            self.tools["query_digital_twin"] = DigitalTwinTool(dt_interface, self.logger)
+            self.tools["query_digital_twin"] = DigitalTwinTool(
+                dt_interface, self.logger, self.perf_logger
+            )
             self.logger.info("Digital Twin tool initialized")
 
         if not self.tools:
@@ -633,7 +770,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.system_prompt = self._build_system_prompt()
 
         self.logger.info(
-            f"Initialized AgenticLLMReasoner with GPT-4 and {len(self.tools)} tools available"
+            f"Initialized AgenticLLMReasoner with GPT and {len(self.tools)} tools available"
         )
 
     def _load_prompt_config(self) -> Dict[str, Any]:
@@ -805,13 +942,21 @@ Please analyze the system context and make adaptation decisions in JSON format:
         self, context: ReasoningContext, knowledge: Optional[List[Dict[str, Any]]] = None
     ) -> ReasoningResult:
         """Execute agentic reasoning with dynamic tool usage."""
-        start_time = time.time()
-        reasoning_steps = ["Starting agentic LLM reasoning with GPT-4"]
+        overall_start_time = time.time()
+        reasoning_steps = ["Starting agentic LLM reasoning with GPT"]
         tool_calls_made = 0
+
+        # Performance tracking
+        tool_call_timings = []
+        llm_call_timings = []
+        token_usage_records = []
 
         try:
             # Query for historical actions and snapshots to build enhanced context
+            hist_start_time = time.time()
             await self._gather_historical_context()
+            hist_duration_ms = (time.time() - hist_start_time) * 1000
+            self.perf_logger.log_metric("historical_context_gathering", hist_duration_ms)
             reasoning_steps.append("Gathered historical actions context")
 
             # Initial analysis
@@ -826,15 +971,26 @@ Please analyze the system context and make adaptation decisions in JSON format:
 
             final_action = None
 
-            for iteration in range(self.max_tool_calls + 1):
+            for iteration in range(self.max_tool_calls + 1):  # +1 for final decision
                 reasoning_steps.append(f"Reasoning iteration {iteration + 1}")
 
                 # Get LLM response
-                llm_response = await self._call_gpt(messages)
-                reasoning_steps.append(f"Received GPT-4 response (iteration {iteration + 1})")
-                self.logger.debug(f"GPT-4 Response (iteration {iteration + 1}): {llm_response}")
-
-                self.logger.info(f"LLM response: {llm_response}")
+                llm_start_time = time.time()
+                llm_response, inp, op, reasoning_tokens = await self._call_gpt(messages)
+                token_usage_records.append((inp, op, reasoning_tokens))
+                llm_duration_ms = (time.time() - llm_start_time) * 1000
+                llm_call_timings.append(llm_duration_ms)
+                self.perf_logger.log_metric(
+                    "llm_call",
+                    llm_duration_ms,
+                    {
+                        "iteration": iteration + 1,
+                        "model": self.model,
+                        "response_length": len(llm_response),
+                    },
+                )
+                reasoning_steps.append(f"Received GPT response (iteration {iteration + 1})")
+                self.logger.debug(f"GPT Response (iteration {iteration + 1}): {llm_response}")
 
                 # Add assistant response to history
                 messages.append({"role": "assistant", "content": llm_response})
@@ -849,7 +1005,7 @@ Please analyze the system context and make adaptation decisions in JSON format:
                     f"Tool calls made: {tool_calls_made}, Max tool calls: {self.max_tool_calls}"
                 )
                 if tool_calls and tool_calls_made < self.max_tool_calls:
-                    # Execute tool calls
+                    # Execute tool calls (prioritize over action)
                     tool_results = []
                     for tool_call in tool_calls:
                         tool_name = tool_call.get("tool_name")
@@ -860,10 +1016,24 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             self.logger.info(
                                 f"Executing tool '{tool_name}' with parameters: {parameters}"
                             )
+                            tool_start_time = time.time()
                             result = await self.tools[tool_name].execute(**parameters)
+                            tool_duration_ms = (time.time() - tool_start_time) * 1000
+                            tool_call_timings.append(tool_duration_ms)
+                            self.perf_logger.log_metric(
+                                "tool_call_total",
+                                tool_duration_ms,
+                                {
+                                    "tool_name": tool_name,
+                                    "iteration": iteration + 1,
+                                    "parameters": str(parameters)[:100],  # Truncate for logging
+                                },
+                            )
+
                             tool_results.append(
                                 {"tool_name": tool_name, "parameters": parameters, "result": result}
                             )
+                            # self.logger.debug(f"Tool result: {result}")
                             tool_calls_made += 1
                         else:
                             reasoning_steps.append(f"Unknown tool requested: {tool_name}")
@@ -880,12 +1050,15 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             f"Feeding tool results back to LLM: {len(tool_results)} results"
                         )
                         self.logger.debug(f"Tool Results Text: {tool_results_text}")
+                        # Continue to next iteration to let LLM process the tool results
                         continue
                     else:
+                        # No valid tool calls were executed
                         reasoning_steps.append("No valid tool calls executed")
                         self.logger.warning("Tool calls were parsed but none were valid")
 
                 if action:
+                    # Final decision reached (only if no tool calls were executed)
                     final_action = action
                     reasoning_steps.append("Final decision reached")
                     self.logger.info(f"Final action determined: {action}")
@@ -899,12 +1072,23 @@ Please analyze the system context and make adaptation decisions in JSON format:
                             "content": "Please provide your final decision and action in the required JSON format.",
                         }
                     )
-                    final_response = await self._call_gpt(messages)
+                    llm_start_time = time.time()
+                    final_response, inp, op, reasoning_tokens = await self._call_gpt(messages)
+                    token_usage_records.append((inp, op, reasoning_tokens))
+                    llm_duration_ms = (time.time() - llm_start_time) * 1000
+                    llm_call_timings.append(llm_duration_ms)
+                    self.perf_logger.log_metric(
+                        "llm_call_final",
+                        llm_duration_ms,
+                        {"model": self.model, "forced_decision": True},
+                    )
+
                     _, final_action = self._parse_llm_response(final_response)
                     reasoning_steps.append("Forced final decision")
                     break
 
             # Ensure we have a valid action
+            # Normalize or fallback to NO_ACTION
             if final_action:
                 final_action = self._normalize_action(final_action)
             else:
@@ -917,21 +1101,101 @@ Please analyze the system context and make adaptation decisions in JSON format:
                 )
                 reasoning_steps.append("Fallback to NO_ACTION")
 
-            execution_time = time.time() - start_time
+            # Append final action to local short history (last 3 actions)
+            try:
+                record = {
+                    "action_type": final_action.get("action_type"),
+                    "action_id": final_action.get("action_id"),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "priority": final_action.get("priority"),
+                    "reasoning": final_action.get("reasoning"),
+                }
+                # Keep a very small human-readable snapshot in local history
+                self.local_action_history.append(record)
+
+                # Also push a lightweight entry into the longer action_history for persistence/debugging
+                try:
+                    self.action_history.append(
+                        {
+                            "timestamp": record["timestamp"],
+                            "content": {
+                                "action_type": record["action_type"],
+                                "action_id": record["action_id"],
+                                "priority": record["priority"],
+                                "reasoning": record["reasoning"],
+                            },
+                        }
+                    )
+                except Exception:
+                    # Non-fatal - don't let history append failures break reasoning
+                    pass
+            except Exception:
+                # ignore history failures
+                pass
+
+            overall_duration_ms = (time.time() - overall_start_time) * 1000
+
+            # Log comprehensive overhead metrics
+            self.perf_logger.log_metric(
+                "end_to_end_reasoning",
+                overall_duration_ms,
+                {
+                    "tool_calls_made": tool_calls_made,
+                    "llm_calls_made": len(llm_call_timings),
+                    "final_action_type": final_action.get("action_type"),
+                    "total_tool_time_ms": sum(tool_call_timings),
+                    "total_llm_time_ms": sum(llm_call_timings),
+                    "avg_tool_time_ms": (
+                        sum(tool_call_timings) / len(tool_call_timings) if tool_call_timings else 0
+                    ),
+                    "avg_llm_time_ms": (
+                        sum(llm_call_timings) / len(llm_call_timings) if llm_call_timings else 0
+                    ),
+                },
+            )
+
+            execution_time = time.time() - overall_start_time
+
+            # --- Average token usage logging ---
+            if token_usage_records:
+                avg_input = sum(i for i, _, _ in token_usage_records) / len(token_usage_records)
+                avg_output = sum(o for _, o, _ in token_usage_records) / len(token_usage_records)
+                avg_reasoning = sum(r for _, _, r in token_usage_records) / len(token_usage_records)
+                self.token_logger.log_average_tokens(
+                    avg_input,
+                    avg_output,
+                    {
+                        "model": self.model,
+                        "decision_id": context.session_id,
+                        "reasoning_type": self.reasoning_type.value,
+                        "llm_calls_made": len(token_usage_records),
+                        "avg_reasoning_tokens": round(avg_reasoning, 2),
+                    },
+                )
 
             return ReasoningResult(
                 result=final_action,
-                confidence=0.8,
+                confidence=0.8,  # Could be dynamic based on tool results
                 reasoning_steps=reasoning_steps,
                 context=context,
                 execution_time=execution_time,
-                kb_queries_made=tool_calls_made,
-                dt_queries_made=0,
+                kb_queries_made=tool_calls_made,  # Approximate
+                dt_queries_made=0,  # Could track separately
             )
 
         except Exception as e:
+            overall_duration_ms = (time.time() - overall_start_time) * 1000
+            self.perf_logger.log_metric(
+                "reasoning_error",
+                overall_duration_ms,
+                {
+                    "error": str(e),
+                    "tool_calls_made": tool_calls_made,
+                    "llm_calls_made": len(llm_call_timings),
+                },
+            )
             self.logger.error(f"Agentic reasoning failed: {e}", exc_info=True)
-            execution_time = time.time() - start_time
+            execution_time = time.time() - overall_start_time
 
             return ReasoningResult(
                 result={
@@ -971,6 +1235,14 @@ START BY USING TOOLS TO GATHER MORE INFORMATION!
         if hasattr(self, "last_historical_context") and self.last_historical_context:
             enhanced_context["historical_actions_summary"] = self.last_historical_context
 
+        # Add local short action history (most recent 3 actions) to the prompt context
+        if hasattr(self, "local_action_history") and len(self.local_action_history) > 0:
+            # convert deque entries to list for serialization
+            try:
+                enhanced_context["local_action_history"] = list(self.local_action_history)
+            except Exception:
+                enhanced_context["local_action_history"] = []
+
         return f"""Current System Context:
 {json.dumps(enhanced_context, indent=2)}
 
@@ -1005,29 +1277,86 @@ Remember to follow the structured output format with tool calls if you need more
 
         return normalized
 
-    async def _call_gpt(self, messages: List[Dict[str, str]]) -> str:
-        """Call GPT-5 API with message history and medium reasoning effort."""
+    async def _call_gpt(self, messages: List[Dict[str, str]]) -> Tuple[str, int, int, int]:
+        """Call GPT API with message history. Returns (response_text, input_tokens, output_tokens, reasoning_tokens)."""
         for attempt in range(self.max_retries):
+            call_start_time = time.time()
             try:
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     max_completion_tokens=self.max_completion_tokens,
-                    reasoning_effort="medium",  # GPT-5 high reasoning effort
+                    reasoning_effort="medium",
                 )
 
+                call_duration_ms = (time.time() - call_start_time) * 1000
+
+                # Extract text from response
                 if response and response.choices and len(response.choices) > 0:
-                    return response.choices[0].message.content.strip()
-                else:
-                    raise ValueError("Empty response from GPT-5")
+                    content = response.choices[0].message.content
+                    if content:
+                        input_tokens = response.usage.prompt_tokens if response.usage else 0
+                        output_tokens = response.usage.completion_tokens if response.usage else 0
+
+                        # Extract reasoning tokens from completion_tokens_details if available
+                        reasoning_tokens = 0
+                        if (
+                            response.usage
+                            and hasattr(response.usage, "completion_tokens_details")
+                            and response.usage.completion_tokens_details
+                            and hasattr(
+                                response.usage.completion_tokens_details, "reasoning_tokens"
+                            )
+                        ):
+                            reasoning_tokens = (
+                                response.usage.completion_tokens_details.reasoning_tokens
+                            )
+
+                        self.perf_logger.log_metric(
+                            "gpt_api_call",
+                            call_duration_ms,
+                            {
+                                "attempt": attempt + 1,
+                                "success": True,
+                                "response_length": len(content),
+                                "model": self.model,
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "reasoning_tokens": reasoning_tokens,
+                            },
+                        )
+                        return content.strip(), input_tokens, output_tokens, reasoning_tokens
+
+                self.perf_logger.log_metric(
+                    "gpt_api_call",
+                    call_duration_ms,
+                    {
+                        "attempt": attempt + 1,
+                        "success": False,
+                        "error": "empty_response",
+                        "model": self.model,
+                    },
+                )
+                raise ValueError("Empty response from GPT")
 
             except Exception as e:
-                self.logger.warning(f"GPT-5 call attempt {attempt + 1} failed: {e}")
+                call_duration_ms = (time.time() - call_start_time) * 1000
+                self.perf_logger.log_metric(
+                    "gpt_api_call",
+                    call_duration_ms,
+                    {
+                        "attempt": attempt + 1,
+                        "success": False,
+                        "error": str(e),
+                        "model": self.model,
+                    },
+                )
+                self.logger.warning(f"GPT call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
                     raise
-                await asyncio.sleep(2**attempt)
+                await asyncio.sleep(2**attempt)  # Exponential backoff
 
-        raise Exception("GPT-5 call failed after all retries")
+        raise Exception("GPT call failed after all retries")
 
     def _parse_llm_response(
         self, response: str
@@ -1122,6 +1451,7 @@ Remember to follow the structured output format with tool calls if you need more
 
     async def _gather_historical_context(self):
         """Gather historical actions and snapshots to build enhanced context."""
+        start_time = time.time()
         try:
             # Use direct KB query interface like in llm_reasoner.py
             if not self.tools.get("query_knowledge_base") or not hasattr(
@@ -1129,21 +1459,39 @@ Remember to follow the structured output format with tool calls if you need more
             ):
                 self.logger.warning("Knowledge base interface not available for historical context")
                 self.last_historical_context = None
+                duration_ms = (time.time() - start_time) * 1000
+                self.perf_logger.log_metric(
+                    "historical_context_error", duration_ms, {"error": "kb_interface_not_available"}
+                )
                 return
 
             kb_query = self.tools["query_knowledge_base"].kb_query
 
             # Query for recent snapshots using the same pattern as llm_reasoner.py
+            snapshots_start_time = time.time()
             snapshots = await kb_query.query_structured(
                 data_types=["observation"],
                 filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
                 limit=3,
             )
+            snapshots_duration_ms = (time.time() - snapshots_start_time) * 1000
+            self.perf_logger.log_metric(
+                "historical_snapshots_query",
+                snapshots_duration_ms,
+                {"result_count": len(snapshots) if snapshots else 0},
+            )
 
             # Query for recent adaptation decisions/actions
+            actions_start_time = time.time()
             actions = await kb_query.query_structured(
                 data_types=["adaptation_decision"],
                 limit=8,
+            )
+            actions_duration_ms = (time.time() - actions_start_time) * 1000
+            self.perf_logger.log_metric(
+                "historical_actions_query",
+                actions_duration_ms,
+                {"result_count": len(actions) if actions else 0},
             )
 
             # Convert action history deque to list
@@ -1152,8 +1500,15 @@ Remember to follow the structured output format with tool calls if you need more
 
             # Build context using ContextBuilder
             if snapshots or actions:
+                context_build_start_time = time.time()
                 historical_context = self.context_builder.build_context_from_kb_results(
                     snapshots, action_history_list, reactive_logs_list, actions
+                )
+                context_build_duration_ms = (time.time() - context_build_start_time) * 1000
+                self.perf_logger.log_metric(
+                    "context_building",
+                    context_build_duration_ms,
+                    {"snapshots_count": len(snapshots or []), "actions_count": len(actions or [])},
                 )
 
                 # Extract only the historical actions summary for the prompt
@@ -1165,7 +1520,20 @@ Remember to follow the structured output format with tool calls if you need more
                 self.last_historical_context = None
                 self.logger.info("No historical data available for context building")
 
+            total_duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric(
+                "historical_context_total",
+                total_duration_ms,
+                {
+                    "success": True,
+                    "snapshots_available": len(snapshots) if snapshots else 0,
+                    "actions_available": len(actions) if actions else 0,
+                },
+            )
+
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.perf_logger.log_metric("historical_context_error", duration_ms, {"error": str(e)})
             self.logger.error(f"Failed to gather historical context: {e}")
             self.last_historical_context = None
 
@@ -1192,12 +1560,12 @@ def create_agentic_reasoner_agent(
     grpc_timeout_config: Optional[Dict[str, float]] = None,
 ) -> "ReasonerAgent":
     """
-    Create a reasoner agent with agentic LLM reasoning implementation using Gemini Flash 2.5.
+    Create a reasoner agent with agentic LLM reasoning implementation using OpenAI GPT.
 
     Args:
         agent_id: Unique identifier for the agent
         config_path: Path to configuration file
-        llm_api_key: API key for Gemini LLM
+        llm_api_key: API key for OpenAI GPT LLM
         nats_url: NATS server URL
         logger: Logger instance
         use_improved_grpc: Whether to use the improved GRPC client
@@ -1310,7 +1678,7 @@ def create_agentic_reasoner_with_bayesian_world_model(
 ) -> "ReasonerAgent":
     """
     Create a reasoner agent that uses the Bayesian/Kalman filter world model
-    instead of the Gemini LLM world model for deterministic predictions.
+    instead of the GPT LLM world model for deterministic predictions.
     """
     # Update config to use Bayesian world model
     import yaml

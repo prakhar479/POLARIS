@@ -1,0 +1,206 @@
+run,type,module,name,attrname,attrvalue,value
+sim-1-20251014-16:46:55-317,runattr,,,configname,sim,
+sim-1-20251014-16:46:55-317,runattr,,,datetime,20251014-16:46:55,
+sim-1-20251014-16:46:55-317,runattr,,,experiment,sim,
+sim-1-20251014-16:46:55-317,runattr,,,inifile,swim.ini,
+sim-1-20251014-16:46:55-317,runattr,,,iterationvars,"$trace=""traces/clarknet-http-105m-l70.delta"", $latency=60",
+sim-1-20251014-16:46:55-317,runattr,,,iterationvarsf,"trace=traces#2fclarknet-http-105m-l70.delta,latency=60-",
+sim-1-20251014-16:46:55-317,runattr,,,measurement,"$trace=""traces/clarknet-http-105m-l70.delta"", $latency=60",
+sim-1-20251014-16:46:55-317,runattr,,,network,SWIM,
+sim-1-20251014-16:46:55-317,runattr,,,processid,317,
+sim-1-20251014-16:46:55-317,runattr,,,repetition,0,
+sim-1-20251014-16:46:55-317,runattr,,,replication,#0,
+sim-1-20251014-16:46:55-317,runattr,,,resultdir,../../../results/SWIM,
+sim-1-20251014-16:46:55-317,runattr,,,runnumber,1,
+sim-1-20251014-16:46:55-317,runattr,,,seedset,1,
+sim-1-20251014-16:46:55-317,itervar,,,latency,60,
+sim-1-20251014-16:46:55-317,itervar,,,trace,"""traces/clarknet-http-105m-l70.delta""",
+sim-1-20251014-16:46:55-317,param,,,*.source.interArrivalsFile,"""traces/clarknet-http-105m-l70.delta""",
+sim-1-20251014-16:46:55-317,param,,,*.evaluationPeriod,60,
+sim-1-20251014-16:46:55-317,param,,,*.numberOfBrownoutLevels,5,
+sim-1-20251014-16:46:55-317,param,,,*.dimmerMargin,0.1,
+sim-1-20251014-16:46:55-317,param,,,*.responseTimeThreshold,0.75s,
+sim-1-20251014-16:46:55-317,param,,,*.maxServers,3,
+sim-1-20251014-16:46:55-317,param,,,*.initialServers,3,
+sim-1-20251014-16:46:55-317,param,,,**.server*.server.threads,100,
+sim-1-20251014-16:46:55-317,param,,,**.server*.server.brownoutFactor,0.1,
+sim-1-20251014-16:46:55-317,param,,,**.server*.server.timeout,10s,
+sim-1-20251014-16:46:55-317,param,,,*.bootDelay,60,
+sim-1-20251014-16:46:55-317,param,,,**.server*.server.serviceTime,"truncnormal(0.030s,0.030s)",
+sim-1-20251014-16:46:55-317,param,,,**.server*.server.lowFidelityServiceTime,"truncnormal(0.001s,0.001s)",
+sim-1-20251014-16:46:55-317,param,,,*.maxServiceRate,1 / 0.04452713,
+sim-1-20251014-16:46:55-317,scalar,_runattrs_,latency,,,60
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,generation:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,generation:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,generation:mean,title,"the generation of the arrived jobs, mean",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,generation:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,generation:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,generation:max,title,"the generation of the arrived jobs, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,delaysVisited:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,delaysVisited:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,delaysVisited:mean,title,"the total number of delays visited by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,delaysVisited:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,delaysVisited:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,delaysVisited:max,title,"the total number of delays visited by arrived jobs, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,queuesVisited:mean,,,0.13429008922437
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,queuesVisited:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,queuesVisited:mean,title,"the total number of queues visited by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,queuesVisited:max,,,2
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,queuesVisited:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,queuesVisited:max,title,"the total number of queues visited by arrived jobs, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,totalServiceTime:mean,,,0.46181404886684
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalServiceTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalServiceTime:mean,title,"the total time spent  by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalServiceTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,totalServiceTime:max,,,15.2448529358
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalServiceTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalServiceTime:max,title,"the total time spent  by arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalServiceTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,totalDelayTime:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalDelayTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalDelayTime:mean,title,"the total time spent in delay nodes by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalDelayTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,totalDelayTime:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalDelayTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalDelayTime:max,title,"the total time spent in delay nodes by arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalDelayTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,totalQueueingTime:mean,,,0.41864716127993
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalQueueingTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalQueueingTime:mean,title,"the total time spent in queues by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalQueueingTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,totalQueueingTime:max,,,10.217418672888
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalQueueingTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalQueueingTime:max,title,"the total time spent in queues by arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,totalQueueingTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,lifeTime:mean,,,0.88046121014675
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,lifeTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,lifeTime:mean,title,"lifetime of arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,lifeTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sink,lifeTime:max,,,25.224213904777
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,lifeTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,lifeTime:max,title,"lifetime of arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sink,lifeTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.source,created:count,,,1
+sim-1-20251014-16:46:55-317,attr,SWIM.source,created:count,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.source,created:count,title,"the number of jobs created, count",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,generation:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,generation:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,generation:mean,title,"the generation of the arrived jobs, mean",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,generation:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,generation:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,generation:max,title,"the generation of the arrived jobs, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,delaysVisited:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,delaysVisited:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,delaysVisited:mean,title,"the total number of delays visited by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,delaysVisited:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,delaysVisited:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,delaysVisited:max,title,"the total number of delays visited by arrived jobs, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,queuesVisited:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,queuesVisited:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,queuesVisited:mean,title,"the total number of queues visited by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,queuesVisited:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,queuesVisited:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,queuesVisited:max,title,"the total number of queues visited by arrived jobs, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,totalServiceTime:mean,,,0.0043562272268826
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalServiceTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalServiceTime:mean,title,"the total time spent  by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalServiceTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,totalServiceTime:max,,,0.101536579222
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalServiceTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalServiceTime:max,title,"the total time spent  by arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalServiceTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,totalDelayTime:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalDelayTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalDelayTime:mean,title,"the total time spent in delay nodes by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalDelayTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,totalDelayTime:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalDelayTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalDelayTime:max,title,"the total time spent in delay nodes by arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalDelayTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,totalQueueingTime:mean,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalQueueingTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalQueueingTime:mean,title,"the total time spent in queues by arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalQueueingTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,totalQueueingTime:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalQueueingTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalQueueingTime:max,title,"the total time spent in queues by arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,totalQueueingTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,lifeTime:mean,,,0.0043562272268826
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,lifeTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,lifeTime:mean,title,"lifetime of arrived jobs, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,lifeTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.sinkLow,lifeTime:max,,,0.101536579222
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,lifeTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,lifeTime:max,title,"lifetime of arrived jobs, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.sinkLow,lifeTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.monitor,utility:last,,,4594.1171641368
+sim-1-20251014-16:46:55-317,attr,SWIM.monitor,utility:last,source,sum(utility),
+sim-1-20251014-16:46:55-317,scalar,SWIM.monitor,serverCost:timeavg,,,2.629493392515
+sim-1-20251014-16:46:55-317,attr,SWIM.monitor,serverCost:timeavg,source,numberOfServers,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server1.queue,queueingTime:mean,,,6.4728871735184
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueingTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueingTime:mean,title,"queueing time at dequeue, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueingTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server1.queue,queueingTime:max,,,10.217318539849
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueingTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueingTime:max,title,"queueing time at dequeue, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueingTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server1.queue,queueLength:timeavg,,,15.235404373395
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueLength:timeavg,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueLength:timeavg,title,"queue length, timeavg",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server1.queue,queueLength:max,,,523
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueLength:max,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,queueLength:max,title,"queue length, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server1.queue,dropped:count,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,dropped:count,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.queue,dropped:count,title,"drop event, count",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server1.server,busy:timeavg,,,0.63598427479357
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.server,busy:timeavg,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server1.server,busy:timeavg,title,"server busy state, timeavg",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server2.queue,queueingTime:mean,,,6.0016087325124
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueingTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueingTime:mean,title,"queueing time at dequeue, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueingTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server2.queue,queueingTime:max,,,10.217418672888
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueingTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueingTime:max,title,"queueing time at dequeue, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueingTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server2.queue,queueLength:timeavg,,,7.2169659823073
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueLength:timeavg,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueLength:timeavg,title,"queue length, timeavg",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server2.queue,queueLength:max,,,417
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueLength:max,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,queueLength:max,title,"queue length, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server2.queue,dropped:count,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,dropped:count,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.queue,dropped:count,title,"drop event, count",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server2.server,busy:timeavg,,,0.65236485683552
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.server,busy:timeavg,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server2.server,busy:timeavg,title,"server busy state, timeavg",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server3.queue,queueingTime:mean,,,NaN
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueingTime:mean,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueingTime:mean,title,"queueing time at dequeue, mean",
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueingTime:mean,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server3.queue,queueingTime:max,,,NaN
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueingTime:max,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueingTime:max,title,"queueing time at dequeue, max",
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueingTime:max,unit,s,
+sim-1-20251014-16:46:55-317,scalar,SWIM.server3.queue,queueLength:timeavg,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueLength:timeavg,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueLength:timeavg,title,"queue length, timeavg",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server3.queue,queueLength:max,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueLength:max,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,queueLength:max,title,"queue length, max",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server3.queue,dropped:count,,,0
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,dropped:count,interpolationmode,none,
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.queue,dropped:count,title,"drop event, count",
+sim-1-20251014-16:46:55-317,scalar,SWIM.server3.server,busy:timeavg,,,0.57084173545793
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.server,busy:timeavg,interpolationmode,sample-hold,
+sim-1-20251014-16:46:55-317,attr,SWIM.server3.server,busy:timeavg,title,"server busy state, timeavg",
+sim-1-20251014-16:46:55-317,scalar,SWIM,bootDelay,,,60
+sim-1-20251014-16:46:55-317,scalar,SWIM,evaluationPeriod,,,60
+sim-1-20251014-16:46:55-317,scalar,SWIM,initialServers,,,3
+sim-1-20251014-16:46:55-317,scalar,SWIM,maxServers,,,3
+sim-1-20251014-16:46:55-317,scalar,SWIM,numberOfBrownoutLevels,,,5
+sim-1-20251014-16:46:55-317,scalar,SWIM,responseTimeThreshold,,,0.75
+sim-1-20251014-16:46:55-317,scalar,SWIM,maxServiceRate,,,22.458218169462

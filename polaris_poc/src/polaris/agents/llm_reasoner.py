@@ -12,15 +12,14 @@ import time
 from typing import Any, Dict, List, Optional, Union
 import logging
 from google import genai
-from google.genai import types
 import google
 from pathlib import Path
+import random
 import uuid  # Import uuid for generating action_id
+import httpx
 import yaml
 from collections import deque
 from datetime import datetime, timezone, timedelta
-from polaris.common.nats_client import NATSClient
-import re
 
 # Add these imports to the existing reasoner_agent.py file
 from .reasoner_core import (
@@ -45,34 +44,31 @@ class LLMReasoningImplementation(ReasoningInterface):
         prompt_config: Dict[str, Any],  # <-- New parameter for the config
         prompt_config_path: Optional[str] = None,  # <-- Add path to reload config
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
-        model: str = "gemini-2.0-flash",
-        max_tokens: int = 8192,
-        temperature: float = 0.3,
+        model: str = "gpt-oss:20b",
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        timeout: float = 600.0,
+        base_url: str = "http://10.10.16.46:11435",
         logger: Optional[logging.Logger] = None,
-        nats_url="",
     ):
         self.api_key = api_key
         self.reasoning_type = reasoning_type
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.max_retries = 3
+        self.max_retries = 5
+        self.timeout = timeout
+        self.base_url = base_url
         self.prompt_config_path = prompt_config_path  # Store for reloading
         self.last_run_time: Optional[float] = None
         self.initial_backoff = 2.0
         self.logger = logger or logging.getLogger(f"LLMReasoner.{reasoning_type.value}")
+        self.logger.info(
+            f"Initializing LLMReasoningImplementation with model {model} at endpoint {self.base_url}"
+        )
 
-        # Initialize Gemini client
-        self.client = genai.Client(api_key=self.api_key)
-
-        self.logger.info(f"Initializing LLMReasoningImplementation with Gemini model {model}")
-        self.nats_client = NATSClient(nats_url=nats_url, logger=logger, name="LLM_REASONER")
-
-        self.nats_client.subscribe("polaris.execution.fast", self.update_log)
         # In-memory storage for the action history using a deque
         self.action_history: deque = deque(maxlen=20)  # Store the last 20 actions
-
-        self.reactive_logs: deque = deque(maxlen=3)  # Store the last 20 logs
 
         # self.last_action_memory: Optional[Dict[str, Any]] = None
         self.kb_query = kb_query_interface
@@ -80,7 +76,6 @@ class LLMReasoningImplementation(ReasoningInterface):
         self.last_inference_snapshots: Optional[List[Dict[str, Any]]] = None
         self.last_inference_action: Optional[Dict[str, Any]] = None
         self.last_inference_timestamp: Optional[str] = None
-        self.current_servers = -1
 
         # Load prompt template and thresholds from the config dictionary
         try:
@@ -174,8 +169,8 @@ class LLMReasoningImplementation(ReasoningInterface):
         start_time = time.time()
         reasoning_steps = ["Starting single-LLM agentic reasoning"]
         now = time.time()
-        if self.last_run_time and (now - self.last_run_time) < 30:
-            self.logger.info("Skipping reasoning : cooldown not reached (30 secs)")
+        if self.last_run_time and (now - self.last_run_time) < 60:
+            self.logger.info("Skipping reasoning : cooldown not reached (2 mins)")
             return ReasoningResult(
                 result={"action_type": "NO_ACTION", "source": "rate_limiter"},
                 confidence=1.0,
@@ -192,10 +187,6 @@ class LLMReasoningImplementation(ReasoningInterface):
                 data_types=["observation"],
                 filters={"source": "swim_snapshotter", "tags": ["snapshot"]},
                 limit=120,
-            )
-            decisions = await self.kb_query.query_structured(
-                data_types=["adaptation_decision"],
-                limit=8,
             )
             reasoning_steps.append(f"Fetched {len(snapshots)} KB snapshots")
             # === Filter to only snapshots newer than last inference ===
@@ -219,9 +210,8 @@ class LLMReasoningImplementation(ReasoningInterface):
             # === Use filtered snapshots for current reasoning ===
             current_snapshots = filtered_snapshots or snapshots
             action_history_list = list(self.action_history)
-            reactive_logs_list = list(self.reactive_logs)
             enriched_context_data = self.context_builder.build_context_from_kb_results(
-                current_snapshots, action_history_list, reactive_logs_list, decisions
+                current_snapshots, action_history_list
             )
 
             # 3. Prepare prompts
@@ -291,12 +281,6 @@ class LLMReasoningImplementation(ReasoningInterface):
                 context=context,
                 execution_time=execution_time,
             )
-
-    async def update_log(self, msg):
-
-        self.reactive_logs.append(msg.data.decode())
-
-        self.logger.info(f"Updated reactive log: {msg.data.decode()}")
 
     def _evaluate_action_from_snapshot_shift(
         self,
@@ -397,48 +381,39 @@ class LLMReasoningImplementation(ReasoningInterface):
     # ======================================================================
     # == MODIFIED RESPONSE PARSER                                         ==
     # ======================================================================
-
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """Parse the LLM JSON output from within <json_output> or ```json_output``` blocks, and extract reasoning."""
+        """Parse the LLM JSON output from within the <json_output> block and extract thinking."""
         try:
-            # --- Extract <thinking> block (optional) ---
             thinking_content = "No <thinking> block found."
-            match_thinking = re.search(r"```thinking(.*?)```", response, re.DOTALL)
-            if not match_thinking:
-                match_thinking = re.search(r"<thinking>(.*?)</thinking>", response, re.DOTALL)
-            if match_thinking:
-                thinking_content = match_thinking.group(1).strip()
-
+            if "<thinking>" in response and "</thinking>" in response:
+                thinking_start = response.find("<thinking>") + len("<thinking>")
+                thinking_end = response.find("</thinking>", thinking_start)
+                if thinking_end != -1:
+                    thinking_content = response[thinking_start:thinking_end].strip()
             self.logger.info(
                 f"LLM Reasoning Process:\n{thinking_content}", extra={"component": "llm_thinking"}
             )
 
-            # --- Extract JSON block ---
-            json_str = None
-
-            # Match ```json_output ... ``` (preferred)
-            match_json = re.search(r"```json_output(.*?)```", response, re.DOTALL)
-            if not match_json:
-                # Fallback to XML-style
-                match_json = re.search(r"<json_output>(.*?)</json_output>", response, re.DOTALL)
-            if match_json:
-                json_str = match_json.group(1).strip()
+            json_str = ""
+            if "<json_output>" in response and "</json_output>" in response:
+                json_start = response.find("<json_output>") + len("<json_output>")
+                json_end = response.find("</json_output>", json_start)
+                if json_end != -1:
+                    json_str = response[json_start:json_end].strip()
             else:
-                # Fallback to first {...} block
-                match_json = re.search(r"\{.*\}", response, re.DOTALL)
-                if match_json:
-                    json_str = match_json.group(0).strip()
+                self.logger.warning(
+                    "LLM response did not contain <json_output> tags. Falling back to extracting first JSON object."
+                )
+                json_start = response.find("{")
+                json_end = response.rfind("}") + 1
+                if json_start != -1 and json_end != 0:
+                    json_str = response[json_start:json_end]
 
             if not json_str:
                 raise ValueError("No valid JSON object found in response.")
 
-            # Strip any leading ``` or trailing artifacts
-            json_str = re.sub(r"^```[\w]*|```$", "", json_str).strip()
-
-            # --- Parse JSON ---
             action = json.loads(json_str)
 
-            # --- Sanity checks ---
             required_fields = ["action_type", "source"]
             for field in required_fields:
                 if field not in action:
@@ -446,31 +421,6 @@ class LLMReasoningImplementation(ReasoningInterface):
 
             action["action_id"] = str(uuid.uuid4())
             action["_thinking_process"] = thinking_content
-
-            # Capacity sanity logic
-            if action["action_type"] == "ADD_SERVER" and self.context_builder.current_servers >= 3:
-                self.logger.warning("Max capacity reached. Changing action to NO_ACTION.")
-                action = {
-                    "action_type": "NO_ACTION",
-                    "source": "llm_parser",
-                    "params": {},
-                    "action_id": str(uuid.uuid4()),
-                    "priority": "low",
-                }
-
-            if (
-                action["action_type"] == "REMOVE_SERVER"
-                and self.context_builder.current_servers <= 1
-            ):
-                self.logger.warning("Min capacity reached. Changing action to NO_ACTION.")
-                action = {
-                    "action_type": "NO_ACTION",
-                    "source": "llm_parser",
-                    "params": {},
-                    "action_id": str(uuid.uuid4()),
-                    "priority": "low",
-                }
-
             return action
 
         except Exception as e:
@@ -524,49 +474,58 @@ class LLMReasoningImplementation(ReasoningInterface):
         return []
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Calls the Google Gemini API."""
+        """Calls the local LLM API endpoint."""
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        endpoint_url = f"{self.base_url}/api/generate"
+
+        # Payload structure for Ollama-like APIs
+        payload = {
+            "model": self.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "max_tokens": self.max_tokens,
+        }
+
+        headers = {"Content-Type": "application/json"}
+
         for attempt in range(self.max_retries):
             try:
-                # Create chat history with system prompt and user prompt
-                chat_history = [
-                    types.Content(role="user", parts=[types.Part(text=system_prompt)]),
-                    types.Content(
-                        role="model",
-                        parts=[
-                            types.Part(
-                                text="I will analyze the system context and provide adaptation decisions in the specified format."
-                            )
-                        ],
-                    ),
-                    types.Content(role="user", parts=[types.Part(text=user_prompt)]),
-                ]
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    self.logger.info(f"Sending request to local LLM at {endpoint_url}")
+                    response = await client.post(endpoint_url, json=payload, headers=headers)
+                    response.raise_for_status()  # Raise an exception for 4xx/5xx errors
 
-                # Generate content with the chat history
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=chat_history,
-                    config=types.GenerateContentConfig(
-                        temperature=self.temperature,
-                        max_output_tokens=self.max_tokens,
-                    ),
+                    self.logger.info(f"Raw response: {response.text[:500]}")
+
+                    response_data = response.json()
+                    response_text = response_data.get("response", "").strip()
+
+                    if not response_text:
+                        raise ValueError("LLM response JSON was empty or malformed.")
+
+                    self.logger.info(f"LLM response received on attempt {attempt + 1}")
+                    return response_text
+
+            except (
+                httpx.RequestError,
+                httpx.HTTPStatusError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as e:
+                self.logger.warning(
+                    f"Local LLM API call failed with error: {e}. Attempt {attempt + 1}/{self.max_retries}."
                 )
-
-                # Extract text from response
-                if response and response.text:
-                    self.logger.info(f"Gemini response received on attempt {attempt + 1}")
-                    return response.text.strip()
-                else:
-                    raise ValueError("Gemini response was empty")
-
-            except Exception as e:
-                self.logger.warning(f"Gemini call attempt {attempt + 1} failed: {e}")
                 if attempt + 1 == self.max_retries:
-                    self.logger.error("Max retries reached. Failing the Gemini operation.")
+                    self.logger.error("Max retries reached. Failing the LLM operation.")
                     raise
-                await asyncio.sleep(2**attempt)  # Exponential backoff
 
-        raise Exception("Gemini call failed after all retries.")
+                backoff_time = self.initial_backoff * (2**attempt)
+                jitter = random.uniform(0, backoff_time * 0.1)
+                delay = backoff_time + jitter
+                self.logger.info(f"Retrying in {delay:.2f} seconds...")
+                await asyncio.sleep(delay)
+
+        raise Exception("LLM call failed after all retries.")
 
     def _store_call_history(
         self,
@@ -653,9 +612,6 @@ def create_llm_reasoner_agent(
     from .llm_reasoner import LLMReasoningImplementation
     from .multi_agent_reasoner import MultiAgentReasoner
 
-    # Use hardcoded Gemini API key
-    gemini_api_key = "AIzaSyCqqeyWnNYp3JtpqZxb3HNscTh00dFqqcA"
-
     # Load the new LLM prompt configuration from the YAML file
     try:
         with open(llm_config_path, "r") as f:
@@ -677,7 +633,7 @@ def create_llm_reasoner_agent(
     for reasoning_type in ReasoningType:
         if mode == "multi":
             llm_reasoner = MultiAgentReasoner(
-                api_key=gemini_api_key,
+                api_key=llm_api_key,
                 reasoning_type=reasoning_type,
                 kb_query_interface=agent.kb_query,
                 logger=logger,
@@ -685,13 +641,12 @@ def create_llm_reasoner_agent(
             # Note: You might need a similar config system for the MultiAgentReasoner
         else:
             llm_reasoner = LLMReasoningImplementation(
-                api_key=gemini_api_key,
+                api_key=llm_api_key,
                 reasoning_type=reasoning_type,
                 prompt_config=prompt_config,  # <-- Pass the loaded config here
                 prompt_config_path=llm_config_path,  # <-- Pass path for reloading
                 kb_query_interface=agent.kb_query,
                 logger=logger,
-                nats_url="nats://localhost:4222",
             )
 
         llm_reasoner.configure_basic()
@@ -766,11 +721,7 @@ class ContextBuilder:
         return f"{rate_per_minute:+.2f}/min"
 
     def build_context_from_kb_results(
-        self,
-        snapshots: List[Dict[str, Any]],
-        action_history: List[Dict[str, Any]],
-        reactive_log,
-        decisions,
+        self, snapshots: List[Dict[str, Any]], action_history: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """The main method to transform raw KB results into the final context payload."""
         if not snapshots:
@@ -798,11 +749,6 @@ class ContextBuilder:
                 "5min_avg_ewma": round(ewma, 4) if ewma is not None else None,
                 "5min_rate_of_change": roc,
             }
-        self.logger.info(f"Current state extracted: {current_state}")
-
-        self.current_servers = current_state.get("servers", -1)
-
-        self.logger.info(f"Current server count updated to: {self.current_servers}")
 
         historical_actions_context = self.build_historical_actions_context(
             action_history, sorted_snapshots
@@ -818,8 +764,6 @@ class ContextBuilder:
             "historical_trends": historical_trends,
             "historical_actions": historical_actions_context,
             "system_goals_and_constraints": system_goals_and_constraints,
-            "reactive_logs": list(reactive_log),
-            "recent_decisions_including_reactive_controller": decisions[-5:] if decisions else [],
         }
 
     def build_historical_actions_context(
