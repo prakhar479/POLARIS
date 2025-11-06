@@ -17,7 +17,6 @@ import logging
 from datetime import datetime, timezone, timedelta
 import tempfile
 import yaml
-import sys
 from pathlib import Path
 
 from google import genai
@@ -31,13 +30,6 @@ from .reasoner_core import (
 )
 
 from collections import deque
-
-from collections import deque
-
-# Add config/prompts to path for dynamic prompt loading
-config_prompts_path = Path(__file__).parent.parent.parent / "config" / "prompts"
-if str(config_prompts_path) not in sys.path:
-    sys.path.insert(0, str(config_prompts_path))
 
 from .reasoner_agent import (
     KnowledgeQueryInterface,
@@ -290,11 +282,6 @@ class DigitalTwinTool(AgenticTool):
                     return {"success": False, "error": f"Digital twin connection failed: {str(e)}"}
 
             self.logger.debug(f"Executing digital twin operation: {operation}")
-            self.logger.debug(f"Operation parameters: {kwargs}")
-
-            # Log parameter types for debugging
-            for key, value in kwargs.items():
-                self.logger.debug(f"Parameter {key}: {value} (type: {type(value).__name__})")
 
             if operation == "query":
                 query = DTQuery(
@@ -308,12 +295,7 @@ class DigitalTwinTool(AgenticTool):
                 raw_actions = kwargs.get("actions", [])
                 formatted_actions = []
 
-                self.logger.debug(f"Raw actions received: {raw_actions}")
-                self.logger.debug(f"Raw actions types: {[type(a) for a in raw_actions]}")
-
-                for i, action in enumerate(raw_actions):
-                    self.logger.debug(f"Processing action {i}: {action} (type: {type(action)})")
-
+                for action in raw_actions:
                     if isinstance(action, str):
                         # Convert string action to proper action dictionary
                         action_dict = {
@@ -323,17 +305,11 @@ class DigitalTwinTool(AgenticTool):
                             "params": {},
                         }
                         formatted_actions.append(action_dict)
-                        self.logger.debug(f"Converted string action to: {action_dict}")
                     elif isinstance(action, dict):
                         # Already a dictionary, use as-is
                         formatted_actions.append(action)
-                        self.logger.debug(f"Using dict action as-is: {action}")
                     else:
-                        self.logger.warning(
-                            f"Unknown action format: {action} (type: {type(action)})"
-                        )
-
-                self.logger.debug(f"Formatted actions: {formatted_actions}")
+                        self.logger.warning(f"Unknown action format: {action}")
 
                 simulation = DTSimulation(
                     simulation_type=kwargs.get("simulation_type", "forecast"),
@@ -383,13 +359,6 @@ class DigitalTwinTool(AgenticTool):
                     result["future_states"] = response.future_states
                 if hasattr(response, "hypotheses") and response.hypotheses:
                     result["hypotheses"] = response.hypotheses
-
-                self.logger.debug(
-                    f"Digital twin response received: success={response.success}, confidence={response.confidence}"
-                )
-                if not response.success:
-                    self.logger.error(f"Digital twin operation failed: {response.explanation}")
-                    self.logger.error(f"Digital twin metadata: {response.metadata}")
 
                 return result
             else:
@@ -732,24 +701,21 @@ class ContextBuilder:
 
 class AgenticLLMReasoner(ReasoningInterface):
     """
-    Agentic LLM-based reasoner using Google Gemini Flash 2.5.
-
-    This reasoner can autonomously decide when to use tools (Knowledge Base, Digital Twin)
-    and make adaptation decisions based on its analysis.
-
-    System-agnostic implementation: Loads prompts dynamically based on managed system type.
+    Agentic LLM reasoner that can dynamically decide which tools to use
+    and make autonomous adaptation decisions using Google Gemini Flash 2.5.
     """
 
     def __init__(
         self,
         api_key: str,
-        config: Dict[str, Any],
+        reasoning_type: ReasoningType,
         kb_query_interface: Optional[KnowledgeQueryInterface] = None,
         dt_interface: Optional[DigitalTwinInterface] = None,
         model: str = "gemini-2.0-flash",
         max_tokens: int = 8192,
         temperature: float = 0.3,
         max_tool_calls: int = 5,
+        prompt_config_path: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
         self.api_key = api_key
@@ -759,6 +725,7 @@ class AgenticLLMReasoner(ReasoningInterface):
         self.temperature = temperature
         self.max_tool_calls = max_tool_calls
         self.max_retries = 3
+        self.prompt_config_path = prompt_config_path  # Store for reloading
         self.logger = logger or logging.getLogger(f"AgenticReasoner.{reasoning_type.value}")
         self.local_action_history: deque = deque(maxlen=3)  # Store last 3 local actions
 
@@ -782,20 +749,24 @@ class AgenticLLMReasoner(ReasoningInterface):
         # Initialize tools
         self.tools = {}
         if kb_query_interface:
-            self.tools["query_knowledge_base"] = KnowledgeBaseTool(kb_query_interface, self.logger)
+            self.tools["query_knowledge_base"] = KnowledgeBaseTool(
+                kb_query_interface, self.logger, self.perf_logger
+            )
             self.logger.info("Knowledge Base tool initialized")
         if dt_interface:
-            self.tools["query_digital_twin"] = DigitalTwinTool(dt_interface, self.logger)
+            self.tools["query_digital_twin"] = DigitalTwinTool(
+                dt_interface, self.logger, self.perf_logger
+            )
             self.logger.info("Digital Twin tool initialized")
 
-        if self.tools:
+        if not self.tools:
+            self.logger.warning(
+                "No tools available - agentic reasoner will have limited capabilities"
+            )
+        else:
             self.logger.info(
                 f"Agentic reasoner initialized with {len(self.tools)} tools: {list(self.tools.keys())}"
             )
-
-        # Load system-specific prompts dynamically
-        self.system_name = system_name or config.get("system_name", "generic")
-        self._load_system_prompts()
 
         # System prompt for the agentic reasoner
         self.prompt_config = self._load_prompt_config()
@@ -916,17 +887,62 @@ class AgenticLLMReasoner(ReasoningInterface):
             return False
 
     def _build_system_prompt(self) -> str:
-        """Build the system prompt for the agentic reasoner."""
-        tools_description = ""
-        if self.tools:
-            tools_description = "\n\nAvailable Tools:\n"
-            for tool_name, tool in self.tools.items():
-                tools_description += f"- {tool_name}: {tool.description}\n"
-                tools_description += f"  Parameters: {json.dumps(tool.parameters, indent=2)}\n"
-        else:
-            tools_description = "\n\nNote: No external tools are currently available. You must make decisions based solely on the provided input data.\n"
+        """Build the system prompt for the agentic reasoner using YAML configuration."""
+        try:
+            # Get configuration sections
+            fixed_constraints = self.prompt_config.get("fixed_constraints", {})
+            thresholds = self.prompt_config.get("thresholds", {})
+            template_parts = self.prompt_config.get("template_parts", {})
+            template = self.prompt_config.get("template", "")
 
-        return f"""You are an autonomous adaptive system controller{"" if self.tools else " operating in standalone mode"} for making adaptation decisions.
+            # Build tools description
+            tools_description = ""
+            standalone_mode = ""
+            if self.tools:
+                tools_description = "\n\nAvailable Tools:\n"
+                for tool_name, tool in self.tools.items():
+                    tools_description += f"- {tool_name}: {tool.description}\n"
+                    tools_description += f"  Parameters: {json.dumps(tool.parameters, indent=2)}\n"
+            else:
+                tools_description = "\n\nNote: No external tools are currently available. You must make decisions based solely on the provided input data.\n"
+                standalone_mode = " operating in standalone mode"
+
+            # Prepare all template variables by combining constraints and thresholds
+            template_vars = {}
+            template_vars.update(fixed_constraints)
+            template_vars.update(thresholds)
+            template_vars["tools_description"] = tools_description
+            template_vars["standalone_mode"] = standalone_mode
+
+            # Format each template part with variables
+            formatted_parts = {}
+            for part_name, part_content in template_parts.items():
+                try:
+                    formatted_parts[part_name] = part_content.format(**template_vars)
+                except KeyError as e:
+                    self.logger.warning(
+                        f"Missing variable {e} in template part '{part_name}', using unformatted content"
+                    )
+                    formatted_parts[part_name] = part_content
+
+            # Format the main template with all parts and variables
+            all_template_vars = {}
+            all_template_vars.update(template_vars)
+            all_template_vars.update(formatted_parts)
+
+            try:
+                return template.format(**all_template_vars)
+            except KeyError as e:
+                self.logger.error(f"Missing variable {e} in main template, using fallback")
+                return self._build_fallback_prompt(tools_description, standalone_mode)
+
+        except Exception as e:
+            self.logger.error(f"Failed to build system prompt from YAML: {e}")
+            return self._build_fallback_prompt("", " operating in standalone mode")
+
+    def _build_fallback_prompt(self, tools_description: str, standalone_mode: str) -> str:
+        """Build a fallback system prompt if YAML loading fails."""
+        return f"""You are an autonomous adaptive system controller{standalone_mode} for making adaptation decisions.
 
 Your role is to:
 1. Analyze the current system situation
@@ -935,44 +951,6 @@ Your role is to:
 4. Generate appropriate control actions
 
 {tools_description}
-
-KNOWLEDGE BASE QUERY GUIDELINES:
-When using query_knowledge_base tool, follow these patterns:
-
-1. **For recent observations/aggregated telemetry**:
-   - query_type: "structured"
-   - data_types: ["observation"]
-   - Optional filters for specific metrics
-
-2. **For raw telemetry events**:
-   - query_type: "structured" 
-   - data_types: ["raw_telemetry_event"]
-   - Use filters to specify metric_name if needed
-
-3. **For adaptation decisions history**:
-   - query_type: "structured"
-   - data_types: ["adaptation_decision"]
-
-4. **For natural language search**:
-   - query_type: "natural_language"
-   - query_text: "your search terms"
-
-Valid data_types: ["raw_telemetry_event", "adaptation_decision", "system_goal", "learned_pattern", "observation", "system_info", "generic_fact"]
-
-IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
-- If you need additional information to make a good decision, you MUST use the available tools
-- Always try to gather more context before making decisions when tools are available
-- Use tools to check historical patterns, system state, or run simulations
-- Tool usage is STRONGLY ENCOURAGED when tools are available
-
-Decision Making Process:
-1. First, analyze the input data to understand the current situation
-2. Determine what additional information you need (historical data, simulations, diagnostics)
-3. Use tools to gather that information (this step is CRITICAL)
-4. Wait for tool results and analyze them
-5. Synthesize all information to make an adaptation decision
-6. Generate the appropriate control action
-7. You cannot make server decisions too frequently
 
 Control Actions Available:
 - ADD_SERVER: Add a server to handle increased load
@@ -1422,6 +1400,16 @@ Please analyze the system context and make adaptation decisions in JSON format:
                     return response.text.strip(), input_tokens, output_tokens
 
                 else:
+                    self.perf_logger.log_metric(
+                        "gemini_api_call",
+                        call_duration_ms,
+                        {
+                            "attempt": attempt + 1,
+                            "success": False,
+                            "error": "empty_response",
+                            "model": self.model,
+                        },
+                    )
                     raise ValueError("Empty response from Gemini")
 
             except Exception as e:
@@ -1740,13 +1728,11 @@ def create_agentic_reasoner_agent(
     for reasoning_type in AgentReasoningType:
         agentic_reasoner = AgenticLLMReasoner(
             api_key=llm_api_key,
-            # reasoning_type=reasoning_type,
-            config=config,
+            reasoning_type=reasoning_type,
             kb_query_interface=agent.kb_query,
             dt_interface=agent.dt_query,
             prompt_config_path=agentic_prompt_config_path,
             logger=logger,
-            system_name="switch_yolo",
         )
 
         agent.add_reasoning_implementation(reasoning_type, agentic_reasoner)
@@ -1852,7 +1838,6 @@ def create_agentic_reasoner_with_bayesian_world_model(
             agentic_reasoner = AgenticLLMReasoner(
                 api_key=llm_api_key,
                 reasoning_type=reasoning_type,
-                config=config,
                 kb_query_interface=agent.kb_query,
                 dt_interface=agent.dt_query,
                 prompt_config_path=agentic_prompt_config_path,
