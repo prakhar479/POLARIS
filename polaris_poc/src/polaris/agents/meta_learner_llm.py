@@ -69,7 +69,7 @@ class MetaLearnerLLM(BaseMetaLearnerAgent):
         # Initialize parent BaseMetaLearnerAgent
         super().__init__(agent_id, config_path, nats_url, logger)
 
-        self.api_key = "AIzaSyD8jIEZuL2CUJkyhQaD3qefcB0HsqNGUAw"
+        self.api_key = "YOUR API KEY"
         self.prompt_config_path = Path(prompt_config_path)
         self.update_interval = update_interval_seconds
         self.model = model

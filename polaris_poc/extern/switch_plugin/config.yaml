@@ -507,16 +507,3 @@ verification:
       require_multiple_approvals: true
       additional_checks: ["simulation", "rollback_plan"]
 
-# =============================================================================
-# Plugin Metadata
-# =============================================================================
-metadata:
-  author: "POLARIS Integration Team"
-  description: "Plugin for Switch ML-enabled adaptive system with YOLO model switching"
-  documentation: "https://github.com/prakhar479/POLARIS"
-  tags:
-    - "ml-system"
-    - "object-detection"
-    - "yolo"
-    - "adaptive-system"
-    - "model-switching"
