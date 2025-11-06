@@ -127,6 +127,12 @@ class MonitorAdapter(ExternalAdapter):
         command = metric_config["command"]
         unit = metric_config.get("unit", "unknown")
         metric_type = metric_config.get("type", "float")
+        
+        # Extract params from metric config (if any)
+        params = metric_config.get("params", None)
+        
+        # DEBUG: Log metric collection attempt
+        self.logger.debug(f"Collecting metric '{metric_name}': command='{command}', params={params}, type={metric_type}")
 
         try:
             # Check if this is a per-server utilization metric
@@ -140,15 +146,19 @@ class MonitorAdapter(ExternalAdapter):
                     cycle_ctx["active_servers"] = active_servers
 
                 if server_index >= active_servers:
-                    # Server doesn’t exist → set value to 0
+                    # Server doesn't exist → set value to 0
                     value = 0.0
                 else:
-                    response = await self.connector.execute_command(command)
+                    response = await self.connector.execute_command(command, params)
                     value = float(response)
 
             else:
-                # Normal metric
-                response = await self.connector.execute_command(command)
+                # Normal metric - pass params to connector
+                response = await self.connector.execute_command(command, params)
+                
+                # DEBUG: Log raw response
+                self.logger.debug(f"Raw response for '{metric_name}': {response} (type: {type(response).__name__})")
+                
                 if metric_type == "float":
                     value = float(response)
                 elif metric_type == "integer":

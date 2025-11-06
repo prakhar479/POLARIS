@@ -424,11 +424,17 @@ class ImprovedGRPCDigitalTwinClient(DigitalTwinInterface):
     async def query(self, query: DTQuery) -> Optional[DTResponse]:
         """Send a query to the Digital Twin with improved error handling."""
         async def _query_operation():
+            # Convert parameters to strings but preserve type information for debugging
+            converted_params = {}
+            for k, v in (query.parameters or {}).items():
+                converted_params[k] = str(v)
+                self.logger.debug(f"Query parameter conversion: {k}={v} ({type(v).__name__}) -> {str(v)} (str)")
+            
             request_pb = digital_twin_pb2.QueryRequest(
                 query_id=query.query_id,
                 query_type=query.query_type,
                 query_content=query.query_content,
-                parameters={k: str(v) for k, v in (query.parameters or {}).items()},
+                parameters=converted_params,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
             
@@ -460,21 +466,35 @@ class ImprovedGRPCDigitalTwinClient(DigitalTwinInterface):
         """Run a simulation in the Digital Twin with improved error handling."""
         async def _simulate_operation():
             pb_actions = []
-            for action in simulation.actions:
+            for i, action in enumerate(simulation.actions):
+                self.logger.debug(f"Processing action {i}: {action}")
+                
+                # Convert action params to strings but log the conversion
+                converted_params = {}
+                for k, v in action.get("params", {}).items():
+                    converted_params[k] = str(v)
+                    self.logger.debug(f"Action {i} param conversion: {k}={v} ({type(v).__name__}) -> {str(v)} (str)")
+                
                 pb_action = digital_twin_pb2.ControlAction(
                     action_id=action.get("action_id", str(uuid.uuid4())),
                     action_type=action.get("action_type", ""),
                     target=action.get("target", ""),
-                    params={k: str(v) for k, v in action.get("params", {}).items()},
+                    params=converted_params,
                 )
                 pb_actions.append(pb_action)
+            
+            # Convert parameters to strings but preserve type information for debugging
+            converted_params = {}
+            for k, v in (simulation.parameters or {}).items():
+                converted_params[k] = str(v)
+                self.logger.debug(f"Simulation parameter conversion: {k}={v} ({type(v).__name__}) -> {str(v)} (str)")
             
             request_pb = digital_twin_pb2.SimulationRequest(
                 simulation_id=simulation.simulation_id,
                 simulation_type=simulation.simulation_type,
                 actions=pb_actions,
                 horizon_minutes=simulation.horizon_minutes,
-                parameters={k: str(v) for k, v in (simulation.parameters or {}).items()},
+                parameters=converted_params,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
             
@@ -508,10 +528,16 @@ class ImprovedGRPCDigitalTwinClient(DigitalTwinInterface):
     async def diagnose(self, diagnosis: DTDiagnosis) -> Optional[DTResponse]:
         """Request a diagnosis from the Digital Twin with improved error handling."""
         async def _diagnose_operation():
+            # Convert context to strings but preserve type information for debugging
+            converted_context = {}
+            for k, v in (diagnosis.context or {}).items():
+                converted_context[k] = str(v)
+                self.logger.debug(f"Diagnosis context conversion: {k}={v} ({type(v).__name__}) -> {str(v)} (str)")
+            
             request_pb = digital_twin_pb2.DiagnosisRequest(
                 diagnosis_id=diagnosis.diagnosis_id,
                 anomaly_description=diagnosis.anomaly_description,
-                context={k: str(v) for k, v in (diagnosis.context or {}).items()},
+                context=converted_context,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
             

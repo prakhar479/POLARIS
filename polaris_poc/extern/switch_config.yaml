@@ -102,7 +102,7 @@ knowledge_base:
   # Learning parameters
   learning:
     enabled: true
-    adaptation_window: 300    # seconds
+    adaptation_window: 30    # seconds
     confidence_threshold: 0.8
     update_frequency: 60      # seconds
 

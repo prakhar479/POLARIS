@@ -1,0 +1,338 @@
+# SWITCH Agentic Reasoner Configuration
+# =====================================
+# Configuration for the autonomous agentic reasoner optimized for SWITCH
+# ML-enabled adaptive system with YOLO model switching for utility maximization.
+
+# =============================================================================
+# NATS Message Bus Configuration (inherited from main config)
+# =============================================================================
+nats:
+  url: "nats://localhost:4222"
+
+# =============================================================================
+# Telemetry Configuration (inherited from main config)
+# =============================================================================
+telemetry:
+  stream_subject: "polaris.telemetry.events.stream"
+  batch_subject: "polaris.telemetry.events.batch"
+  knowledge_base:
+    enabled: true
+    buffer_size: 100
+
+# =============================================================================
+# Reasoner Configuration
+# =============================================================================
+reasoner:
+  kernel_request_subject: "polaris.reasoner.kernel.requests"
+  
+  # Action routing with verification
+  action_routing:
+    enable_verification: true
+    default_verification_level: "policy"
+    verification_timeout_sec: 20
+    verification_failure_action: "retry"
+
+# =============================================================================
+# Execution Configuration (inherited from main config)
+# =============================================================================
+execution:
+  action_subject: "polaris.execution.actions"
+  result_subject: "polaris.execution.results"
+  metrics_subject: "polaris.execution.metrics"
+  decisions_subject: "polaris.execution.decisions"
+
+# =============================================================================
+# Verification Configuration (inherited from main config)
+# =============================================================================
+verification:
+  input_subject: "polaris.verification.requests"
+  output_subject: "polaris.verification.results"
+  policy_subject: "polaris.verification.policies"
+  metrics_subject: "polaris.verification.metrics"
+
+# =============================================================================
+# Digital Twin Configuration (inherited from main config)
+# =============================================================================
+digital_twin:
+  nats:
+    update_subject: "polaris.digitaltwin.update"
+    calibrate_subject: "polaris.digitaltwin.calibrate"
+    error_subject: "polaris.digitaltwin.errors"
+    queue_group: "digital_twin_workers"
+    max_reconnect_attempts: 10
+    reconnect_wait_sec: 2
+    queue_maxsize: 1000
+    batch_size: 10
+    batch_timeout_sec: 1.0
+
+  grpc:
+    host: "0.0.0.0"
+    port: 50051
+    max_workers: 10
+    max_message_size: 4194304
+    keepalive_time_ms: 30000
+    keepalive_timeout_ms: 5000
+
+  world_model:
+    implementation: "bayesian"
+    config_path: "bayesian_world_model_config.yaml"
+    reload_on_failure: true
+    health_check_interval_sec: 60
+
+  performance:
+    max_concurrent_queries: 10
+    query_timeout_sec: 30
+    simulation_timeout_sec: 60
+
+  debugging:
+    log_level: "INFO"
+    enable_detailed_logging: true
+    log_to_console: true
+    log_file: "logs/digital_twin_switch.log"
+
+# =============================================================================
+# SWITCH Agentic Reasoner Specific Configuration
+# =============================================================================
+agentic_reasoner:
+  # LLM Configuration
+  llm:
+    # Use Gemini Flash 2.5 for fast, high-quality reasoning
+    model: "gemini-2.0-flash-exp"
+    temperature: 0.2  # Lower for deterministic utility optimization
+    max_tokens: 4096
+    timeout: 600.0
+    max_retries: 3
+
+  # Tool Usage Configuration
+  tools:
+    # Maximum number of tool calls per reasoning session
+    max_tool_calls: 5
+    
+    # Enable/disable specific tools
+    knowledge_base_enabled: true
+    digital_twin_enabled: true
+    
+    # Tool-specific timeouts (seconds)
+    kb_query_timeout: 30.0
+    dt_query_timeout: 45.0
+
+  # Decision Making Configuration - SWITCH OPTIMIZED
+  decision_making:
+    # Confidence thresholds for different action types
+    confidence_thresholds:
+      high_impact_actions: 0.75     # SWITCH_MODEL_YOLOV5X, SWITCH_MODEL_YOLOV5L (large changes)
+      medium_impact_actions: 0.60   # SWITCH_MODEL_YOLOV5M, SWITCH_MODEL_YOLOV5S (moderate changes)
+      low_impact_actions: 0.45      # SWITCH_MODEL_YOLOV5N, NO_ACTION (minimal changes)
+      knowledge_updates: 0.50       # UPDATE_KNOWLEDGE (learning actions)
+    
+    # SWITCH System Constraints
+    constraints:
+      # Utility function parameters (from utility specification)
+      utility_Rmin: 0.1              # Best response time (seconds)
+      utility_Rmax: 1.0              # Worst acceptable response time
+      utility_Cmin: 0.5              # Worst acceptable confidence
+      utility_Cmax: 1.0              # Best confidence
+      utility_wd: 0.5                # Response time weight
+      utility_we: 0.5                # Confidence weight
+      
+      # Target utility levels
+      target_utility: 0.8            # Target utility score
+      low_utility_threshold: 0.4     # Below this triggers adaptation
+      critical_utility: 0.2          # Critical level requiring immediate action
+      
+      # Response time constraints (seconds)
+      max_response_time: 1.0         # Rmax - absolute maximum
+      target_response_time: 0.5      # Target response time
+      critical_response_time: 0.9    # Near Rmax - critical threshold
+      good_response_time: 0.2        # Good performance level
+      
+      # Confidence constraints
+      min_confidence: 0.5            # Cmin - absolute minimum
+      target_confidence: 0.8         # Target confidence level
+      low_confidence_threshold: 0.55 # Below this consider upgrade
+      high_confidence_threshold: 0.85 # Above this is excellent
+      
+      # Resource constraints
+      max_cpu_utilization: 0.95      # Maximum CPU before forced action
+      high_cpu_threshold: 0.85       # High CPU - consider lighter model
+      low_cpu_threshold: 0.50        # Low CPU - can upgrade model
+      target_cpu_utilization: 0.70   # Target CPU level
+      
+      # Model switching constraints
+      min_model_switch_interval_sec: 2.0  # Minimum time between switches
+      max_model_switches_per_hour: 30     # Prevent thrashing
+      
+      # Valid YOLO models
+      valid_models: ["yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x"]
+    
+    # Action priorities based on SWITCH system state
+    priority_rules:
+      critical_utility: "high"         # Utility < 0.2
+      critical_response_time: "high"   # RT > 0.9s
+      high_cpu: "high"                 # CPU > 85%
+      low_utility: "medium"            # Utility < 0.4
+      low_confidence: "medium"         # Confidence < 0.55
+      normal_operation: "low"          # System within bounds
+      opportunistic_upgrade: "low"     # Spare resources available
+
+  # Reasoning Configuration
+  reasoning:
+    # Enable different reasoning modes
+    enable_proactive_reasoning: true    # Reason about future states
+    enable_reactive_reasoning: true     # React to current issues
+    enable_diagnostic_reasoning: true   # Diagnose problems
+    
+    # Reasoning depth
+    max_reasoning_iterations: 3
+    enable_multi_step_planning: true
+    
+    # Memory and learning
+    enable_action_memory: true
+    max_action_history: 100
+    enable_pattern_recognition: true
+    
+    # SWITCH-specific reasoning features
+    enable_utility_optimization: true   # Focus on utility maximization
+    enable_model_profiling: true        # Learn model characteristics
+    enable_workload_prediction: true    # Predict workload patterns
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logger:
+  name: "switch_agentic_reasoner"
+  level: "INFO"
+  format: "pretty"
+
+# =============================================================================
+# Performance Monitoring
+# =============================================================================
+monitoring:
+  # Metrics to track for the agentic reasoner
+  metrics:
+    - reasoning_time
+    - tool_calls_per_session
+    - decision_confidence
+    - action_success_rate
+    - tool_success_rate
+    - utility_improvement
+    - model_switch_frequency
+  
+  # Performance thresholds
+  performance_thresholds:
+    max_reasoning_time_sec: 60
+    max_tool_calls_per_session: 5
+    min_decision_confidence: 0.5
+    min_action_success_rate: 0.75      # SWITCH has more variability
+    min_utility_improvement: 0.05      # Minimum expected improvement
+
+# =============================================================================
+# Safety and Constraints
+# =============================================================================
+safety:
+  # Enable safety checks
+  enable_constraint_validation: true
+  enable_action_simulation: true       # Simulate model switches
+  enable_rollback_capability: false    # Model switches are reversible
+  
+  # Emergency stops
+  emergency_stops:
+    max_consecutive_failures: 3
+    max_utility_violations: 5          # Utility stays below threshold
+    max_response_time_violations: 5
+    enable_circuit_breaker: true
+    circuit_breaker_timeout_sec: 300
+
+# =============================================================================
+# Development and Testing
+# =============================================================================
+development:
+  # Enable development features
+  enable_debug_mode: false
+  log_tool_calls: true
+  log_llm_conversations: true
+  save_reasoning_traces: true
+  
+  # Testing configuration
+  enable_dry_run: false
+  mock_tool_responses: false
+  simulate_failures: false
+
+# =============================================================================
+# SWITCH Model Profiles (for reasoner reference)
+# =============================================================================
+switch_model_profiles:
+  yolov5n:
+    response_time: 0.05
+    confidence: 0.65
+    cpu_factor: 1.0
+    description: "Fastest model, lowest accuracy"
+    use_cases: ["high_load", "cpu_constrained", "speed_priority"]
+    
+  yolov5s:
+    response_time: 0.10
+    confidence: 0.75
+    cpu_factor: 1.5
+    description: "Balanced model, good default"
+    use_cases: ["balanced", "normal_operation", "moderate_load"]
+    
+  yolov5m:
+    response_time: 0.20
+    confidence: 0.82
+    cpu_factor: 2.5
+    description: "Medium accuracy, moderate speed"
+    use_cases: ["quality_focus", "moderate_load", "balanced_upgrade"]
+    
+  yolov5l:
+    response_time: 0.40
+    confidence: 0.88
+    cpu_factor: 4.0
+    description: "High accuracy, slower"
+    use_cases: ["accuracy_priority", "low_load", "spare_resources"]
+    
+  yolov5x:
+    response_time: 0.80
+    confidence: 0.92
+    cpu_factor: 6.0
+    description: "Highest accuracy, slowest"
+    use_cases: ["maximum_quality", "minimal_load", "quality_critical"]
+
+# =============================================================================
+# SWITCH Adaptation Strategies (for reasoner guidance)
+# =============================================================================
+switch_adaptation_strategies:
+  # When to downgrade (lighter model)
+  downgrade_triggers:
+    - condition: "response_time > 0.9"
+      severity: "critical"
+      action: "aggressive_downgrade"  # Skip 2 levels if possible
+      
+    - condition: "cpu_usage > 0.85"
+      severity: "high"
+      action: "single_downgrade"
+      
+    - condition: "utility < 0.3"
+      severity: "high"
+      action: "optimize_for_speed"
+  
+  # When to upgrade (heavier model)
+  upgrade_triggers:
+    - condition: "confidence < 0.55 AND response_time < 0.2"
+      severity: "medium"
+      action: "single_upgrade"
+      
+    - condition: "cpu_usage < 0.5 AND response_time < 0.2"
+      severity: "low"
+      action: "opportunistic_upgrade"
+      
+    - condition: "utility > 0.8 AND stable_for > 60"
+      severity: "low"
+      action: "quality_improvement"
+  
+  # When to maintain current model
+  maintain_triggers:
+    - condition: "utility > 0.7 AND response_time < 0.6"
+      action: "no_action"
+      
+    - condition: "recent_switch < 10 seconds"
+      action: "wait_for_stabilization"

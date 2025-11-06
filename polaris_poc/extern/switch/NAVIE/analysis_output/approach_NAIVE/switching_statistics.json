@@ -1,0 +1,7 @@
+{
+  "total_switches": 36,
+  "switch_frequency": 0.0036,
+  "models_used": 4,
+  "most_used_model": "yolov5n",
+  "least_used_model": "yolov5l"
+}
