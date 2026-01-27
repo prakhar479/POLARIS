@@ -18,3 +18,7 @@ build/
 data/
 *.zip
 *.pt
+
+polaris.egg-info/
+logs/
+*.pyc

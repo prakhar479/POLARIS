@@ -1,0 +1,90 @@
+# Polaris Framework Configuration
+# Simple example configuration
+
+# Managed Systems
+systems:
+  - id: "swim"
+    connector_type: "swim"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 4242
+    monitoring:
+      collection_interval: 5  # seconds
+
+# Adaptation Strategy
+strategy:
+  type: "threshold"  # Options: threshold, llm_reasoning, hybrid
+  
+  # Threshold Strategy Settings
+  threshold:
+    thresholds:
+      cpu_usage:
+        high: 80.0
+        low: 20.0
+      memory_usage:
+        high: 85.0
+        low: 25.0
+      response_time:
+        high: 500.0  # milliseconds
+    
+    cooldown_seconds: 60
+    enabled: true
+
+# World Model (optional)
+world_model:
+  type: "statistical"
+  statistical:
+    window_size: 100
+
+# Knowledge Store (optional)
+knowledge:
+  type: "memory"
+  memory:
+    max_states_per_system: 1000
+
+# Meta-Learner (optional, disabled by default)
+meta_learner:
+  enabled: false
+  type: "statistical"
+  analysis_interval_hours: 24
+  conservative_mode: true
+
+# Observability
+observability:
+  logging:
+    type: "human"  # Options: "structured" (JSON), "human" (readable)
+    level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
+    console: true
+    file: true
+    file_path: "./logs/polaris.log"
+    use_colors: true  # For human-readable format (console only)
+  
+  metrics:
+    enabled: true
+    collector_type: "simple"  # Options: "simple", "prometheus", "datadog"
+    
+    # Export settings
+    export:
+      enabled: false
+      formats: ["json", "csv"]  # Available: json, csv
+      output_dir: "./metrics"
+      auto_export_interval_minutes: 60  # 0 to disable auto-export
+      experiment_name: null  # Optional experiment identifier
+      include_timestamp: true
+    
+    # Simple collector settings
+    simple:
+      histogram_max_values: 1000  # Max values to keep in histograms
+    
+    # Framework component metrics (can be disabled individually)
+    components:
+      core_framework: true      # Main Polaris lifecycle metrics
+      monitoring_loop: true     # Monitoring loop performance
+      event_bus: true          # Event system metrics
+      registry: true           # Component registry metrics
+      strategy: true           # Strategy-specific metrics
+      connectors: true         # Connector operation metrics
+      world_model: true        # World model metrics
+      knowledge_store: true    # Knowledge store metrics
+      meta_learner: true       # Meta-learner metrics (when enabled)

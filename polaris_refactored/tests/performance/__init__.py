@@ -1,1 +1,0 @@
-# Performance testing suite for POLARIS

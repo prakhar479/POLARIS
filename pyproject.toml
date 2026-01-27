@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "polaris-refactored"
+name = "polaris"
 version = "2.0.0"
 description = "POLARIS - Proactive Optimization & Learning Architecture for Resilient Intelligent Systems (Refactored)"
 readme = "README.md"
@@ -41,7 +41,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["polaris"]
 omit = [
     "*/tests/*",
     "*/test_*",

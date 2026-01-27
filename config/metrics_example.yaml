@@ -1,0 +1,102 @@
+# Polaris Framework Configuration - Metrics Example
+# This configuration demonstrates comprehensive metrics setup
+
+# Managed Systems
+systems:
+  - id: "web-server"
+    connector_type: "swim"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 4242
+    monitoring:
+      collection_interval: 5
+
+  - id: "database"
+    connector_type: "swim"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 4243
+    monitoring:
+      collection_interval: 10
+
+# Adaptation Strategy
+strategy:
+  type: "threshold"
+  threshold:
+    thresholds:
+      cpu_usage:
+        high: 75.0
+        low: 25.0
+      memory_usage:
+        high: 80.0
+        low: 30.0
+      response_time_ms:
+        high: 500.0
+      server_count:
+        low: 2.0
+        high: 10.0
+    
+    cooldown_seconds: 45
+    enabled: true
+
+# World Model
+world_model:
+  type: "statistical"
+  statistical:
+    window_size: 200
+
+# Knowledge Store
+knowledge:
+  type: "memory"
+  memory:
+    max_states_per_system: 2000
+
+# Meta-Learner (enabled for demonstration)
+meta_learner:
+  enabled: true
+  type: "statistical"
+  analysis_interval_hours: 1  # More frequent for demo
+  conservative_mode: false
+
+# Comprehensive Observability Configuration
+observability:
+  # Logging Configuration
+  logging:
+    type: "structured"  # Use structured logging for better integration
+    level: "INFO"
+    console: true
+    file: true
+    file_path: "./logs/polaris_metrics_demo.log"
+    use_colors: false  # Disable colors for structured logs
+  
+  # Comprehensive Metrics Configuration
+  metrics:
+    enabled: true
+    collector_type: "simple"
+    
+    # Export Configuration
+    export:
+      enabled: true
+      formats: ["json", "csv"]
+      output_dir: "./metrics_output"
+      auto_export_interval_minutes: 5  # Export every 5 minutes for demo
+      experiment_name: "comprehensive_demo"
+      include_timestamp: true
+    
+    # Simple Collector Settings
+    simple:
+      histogram_max_values: 500  # Smaller for demo
+    
+    # Component-Specific Metrics (all enabled for comprehensive demo)
+    components:
+      core_framework: true      # Framework lifecycle and adaptations
+      monitoring_loop: true     # Monitoring performance metrics
+      event_bus: true          # Event system performance
+      registry: true           # Component registry operations
+      strategy: true           # Strategy decision metrics
+      connectors: true         # Connector operation metrics
+      world_model: true        # World model update metrics
+      knowledge_store: true    # Knowledge storage metrics
+      meta_learner: true       # Meta-learning metrics
