@@ -16,7 +16,7 @@ from polaris.core.models import (
     ExecutionResult,
     MetricValue,
     HealthStatus,
-    ExecutionStatus
+    ExecutionStatus,
 )
 
 
@@ -63,7 +63,7 @@ class SWIMConnector(Connector):
                 timestamp=datetime.now(timezone.utc),
                 metrics={},
                 health_status=HealthStatus.UNHEALTHY,
-                metadata={"error": "Not connected"}
+                metadata={"error": "Not connected"},
             )
 
         try:
@@ -79,28 +79,25 @@ class SWIMConnector(Connector):
                 name="server_count",
                 value=server_count,
                 unit="count",
-                timestamp=datetime.now(timezone.utc)
+                timestamp=datetime.now(timezone.utc),
             )
 
             metrics["active_servers"] = MetricValue(
                 name="active_servers",
                 value=active_servers,
                 unit="count",
-                timestamp=datetime.now(timezone.utc)
+                timestamp=datetime.now(timezone.utc),
             )
 
             metrics["max_servers"] = MetricValue(
                 name="max_servers",
                 value=max_servers,
                 unit="count",
-                timestamp=datetime.now(timezone.utc)
+                timestamp=datetime.now(timezone.utc),
             )
 
             metrics["dimmer"] = MetricValue(
-                name="dimmer",
-                value=dimmer,
-                unit="ratio",
-                timestamp=datetime.now(timezone.utc)
+                name="dimmer", value=dimmer, unit="ratio", timestamp=datetime.now(timezone.utc)
             )
 
             # Try to get response time metrics (optional)
@@ -110,7 +107,19 @@ class SWIMConnector(Connector):
                     name="basic_response_time",
                     value=basic_rt,
                     unit="ms",
-                    timestamp=datetime.now(timezone.utc)
+                    timestamp=datetime.now(timezone.utc),
+                )
+            except (ConnectionError, TimeoutError, ValueError, TypeError):
+                # Skip optional metric if unavailable
+                pass
+
+            try:
+                basic_throughput = float(await self._send_command("get_basic_throughput"))
+                metrics["basic_throughput"] = MetricValue(
+                    name="basic_throughput",
+                    value=basic_throughput,
+                    unit="req/s",
+                    timestamp=datetime.now(timezone.utc),
                 )
             except (ConnectionError, TimeoutError, ValueError, TypeError):
                 # Skip optional metric if unavailable
@@ -122,11 +131,46 @@ class SWIMConnector(Connector):
                     name="optional_response_time",
                     value=opt_rt,
                     unit="ms",
-                    timestamp=datetime.now(timezone.utc)
+                    timestamp=datetime.now(timezone.utc),
                 )
             except (ConnectionError, TimeoutError, ValueError, TypeError):
                 # Skip optional metric if unavailable
                 pass
+
+            try:
+                opt_throughput = float(await self._send_command("get_opt_throughput"))
+                metrics["optional_throughput"] = MetricValue(
+                    name="optional_throughput",
+                    value=opt_throughput,
+                    unit="req/s",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            except (ConnectionError, TimeoutError, ValueError, TypeError):
+                # Skip optional metric if unavailable
+                pass
+
+            # Weighted average response time across all services
+            if (
+                "basic_response_time" in metrics
+                and "optional_response_time" in metrics
+                and "basic_throughput" in metrics
+                and "optional_throughput" in metrics
+            ):
+                total_throughput = (
+                    metrics["basic_throughput"].value + metrics["optional_throughput"].value
+                )
+                if total_throughput > 0:
+                    avg_rt = (
+                        metrics["basic_response_time"].value * metrics["basic_throughput"].value
+                        + metrics["optional_response_time"].value
+                        * metrics["optional_throughput"].value
+                    ) / total_throughput
+                    metrics["average_response_time"] = MetricValue(
+                        name="average_response_time",
+                        value=avg_rt,
+                        unit="ms",
+                        timestamp=datetime.now(timezone.utc),
+                    )
 
             # Calculate average utilization
             if active_servers > 0:
@@ -146,7 +190,7 @@ class SWIMConnector(Connector):
                         name="average_utilization",
                         value=total_util / success_count,
                         unit="ratio",
-                        timestamp=datetime.now(timezone.utc)
+                        timestamp=datetime.now(timezone.utc),
                     )
 
             # Debug: metrics collected successfully
@@ -156,7 +200,7 @@ class SWIMConnector(Connector):
                 system_id="swim",
                 timestamp=datetime.now(timezone.utc),
                 metrics=metrics,
-                health_status=HealthStatus.HEALTHY
+                health_status=HealthStatus.HEALTHY,
             )
 
         except Exception as e:
@@ -165,7 +209,7 @@ class SWIMConnector(Connector):
                 timestamp=datetime.now(timezone.utc),
                 metrics={},
                 health_status=HealthStatus.UNHEALTHY,
-                metadata={"error": str(e)}
+                metadata={"error": str(e)},
             )
 
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
@@ -175,7 +219,7 @@ class SWIMConnector(Connector):
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
                 result_data={},
-                error_message="Not connected to SWIM"
+                error_message="Not connected to SWIM",
             )
 
         try:
@@ -191,7 +235,7 @@ class SWIMConnector(Connector):
                         action_id=action.action_id,
                         status=ExecutionStatus.FAILED,
                         result_data={},
-                        error_message=f"Already at maximum servers ({max_servers})"
+                        error_message=f"Already at maximum servers ({max_servers})",
                     )
                 command = "add_server"
 
@@ -203,7 +247,7 @@ class SWIMConnector(Connector):
                         action_id=action.action_id,
                         status=ExecutionStatus.FAILED,
                         result_data={},
-                        error_message="Cannot remove last server"
+                        error_message="Cannot remove last server",
                     )
                 command = "remove_server"
 
@@ -214,7 +258,7 @@ class SWIMConnector(Connector):
                         action_id=action.action_id,
                         status=ExecutionStatus.FAILED,
                         result_data={},
-                        error_message=f"Invalid dimmer value: {dimmer_value}"
+                        error_message=f"Invalid dimmer value: {dimmer_value}",
                     )
                 command = f"set_dimmer {dimmer_value}"
 
@@ -223,7 +267,7 @@ class SWIMConnector(Connector):
                     action_id=action.action_id,
                     status=ExecutionStatus.FAILED,
                     result_data={},
-                    error_message=f"Unsupported action type: {action.action_type}"
+                    error_message=f"Unsupported action type: {action.action_type}",
                 )
 
             # Execute command
@@ -235,8 +279,8 @@ class SWIMConnector(Connector):
                 result_data={
                     "swim_response": response,
                     "action_type": action.action_type,
-                    "command": command
-                }
+                    "command": command,
+                },
             )
 
         except Exception as e:
@@ -244,36 +288,36 @@ class SWIMConnector(Connector):
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
                 result_data={},
-                error_message=str(e)
+                error_message=str(e),
             )
 
     async def validate_action(self, action: AdaptationAction) -> bool:
         """Validate if action can be executed on SWIM."""
-        valid_types = ["add_server", "remove_server",
-                       "scale_up", "scale_down", "set_dimmer", "adjust_qos"]
+        valid_types = [
+            "add_server",
+            "remove_server",
+            "scale_up",
+            "scale_down",
+            "set_dimmer",
+            "adjust_qos",
+        ]
         return action.action_type.lower() in valid_types
 
     async def get_supported_actions(self) -> List[AdaptationAction]:
         """Get list of actions supported by SWIM."""
         return [
             AdaptationAction(
-                action_id="",
-                action_type="scale_up",
-                target_system="swim",
-                parameters={}
+                action_id="", action_type="scale_up", target_system="swim", parameters={}
             ),
             AdaptationAction(
-                action_id="",
-                action_type="scale_down",
-                target_system="swim",
-                parameters={}
+                action_id="", action_type="scale_down", target_system="swim", parameters={}
             ),
             AdaptationAction(
                 action_id="",
                 action_type="set_dimmer",
                 target_system="swim",
-                parameters={"value": 1.0}
-            )
+                parameters={"value": 1.0},
+            ),
         ]
 
     async def _send_command(self, command: str) -> str:
@@ -289,8 +333,7 @@ class SWIMConnector(Connector):
         try:
             # Open connection
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port),
-                timeout=self.timeout
+                asyncio.open_connection(self.host, self.port), timeout=self.timeout
             )
 
             # Send command
