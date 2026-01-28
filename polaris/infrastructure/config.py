@@ -18,6 +18,23 @@ class SystemConfig:
     enabled: bool = True
     connection: Dict[str, Any] = field(default_factory=dict)
     monitoring: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Validate system configuration after initialization."""
+        if not self.id or not self.id.strip():
+            raise ValueError("System ID cannot be empty")
+        
+        # Validate connector type
+        supported_connectors = ["swim"]  # Add more as implemented
+        if self.connector_type not in supported_connectors:
+            raise ValueError(f"Unsupported connector type '{self.connector_type}'. Supported: {supported_connectors}")
+        
+        # Validate connection parameters for SWIM
+        if self.connector_type == "swim" and self.connection:
+            if "port" in self.connection and not isinstance(self.connection["port"], int):
+                raise ValueError("SWIM connection port must be an integer")
+            if "port" in self.connection and not (1 <= self.connection["port"] <= 65535):
+                raise ValueError("SWIM connection port must be between 1 and 65535")
 
 
 @dataclass
@@ -27,6 +44,26 @@ class StrategyConfig:
     threshold: Optional[Dict[str, Any]] = None
     llm: Optional[Dict[str, Any]] = None
     hybrid: Optional[Dict[str, Any]] = None
+    
+    def __post_init__(self):
+        """Validate strategy configuration after initialization."""
+        supported_strategies = ["threshold", "llm_reasoning", "hybrid"]
+        if self.type not in supported_strategies:
+            raise ValueError(f"Unsupported strategy type '{self.type}'. Supported: {supported_strategies}")
+        
+        # Validate threshold strategy parameters
+        if self.type == "threshold" and self.threshold:
+            thresholds = self.threshold.get("thresholds", {})
+            for metric, values in thresholds.items():
+                if not isinstance(values, dict):
+                    raise ValueError(f"Threshold values for '{metric}' must be a dictionary")
+                if "high" in values and "low" in values:
+                    if values["high"] <= values["low"]:
+                        raise ValueError(f"High threshold must be greater than low threshold for '{metric}'")
+            
+            cooldown = self.threshold.get("cooldown_seconds", 60)
+            if not isinstance(cooldown, (int, float)) or cooldown < 0:
+                raise ValueError("cooldown_seconds must be a non-negative number")
 
 
 @dataclass
@@ -38,6 +75,7 @@ class PolarisConfig:
     knowledge: Optional[Dict[str, Any]] = None
     meta_learner: Optional[Dict[str, Any]] = None
     observability: Optional[Dict[str, Any]] = None
+    monitoring: Optional[Dict[str, Any]] = None  # Add monitoring configuration
 
     @classmethod
     def from_file(cls, path: str) -> 'PolarisConfig':
@@ -87,7 +125,8 @@ class PolarisConfig:
             world_model=data.get('world_model'),
             knowledge=data.get('knowledge'),
             meta_learner=data.get('meta_learner'),
-            observability=data.get('observability')
+            observability=data.get('observability'),
+            monitoring=data.get('monitoring')
         )
 
     @staticmethod
@@ -95,7 +134,10 @@ class PolarisConfig:
         """Substitute ${VAR} with environment variable values."""
         def replace(match):
             var_name = match.group(1)
-            return os.getenv(var_name, '')
+            value = os.getenv(var_name)
+            if value is None:
+                raise ValueError(f"Environment variable '{var_name}' not found. Please set it or remove ${{{var_name}}} from config.")
+            return value
 
         return re.sub(r'\$\{(\w+)\}', replace, content)
 

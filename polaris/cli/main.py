@@ -106,6 +106,13 @@ def main():
         help="Auto-export metrics every N minutes (0 to disable)"
     )
 
+    parser.add_argument(
+        "--monitoring-interval",
+        type=int,
+        metavar="SECONDS",
+        help="Monitoring loop interval in seconds (overrides config file setting)"
+    )
+
     args = parser.parse_args()
 
     if args.version:
@@ -143,6 +150,8 @@ def main():
             cli_overrides['metrics_experiment_name'] = args.metrics_experiment
         if args.auto_export_metrics is not None:
             cli_overrides['metrics_auto_export_interval'] = args.auto_export_metrics
+        if args.monitoring_interval:
+            cli_overrides['monitoring_interval'] = args.monitoring_interval
 
         polaris = Polaris(config_path=config_path, cli_overrides=cli_overrides)
 

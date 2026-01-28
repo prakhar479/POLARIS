@@ -19,12 +19,7 @@ from polaris.core.registry import ConnectorRegistry
 from polaris.knowledge import InMemoryKnowledgeStore
 from polaris.world_model import StatisticalWorldModel
 from polaris.infrastructure.observability import StructuredLogger, SimpleMetricsCollector
-
-
-@dataclass
-class PolarisConfig:
-    """Polaris configuration."""
-    pass
+from polaris.infrastructure.config import PolarisConfig
 
 
 class Polaris:
@@ -116,7 +111,11 @@ class Polaris:
         # Internal state
         self._running = False
         self._tasks: List[asyncio.Task] = []
-        self._monitoring_interval = 30  # seconds
+        
+        # Get monitoring interval from config or CLI override
+        self._monitoring_interval = self.cli_overrides.get('monitoring_interval', 30)
+        if hasattr(self.config, 'monitoring') and self.config.monitoring:
+            self._monitoring_interval = self.config.monitoring.get('interval_seconds', self._monitoring_interval)
         
         # Setup metrics configuration
         self._setup_metrics_auto_export()
@@ -242,30 +241,62 @@ class Polaris:
             self._metrics_export_config = {'enabled': False}
 
     def _create_strategy_from_config(self, strategy_config):
-        """Create strategy  from configuration."""
+        """Create strategy from configuration."""
         from polaris.strategies import ThresholdReactiveStrategy
 
         strategy_metrics = self.metrics if self._should_collect_component_metrics('strategy') else None
 
-        if strategy_config.type == "threshold" and strategy_config.threshold:
-            thresholds = {}
-            threshold_data = strategy_config.threshold.get('thresholds', {})
-            for metric, values in threshold_data.items():
-                thresholds[metric] = values
+        if strategy_config.type == "threshold":
+            if strategy_config.threshold:
+                thresholds = {}
+                threshold_data = strategy_config.threshold.get('thresholds', {})
+                for metric, values in threshold_data.items():
+                    thresholds[metric] = values
 
-            return ThresholdReactiveStrategy(
-                thresholds=thresholds,
-                cooldown_seconds=strategy_config.threshold.get(
-                    'cooldown_seconds', 60),
-                logger=self.logger,
-                metrics=strategy_metrics
-            )
-
-        # Default to threshold strategy
-        return ThresholdReactiveStrategy(
-            logger=self.logger,
-            metrics=strategy_metrics
-        )
+                return ThresholdReactiveStrategy(
+                    thresholds=thresholds,
+                    cooldown_seconds=strategy_config.threshold.get('cooldown_seconds', 60),
+                    logger=self.logger,
+                    metrics=strategy_metrics
+                )
+            else:
+                # Default threshold strategy
+                return ThresholdReactiveStrategy(
+                    logger=self.logger,
+                    metrics=strategy_metrics
+                )
+        
+        elif strategy_config.type == "llm_reasoning":
+            try:
+                from polaris.strategies import LLMReasoningStrategy
+                from polaris.infrastructure.llm import create_llm_client
+                
+                if not strategy_config.llm:
+                    raise ValueError("LLM strategy requires 'llm_reasoning' configuration section")
+                
+                # Create LLM client (defaults to Google Gemini)
+                llm_client = create_llm_client("google")
+                
+                return LLMReasoningStrategy(
+                    llm_client=llm_client,
+                    system_description=strategy_config.llm.get('system_description', 'Managed system'),
+                    adaptation_goals=strategy_config.llm.get('adaptation_goals', 'Maintain optimal performance'),
+                    temperature=strategy_config.llm.get('temperature', 0.1),
+                    logger=self.logger,
+                    metrics=strategy_metrics
+                )
+            except ImportError as e:
+                self.logger.warning(f"LLM strategy not available: {e}. Falling back to threshold strategy.")
+                return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+        
+        elif strategy_config.type == "hybrid":
+            self.logger.warning("Hybrid strategy not yet implemented. Falling back to threshold strategy.")
+            return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+        
+        else:
+            # Default to threshold strategy
+            self.logger.warning(f"Unknown strategy type '{strategy_config.type}'. Using threshold strategy.")
+            return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
 
     def _create_connectors_from_config(self, systems_config):
         """Create connectors from configuration."""

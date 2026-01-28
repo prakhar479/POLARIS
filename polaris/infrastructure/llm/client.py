@@ -44,11 +44,15 @@ class GoogleGeminiClient(LLMClient):
     """Google Gemini LLM client."""
 
     def __init__(self, api_key: Optional[str] = None, model: str = "gemini-1.5-pro"):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        # Support both GOOGLE_API_KEY and GEMINI_API_KEY for compatibility
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.model = model
 
         if not self.api_key:
-            raise ValueError("Google API key not provided")
+            raise ValueError(
+                "Google API key not provided. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
 
         try:
             import google.generativeai as genai
@@ -118,7 +122,10 @@ class OpenAIClient(LLMClient):
         self.model = model
 
         if not self.api_key:
-            raise ValueError("OpenAI API key not provided")
+            raise ValueError(
+                "OpenAI API key not provided. Set OPENAI_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
 
         try:
             import openai

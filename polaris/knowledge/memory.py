@@ -20,7 +20,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
     def __init__(self, max_states_per_system: int = 1000):
         self.max_states = max_states_per_system
         self._states: Dict[str, List[SystemState]] = defaultdict(list)
-        self._actions: Dict[str, List[tuple]] = defaultdict(list)
+        self._actions: Dict[str, List[tuple[AdaptationAction, ExecutionResult]]] = defaultdict(list)
 
     async def store_state(self, state: SystemState) -> None:
         """Store system state (keeping max_states most recent)."""

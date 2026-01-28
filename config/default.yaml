@@ -12,6 +12,10 @@ systems:
     monitoring:
       collection_interval: 5  # seconds
 
+# Monitoring Configuration
+monitoring:
+  interval_seconds: 30  # How often to run the monitoring loop
+  
 # Adaptation Strategy
 strategy:
   type: "threshold"  # Options: threshold, llm_reasoning, hybrid
@@ -31,6 +35,12 @@ strategy:
     cooldown_seconds: 60
     enabled: true
 
+  # # LLM Reasoning Strategy Settings (uncomment to use)
+  # llm_reasoning:
+  #   system_description: "SWIM web application server pool"
+  #   adaptation_goals: "Maintain performance with minimal resource usage"
+  #   temperature: 0.1
+
 # World Model (optional)
 world_model:
   type: "statistical"
@@ -45,9 +55,9 @@ knowledge:
 
 # Meta-Learner (optional, disabled by default)
 meta_learner:
-  enabled: false
+  enabled: true
   type: "statistical"
-  analysis_interval_hours: 24
+  analysis_interval_hours: 0.01
   conservative_mode: true
 
 # Observability
