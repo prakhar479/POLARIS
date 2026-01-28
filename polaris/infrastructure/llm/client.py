@@ -43,7 +43,7 @@ class LLMClient(ABC):
 class GoogleGeminiClient(LLMClient):
     """Google Gemini LLM client."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-1.5-pro"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.5-flash"):
         # Support both GOOGLE_API_KEY and GEMINI_API_KEY for compatibility
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.model = model
@@ -98,10 +98,12 @@ class GoogleGeminiClient(LLMClient):
             if not response.text:
                 raise ValueError("Empty response from Gemini API")
 
+            # Log response details for debugging
+            finish_reason = response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN"
             return LLMResponse(
                 content=response.text,
                 model=self.model,
-                finish_reason=response.candidates[0].finish_reason.name if response.candidates else None
+                finish_reason=finish_reason
             )
             
         except ImportError:

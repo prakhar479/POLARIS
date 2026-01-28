@@ -18,28 +18,28 @@ monitoring:
   
 # Adaptation Strategy
 strategy:
-  type: "threshold"  # Options: threshold, llm_reasoning, hybrid
+  type: "llm_reasoning"  # Options: threshold, llm_reasoning, hybrid
   
-  # Threshold Strategy Settings
-  threshold:
-    thresholds:
-      cpu_usage:
-        high: 80.0
-        low: 20.0
-      memory_usage:
-        high: 85.0
-        low: 25.0
-      response_time:
-        high: 500.0  # milliseconds
+  # # Threshold Strategy Settings
+  # threshold:
+  #   thresholds:
+  #     cpu_usage:
+  #       high: 80.0
+  #       low: 20.0
+  #     memory_usage:
+  #       high: 85.0
+  #       low: 25.0
+  #     response_time:
+  #       high: 500.0  # milliseconds
     
-    cooldown_seconds: 60
-    enabled: true
+  #   cooldown_seconds: 60
+  #   enabled: true
 
-  # # LLM Reasoning Strategy Settings (uncomment to use)
-  # llm_reasoning:
-  #   system_description: "SWIM web application server pool"
-  #   adaptation_goals: "Maintain performance with minimal resource usage"
-  #   temperature: 0.1
+  # LLM Reasoning Strategy Settings (uncomment to use)
+  llm_reasoning:
+    system_description: "SWIM web application server pool"
+    adaptation_goals: "Maintain performance with minimal resource usage"
+    temperature: 0.1
 
 # World Model (optional)
 world_model:

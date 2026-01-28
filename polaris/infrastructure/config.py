@@ -115,7 +115,7 @@ class PolarisConfig:
         strategy = StrategyConfig(
             type=strategy_data.get('type', 'threshold'),
             threshold=strategy_data.get('threshold'),
-            llm=strategy_data.get('llm'),
+            llm=strategy_data.get('llm_reasoning'),
             hybrid=strategy_data.get('hybrid')
         )
 
