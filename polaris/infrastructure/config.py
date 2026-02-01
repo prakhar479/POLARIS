@@ -65,6 +65,38 @@ class StrategyConfig:
             if not isinstance(cooldown, (int, float)) or cooldown < 0:
                 raise ValueError("cooldown_seconds must be a non-negative number")
 
+        # Validate hybrid strategy parameters
+        if self.type == "hybrid":
+            if self.hybrid is None or not isinstance(self.hybrid, dict):
+                raise ValueError("Hybrid strategy requires 'hybrid' configuration block")
+            # selection_mode
+            sel = self.hybrid.get("selection_mode", "confidence")
+            if sel not in ["first", "priority", "confidence"]:
+                raise ValueError("Hybrid.selection_mode must be one of: first, priority, confidence")
+            # min_confidence
+            if "min_confidence" in self.hybrid:
+                try:
+                    mc = float(self.hybrid["min_confidence"])
+                except Exception:
+                    raise ValueError("Hybrid.min_confidence must be a number")
+                if mc < 0.0 or mc > 1.0:
+                    raise ValueError("Hybrid.min_confidence must be between 0.0 and 1.0")
+            # strategies list
+            strategies = self.hybrid.get("strategies", [])
+            if not isinstance(strategies, list) or len(strategies) == 0:
+                raise ValueError("Hybrid.strategies must be a non-empty list")
+            for idx, s in enumerate(strategies):
+                if not isinstance(s, dict):
+                    raise ValueError(f"Hybrid.strategies[{idx}] must be a dict")
+                if "type" not in s:
+                    raise ValueError(f"Hybrid.strategies[{idx}] missing 'type'")
+                # Priority optional but if present must be numeric
+                if "priority" in s:
+                    try:
+                        float(s["priority"])
+                    except Exception:
+                        raise ValueError(f"Hybrid.strategies[{idx}].priority must be a number if provided")
+
 
 @dataclass
 class PolarisConfig:

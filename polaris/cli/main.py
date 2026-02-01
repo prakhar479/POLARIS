@@ -4,6 +4,7 @@ Enhanced CLI with dashboard support.
 
 import asyncio
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -42,6 +43,12 @@ def main():
         "-b",
         action="store_true",
         help="Launch both dashboard and interactive CLI together"
+    )
+
+    parser.add_argument(
+        "--no-clear",
+        action="store_true",
+        help="Do not clear the terminal when launching the dashboard"
     )
 
     parser.add_argument(
@@ -137,6 +144,9 @@ def main():
             cli_overrides['log_format'] = args.log_format
         if args.log_level:
             cli_overrides['log_level'] = args.log_level
+        # In dashboard modes, suppress raw console logging to keep TUI clean.
+        if args.dashboard or args.both:
+            cli_overrides['console_logging'] = False
         
         # Metrics CLI overrides
         if args.disable_metrics:
@@ -162,7 +172,8 @@ def main():
             if args.export_logs:
                 print(f"Exporting logs to: {args.export_logs}")
             print()
-            asyncio.run(run_with_dashboard(polaris))
+            # Clear screen by default for a clean dashboard unless --no-clear is set
+            asyncio.run(run_with_dashboard(polaris, clear_screen=not args.no_clear))
         elif args.interactive:
             # Launch interactive CLI in separate process
             print(f"Launching Polaris interactive CLI in separate terminal")
@@ -191,7 +202,7 @@ def main():
             run_interactive_cli_standalone(config_path, cli_overrides)
             
             # Run dashboard in main process
-            asyncio.run(run_with_dashboard(polaris))
+            asyncio.run(run_with_dashboard(polaris, clear_screen=not args.no_clear))
         else:
             # Standard CLI
             print(f"Starting Polaris with config: {config_path}")
@@ -258,14 +269,27 @@ async def run_with_interactive_cli(polaris: Polaris):
         await polaris.stop()
 
 
-async def run_with_dashboard(polaris: Polaris):
-    """Run Polaris with interactive dashboard."""
+async def run_with_dashboard(polaris: Polaris, clear_screen: bool = False):
+    """Run Polaris with interactive dashboard.
+
+    Args:
+        polaris: Polaris framework instance.
+        clear_screen: If True, clear the terminal before starting dashboard.
+    """
     try:
         from polaris.cli.dashboard import Dashboard
     except ImportError:
         print("Error: Dashboard requires 'rich' library")
         print("Install with: pip install rich")
         return
+
+    # Optionally clear the terminal for a clean TUI
+    if clear_screen:
+        try:
+            os.system('cls' if os.name == 'nt' else 'clear')
+        except Exception:
+            # Best-effort only; failing to clear is non-fatal
+            pass
 
     # Create dashboard
     dashboard = Dashboard(polaris)

@@ -7,6 +7,7 @@ Uses LLM to analyze system state and decide on adaptations.
 from typing import Optional, Dict, Any
 import json
 import uuid
+from datetime import datetime, timezone
 
 from polaris.abstractions.strategy import AdaptationStrategy, AdaptationContext, ParameterSpec
 from polaris.abstractions.observability import Logger, MetricsCollector
@@ -57,6 +58,11 @@ class LLMReasoningStrategy(AdaptationStrategy):
         context: AdaptationContext
     ) -> Optional[AdaptationAction]:
         """Use LLM to assess if adaptation is needed."""
+        if self.metrics:
+            self.metrics.increment(
+                "polaris.strategy.llm.assessments",
+                tags={"system_id": state.system_id},
+            )
         if self.logger:
             self.logger.debug(f"[LLM Reasoner] Starting assessment for system: {state.system_id}")
             self.logger.debug(f"[LLM Reasoner] System health: {state.health_status.value}")
@@ -84,11 +90,20 @@ class LLMReasoningStrategy(AdaptationStrategy):
             if self.logger:
                 self.logger.info(f"[LLM Reasoner] Calling LLM API for system {state.system_id}...")
             
+            llm_start = datetime.now(timezone.utc)
             response = await self.llm.generate(
                 messages,
                 temperature=self.temperature,
                 max_tokens=2048
             )
+            llm_duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
+
+            if self.metrics:
+                self.metrics.histogram(
+                    "polaris.strategy.llm.llm_call_duration_seconds",
+                    llm_duration,
+                    tags={"system_id": state.system_id},
+                )
 
             if self.logger:
                 self.logger.debug(f"[LLM Reasoner] Received LLM response (length: {len(response.content)} chars)")
@@ -104,9 +119,19 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     self.logger.info(f"[LLM Reasoner] Adaptation decision: YES")
                     self.logger.info(f"[LLM Reasoner] Action type: {action.action_type}")
                     self.logger.debug(f"[LLM Reasoner] Action parameters: {json.dumps(action.parameters, indent=2)}")
+                if self.metrics:
+                    self.metrics.increment(
+                        "polaris.strategy.llm.actions_proposed",
+                        tags={"system_id": state.system_id, "action_type": action.action_type},
+                    )
             else:
                 if self.logger:
                     self.logger.info(f"[LLM Reasoner] Adaptation decision: NO")
+                if self.metrics:
+                    self.metrics.increment(
+                        "polaris.strategy.llm.no_action_needed",
+                        tags={"system_id": state.system_id},
+                    )
             
             return action
 
@@ -116,6 +141,11 @@ class LLMReasoningStrategy(AdaptationStrategy):
                 self.logger.error(f"[LLM Reasoner] Error during LLM assessment: {type(e).__name__}: {str(e)}")
                 import traceback
                 self.logger.debug(f"[LLM Reasoner] Traceback: {traceback.format_exc()}")
+            if self.metrics:
+                self.metrics.increment(
+                    "polaris.strategy.llm.errors",
+                    tags={"system_id": state.system_id},
+                )
             return None
 
     def _get_system_prompt(self) -> str:
@@ -311,6 +341,19 @@ Should this system be adapted right now? Analyze the state and provide your deci
         is_success = hasattr(result, 'status') and result.status.value == 'success'
         if is_success:
             self._success_count += 1
+        if self.metrics:
+            self.metrics.increment(
+                "polaris.strategy.llm.actions_executed",
+                tags={
+                    "action_type": action.action_type,
+                    "system_id": action.target_system,
+                    "status": result.status.value if hasattr(result, 'status') else 'unknown',
+                },
+            )
+            self.metrics.gauge(
+                "polaris.strategy.llm.success_rate",
+                self._success_count / self._adaptation_count if self._adaptation_count > 0 else 0.0,
+            )
         
         if self.logger:
             status_str = "SUCCESS" if is_success else "FAILED"

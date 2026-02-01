@@ -1,6 +1,7 @@
 """Main Polaris framework orchestrator."""
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
@@ -68,8 +69,15 @@ class Polaris:
             from polaris.infrastructure.config import load_config
             loaded_config = load_config(config_path)
             self.config = loaded_config
+            self._config_path = config_path
+            try:
+                self._config_mtime = os.path.getmtime(config_path)
+            except Exception:
+                self._config_mtime = None
         else:
             self.config = config or PolarisConfig()
+            self._config_path = None
+            self._config_mtime = None
 
         # Store CLI overrides
         self.cli_overrides = cli_overrides or {}
@@ -80,9 +88,17 @@ class Polaris:
         self.event_bus = event_bus or EventBus(metrics=self.metrics if self._should_collect_component_metrics('event_bus') else None)
 
         # Set up core components with defaults
-        self.knowledge_store = knowledge_store or InMemoryKnowledgeStore()
+        knowledge_metrics = self.metrics if self._should_collect_component_metrics('knowledge_store') else None
+        self.knowledge_store = knowledge_store or InMemoryKnowledgeStore(
+            logger=self.logger,
+            metrics=knowledge_metrics,
+        )
+        world_model_metrics = self.metrics if self._should_collect_component_metrics('world_model') else None
         self.world_model = world_model or StatisticalWorldModel(
-            self.knowledge_store)
+            self.knowledge_store,
+            logger=self.logger,
+            metrics=world_model_metrics
+        )
 
         # Strategy - use provided or create from config or default
         self.strategy = strategy
@@ -120,6 +136,20 @@ class Polaris:
         # Setup metrics configuration
         self._setup_metrics_auto_export()
 
+        # Log component configuration summary
+        self.logger.info(
+            "Polaris components initialized",
+            has_strategy=self.strategy is not None,
+            has_world_model=self.world_model is not None,
+            has_meta_learner=self.meta_learner is not None,
+            metrics_enabled=self.metrics is not None,
+            monitoring_interval_seconds=self._monitoring_interval
+        )
+
+        if self.metrics and self._should_collect_component_metrics('core_framework'):
+            self.metrics.increment("polaris.core.initialized")
+            self.metrics.gauge("polaris.core.monitoring_interval_seconds", self._monitoring_interval)
+
     def _create_logger_from_config(self):
         """Create logger from configuration with CLI overrides."""
         from polaris.infrastructure.observability.logger import create_logger
@@ -147,6 +177,9 @@ class Polaris:
             logger_type = self.cli_overrides['log_format']
         if 'log_level' in self.cli_overrides:
             level = self.cli_overrides['log_level']
+        # Allow CLI to disable console logging (e.g. for dashboard mode)
+        if 'console_logging' in self.cli_overrides:
+            console = bool(self.cli_overrides['console_logging'])
         if 'log_file' in self.cli_overrides:
             log_file = self.cli_overrides['log_file']
 
@@ -275,7 +308,8 @@ class Polaris:
                     raise ValueError("LLM strategy requires 'llm_reasoning' configuration section")
                 
                 # Create LLM client (defaults to Google Gemini)
-                llm_client = create_llm_client("google")
+                resilience_cfg = strategy_config.llm.get('resilience') if strategy_config.llm else None
+                llm_client = create_llm_client("google", resilience=resilience_cfg)
                 
                 return LLMReasoningStrategy(
                     llm_client=llm_client,
@@ -290,8 +324,68 @@ class Polaris:
                 return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
         
         elif strategy_config.type == "hybrid":
-            self.logger.warning("Hybrid strategy not yet implemented. Falling back to threshold strategy.")
-            return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+            try:
+                from polaris.strategies import HybridStrategy, LLMReasoningStrategy
+                from polaris.infrastructure.llm import create_llm_client
+
+                hybrid_conf = strategy_config.hybrid or {}
+                selection_mode = hybrid_conf.get('selection_mode', 'confidence')
+                min_confidence = float(hybrid_conf.get('min_confidence', 0.7))
+                sub_defs = hybrid_conf.get('strategies', [])
+
+                sub_strategies = []
+                for s in sub_defs:
+                    s_type = s.get('type', 'threshold')
+                    priority = float(s.get('priority', 0.5))
+
+                    if s_type == 'threshold':
+                        thresholds = None
+                        cooldown = 60
+                        if 'threshold' in s and isinstance(s['threshold'], dict):
+                            th = s['threshold']
+                            thresholds = th.get('thresholds')
+                            cooldown = th.get('cooldown_seconds', cooldown)
+
+                        sub = ThresholdReactiveStrategy(
+                            thresholds=thresholds,
+                            cooldown_seconds=cooldown,
+                            logger=self.logger,
+                            metrics=strategy_metrics
+                        )
+                        sub_strategies.append((sub, priority))
+
+                    elif s_type == 'llm_reasoning':
+                        llm_cfg = s.get('llm_reasoning', {})
+                        llm_client = create_llm_client("google", resilience=llm_cfg.get('resilience'))
+                        sub = LLMReasoningStrategy(
+                            llm_client=llm_client,
+                            system_description=llm_cfg.get('system_description', 'Managed system'),
+                            adaptation_goals=llm_cfg.get('adaptation_goals', 'Maintain optimal performance'),
+                            temperature=llm_cfg.get('temperature', 0.1),
+                            logger=self.logger,
+                            metrics=strategy_metrics
+                        )
+                        sub_strategies.append((sub, priority))
+
+                    else:
+                        # Fallback to threshold for unknown types
+                        sub = ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+                        sub_strategies.append((sub, priority))
+
+                if not sub_strategies:
+                    # Safety fallback
+                    return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+
+                return HybridStrategy(
+                    strategies=sub_strategies,
+                    selection_mode=selection_mode,
+                    min_confidence=min_confidence,
+                    logger=self.logger,
+                    metrics=strategy_metrics
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize hybrid strategy: {e}. Falling back to threshold strategy.")
+                return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
         
         else:
             # Default to threshold strategy
@@ -307,9 +401,12 @@ class Polaris:
 
             if system.connector_type == "swim":
                 from polaris.connectors import SWIMConnector
+                connector_metrics = self.metrics if self._should_collect_component_metrics('connectors') else None
                 connector = SWIMConnector(
                     host=system.connection.get('host', 'localhost'),
-                    port=system.connection.get('port', 4242)
+                    port=system.connection.get('port', 4242),
+                    logger=self.logger,
+                    metrics=connector_metrics,
                 )
                 connectors.append(connector)
 
@@ -372,6 +469,8 @@ class Polaris:
 
         while self._running:
             try:
+                # Apply hot-reload if config file changed
+                await self._maybe_hot_reload_config()
                 loop_start = datetime.now(timezone.utc)
                 systems_processed = 0
                 adaptations_executed = 0
@@ -497,6 +596,10 @@ class Polaris:
                     self.metrics.histogram("polaris.monitoring.loop_duration_seconds", loop_duration)
                     self.metrics.gauge("polaris.monitoring.systems_processed", systems_processed)
                     self.metrics.gauge("polaris.monitoring.adaptations_executed", adaptations_executed)
+                    self.metrics.gauge(
+                        "polaris.monitoring.last_iteration_timestamp",
+                        datetime.now(timezone.utc).timestamp()
+                    )
 
                 # Wait before next iteration
                 await asyncio.sleep(self._monitoring_interval)
@@ -513,6 +616,121 @@ class Polaris:
         self.logger.info("Monitoring loop stopped")
         if self.metrics and self._should_collect_component_metrics('core_framework'):
             self.metrics.increment("polaris.monitoring.stopped")
+
+    async def _maybe_hot_reload_config(self) -> None:
+        """Check for config changes and apply strategy/resilience updates."""
+        if not self._config_path:
+            return
+        try:
+            mtime = os.path.getmtime(self._config_path)
+        except Exception:
+            return
+        if self._config_mtime is not None and mtime <= self._config_mtime:
+            return
+        # Reload and apply
+        if self.metrics and self._should_collect_component_metrics('core_framework'):
+            self.metrics.increment("polaris.config.hot_reload.attempts")
+        try:
+            from polaris.infrastructure.config import load_config
+            new_conf = load_config(self._config_path)
+            await self._apply_strategy_hot_reload(new_conf.strategy)
+            # update stored
+            self.config = new_conf
+            self._config_mtime = mtime
+            if self.metrics and self._should_collect_component_metrics('core_framework'):
+                self.metrics.increment("polaris.config.hot_reload.success")
+            self.logger.info("Applied hot-reload from updated configuration")
+        except Exception as e:
+            if self.metrics and self._should_collect_component_metrics('core_framework'):
+                self.metrics.increment("polaris.config.hot_reload.errors")
+            self.logger.warning(f"Hot-reload skipped due to error: {e}")
+
+    async def _apply_strategy_hot_reload(self, strategy_config) -> None:
+        """Apply parameter updates for current strategy from new config."""
+        if not self.strategy or not strategy_config:
+            return
+        # If strategy type differs, skip (avoid disruptive replacement)
+        current_type = type(self.strategy).__name__
+        desired_type = strategy_config.type
+        if desired_type == "threshold" and current_type != "ThresholdReactiveStrategy":
+            self.logger.info("Strategy type changed in config; restart required to apply.")
+            return
+        if desired_type == "llm_reasoning" and current_type != "LLMReasoningStrategy":
+            self.logger.info("Strategy type changed in config; restart required to apply.")
+            return
+        if desired_type == "hybrid" and current_type != "HybridStrategy":
+            self.logger.info("Strategy type changed in config; restart required to apply.")
+            return
+
+        # Threshold updates
+        from polaris.strategies import ThresholdReactiveStrategy
+        if desired_type == "threshold" and isinstance(self.strategy, ThresholdReactiveStrategy):
+            th = strategy_config.threshold or {}
+            cooldown = th.get('cooldown_seconds')
+            if cooldown is not None:
+                await self.strategy.update_parameter("cooldown_seconds", cooldown)
+            thresholds = (th or {}).get('thresholds', {})
+            for metric, vals in thresholds.items():
+                if 'high' in vals:
+                    await self.strategy.update_parameter(f"thresholds.{metric}.high", vals['high'])
+                if 'low' in vals:
+                    await self.strategy.update_parameter(f"thresholds.{metric}.low", vals['low'])
+            return
+
+        # LLM reasoning updates
+        from polaris.strategies import LLMReasoningStrategy
+        if desired_type == "llm_reasoning" and isinstance(self.strategy, LLMReasoningStrategy):
+            llm_cfg = strategy_config.llm or {}
+            if 'temperature' in llm_cfg:
+                await self.strategy.update_parameter("temperature", llm_cfg['temperature'])
+            if 'system_description' in llm_cfg:
+                await self.strategy.update_parameter("system_description", llm_cfg['system_description'])
+            # Resilience updates
+            resil = llm_cfg.get('resilience')
+            if resil and hasattr(self.strategy.llm, "update_resilience"):
+                try:
+                    self.strategy.llm.update_resilience(resil)
+                except Exception as e:
+                    self.logger.warning(f"Failed to hot-update LLM resilience: {e}")
+            return
+
+        # Hybrid updates
+        from polaris.strategies import HybridStrategy
+        if desired_type == "hybrid" and isinstance(self.strategy, HybridStrategy):
+            hy = strategy_config.hybrid or {}
+            if 'selection_mode' in hy:
+                await self.strategy.update_parameter("selection_mode", hy['selection_mode'])
+            if 'min_confidence' in hy:
+                await self.strategy.update_parameter("min_confidence", hy['min_confidence'])
+            # Sub-strategies (best-effort: index-based update when counts match)
+            new_subs = hy.get('strategies', [])
+            if isinstance(new_subs, list) and len(new_subs) == len(self.strategy.strategies):
+                for idx, (sub_conf, (sub_strategy, _prio)) in enumerate(zip(new_subs, self.strategy.strategies)):
+                    s_type = sub_conf.get('type')
+                    if s_type == 'threshold':
+                        th = sub_conf.get('threshold', {})
+                        cd = th.get('cooldown_seconds')
+                        if cd is not None and hasattr(sub_strategy, 'update_parameter'):
+                            await sub_strategy.update_parameter("cooldown_seconds", cd)
+                        thresh = th.get('thresholds', {})
+                        for metric, vals in thresh.items():
+                            if 'high' in vals:
+                                await sub_strategy.update_parameter(f"thresholds.{metric}.high", vals['high'])
+                            if 'low' in vals:
+                                await sub_strategy.update_parameter(f"thresholds.{metric}.low", vals['low'])
+                    elif s_type == 'llm_reasoning':
+                        llm_cfg = sub_conf.get('llm_reasoning', {})
+                        if 'temperature' in llm_cfg and hasattr(sub_strategy, 'update_parameter'):
+                            await sub_strategy.update_parameter("temperature", llm_cfg['temperature'])
+                        if 'system_description' in llm_cfg and hasattr(sub_strategy, 'update_parameter'):
+                            await sub_strategy.update_parameter("system_description", llm_cfg['system_description'])
+                        resil = llm_cfg.get('resilience')
+                        if resil and hasattr(sub_strategy, 'llm') and hasattr(sub_strategy.llm, 'update_resilience'):
+                            try:
+                                sub_strategy.llm.update_resilience(resil)
+                            except Exception as e:
+                                self.logger.warning(f"Failed to hot-update sub-strategy LLM resilience: {e}")
+            return
 
     async def _meta_learning_loop(self) -> None:
         """Meta-learning loop for autonomous optimization."""
@@ -604,6 +822,7 @@ class Polaris:
                 from polaris.infrastructure.observability.export import export_polaris_metrics
                 
                 try:
+                    export_start = datetime.now(timezone.utc)
                     exported_files = export_polaris_metrics(
                         metrics_collector=self.metrics,
                         output_dir=export_config['output_dir'],
@@ -614,6 +833,11 @@ class Polaris:
                     self.logger.info(f"Auto-exported metrics to {len(exported_files)} files")
                     if self.metrics and self._should_collect_component_metrics('core_framework'):
                         self.metrics.increment("polaris.metrics.auto_exports_completed")
+                        export_duration = (datetime.now(timezone.utc) - export_start).total_seconds()
+                        self.metrics.histogram(
+                            "polaris.metrics.auto_export_duration_seconds",
+                            export_duration
+                        )
                         
                 except Exception as e:
                     self.logger.error(f"Failed to auto-export metrics: {e}")
@@ -636,6 +860,10 @@ class Polaris:
 
         self._running = False
         self.logger.info("Stopping Polaris framework")
+
+        if self.metrics and self._should_collect_component_metrics('core_framework'):
+            self.metrics.increment("polaris.core.stop_called")
+            self.metrics.gauge("polaris.core.connectors_at_shutdown", len(self.registry.system_ids()))
 
         # Export final metrics if configured
         if (self.metrics and hasattr(self.metrics, 'export_to_file') and 

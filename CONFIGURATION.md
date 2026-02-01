@@ -48,7 +48,18 @@ strategy:
 world_model:
   type: "statistical"
   statistical:
+    # Number of recent samples to keep per metric in memory
     window_size: 100
+    # Enable lightweight Kalman-style filtering for smoother predictions
+    # and a variance-based confidence score. When false, the model uses
+    # simple historical means.
+    use_kalman: true
+
+    # Simple regime tracking (HMM-style) is always enabled for the
+    # statistical world model. Regimes ("low", "normal", "high") are
+    # inferred from metrics such as cpu_usage/response_time and are
+    # exposed via world_model.get_insights() and the PredictionResult
+    # reasoning string.
 
 # Knowledge store configuration
 knowledge:
@@ -62,6 +73,14 @@ meta_learner:
   type: "statistical"
   analysis_interval_hours: 1.0
   conservative_mode: true
+
+  # When a statistical world model is provided to Polaris, the
+  # StatisticalMetaLearner automatically consumes its insights via
+  # world_model.get_insights(). The meta-learner aggregates basic
+  # uncertainty information (e.g., average metric std and regime
+  # estimates) into analysis.insights["world_model_uncertainty"], and
+  # uses this to slightly adjust proposal confidence (more cautious
+  # when variability is high).
 
 # Observability configuration
 observability:
@@ -226,6 +245,41 @@ strategy:
 - Set `GOOGLE_API_KEY` or `OPENAI_API_KEY` environment variable
 - Install LLM client libraries: `pip install google-generativeai` or `pip install openai`
 
+### LLM Resilience (Retries, Rate Limiting, Key Rotation)
+
+You can enable a resilience layer for LLM calls that adds retries with exponential backoff, async rate limiting, optional concurrency caps, and API key rotation.
+
+Enable via strategy config (recommended):
+
+```yaml
+strategy:
+  type: "llm_reasoning"
+  llm_reasoning:
+    temperature: 0.1
+    resilience:
+      rps: 2              # tokens refill rate per second for token-bucket
+      burst: 4            # bucket capacity for short bursts
+      concurrency: 4      # max concurrent LLM requests
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+      # keys_env_var: OPENAI_API_KEYS  # optional custom env var for key rotation
+```
+
+Or enable globally via environment variables:
+
+```bash
+export LLM_RESILIENCE_ENABLED=1
+# For key rotation (comma-separated):
+export OPENAI_API_KEYS="key1,key2,key3"
+export GEMINI_API_KEYS="keyA,keyB"
+```
+
+Notes:
+- If a `resilience` block is present in config or multi-key env vars are set, the client uses the resilience wrapper automatically.
+- When rate limited (429/quota), the client rotates to the next key (if configured) and retries with backoff.
+- Structured logs for LLM latency, error types, and response previews are written to `./logs/llm_debug.log` for debugging.
+
 ## Connector Configuration
 
 ### SWIM Connector
@@ -280,6 +334,24 @@ observability:
       monitoring_loop: true
       event_bus: true
       # ... etc
+
+## Hot Reload of Strategy Parameters and Resilience
+
+When Polaris is started with a `config_path`, it detects configuration file changes and hot-applies parameter updates during the monitoring loop.
+
+What is hot-reloaded:
+- Threshold strategy: `cooldown_seconds` and per-metric `thresholds.{metric}.{high|low}`
+- LLM reasoning: `temperature`, `system_description`, and LLM `resilience` (when using the resilient client)
+- Hybrid strategy: `selection_mode`, `min_confidence`, and sub-strategy parameters (index-matched), including resilience for LLM sub-strategies
+
+Limitations:
+- Changing the strategy type (e.g., threshold → hybrid) requires a restart
+- Hybrid sub-strategy updates are index-based; to change counts or order, restart with the new configuration
+- Resilience updates require the LLM client to be the resilient wrapper; otherwise the update is skipped with a warning
+
+Best practices:
+- Keep resilience and strategy parameters in the main config file passed to Polaris
+- Avoid frequent file writes; changes are detected each iteration of the monitoring loop
 ```
 
 ## Configuration Loading Order

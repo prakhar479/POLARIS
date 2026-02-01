@@ -1,13 +1,14 @@
-"""
-Interactive dashboard for Polaris - FIXED VERSION.
+"""Interactive dashboard for Polaris.
 
-Real-time terminal UI showing system state, metrics, and adaptations.
+Real-time terminal UI showing system state, summarized metrics, and recent
+events/logs in a minimal, developer-friendly layout.
 """
 
 import asyncio
+import logging
 from datetime import datetime
-from typing import Optional, Dict
-from collections import defaultdict
+from typing import Optional, Dict, Deque
+from collections import defaultdict, deque
 
 try:
     from rich.console import Console
@@ -48,8 +49,13 @@ class Dashboard:
         self.max_history = 50
         self._cached_perf_metrics = {}
 
-        # Subscribe to events
+        # Lightweight in-memory log buffer for summarized dashboard logs
+        self._log_records: Deque[Dict[str, str]] = deque(maxlen=50)
+        self._log_handler: Optional[logging.Handler] = None
+
+        # Subscribe to events and capture logs for dashboard view
         self._subscribe_to_events()
+        self._setup_log_capture()
 
     def _subscribe_to_events(self):
         """Subscribe to framework events."""
@@ -65,7 +71,39 @@ class Dashboard:
             self._on_adaptation
         )
 
-        print("[Dashboard] Subscribed to events")
+    def _setup_log_capture(self) -> None:
+        """Attach a logging handler that feeds recent logs into the dashboard.
+
+        This provides a concise, human-friendly log view without dumping full
+        raw logs into the terminal. Full raw logs still go to configured log
+        files as usual.
+        """
+        logger = logging.getLogger("polaris")
+
+        class _DashboardLogHandler(logging.Handler):
+            def __init__(self, buffer: Deque[Dict[str, str]]):
+                super().__init__(level=logging.NOTSET)
+                self._buffer = buffer
+
+            def emit(self, record: logging.LogRecord) -> None:
+                try:
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    level = record.levelname
+                    component = record.name.split(".")[-1]
+                    message = record.getMessage()
+                    self._buffer.append({
+                        "time": timestamp,
+                        "level": level,
+                        "component": component,
+                        "message": message,
+                    })
+                except Exception:
+                    # Logging to dashboard should never break the app
+                    pass
+
+        handler = _DashboardLogHandler(self._log_records)
+        logger.addHandler(handler)
+        self._log_handler = handler
 
     def _on_telemetry(self, event):
         """Handle telemetry events."""
@@ -82,9 +120,7 @@ class Dashboard:
 
     def _on_adaptation(self, event):
         """Handle adaptation events."""
-        print(
-            f"[Dashboard] Received adaptation event: {event.action.action_type}")
-
+        
         self.recent_events.append({
             'time': event.timestamp,
             'type': 'adaptation',
@@ -119,6 +155,7 @@ class Dashboard:
 
         layout["right"].split_column(
             Layout(name="events", ratio=1),
+            Layout(name="logs", ratio=1),
             Layout(name="strategy", ratio=1),
             Layout(name="system_metrics", ratio=1)
         )
@@ -176,6 +213,23 @@ class Dashboard:
             events_table.add_row(time_str, event_str, status)
 
         layout["events"].update(Panel(events_table, border_style="magenta"))
+
+        # Latest Logs panel (summarized, not full raw log stream)
+        logs_table = Table(title="Latest Logs", show_header=True, show_lines=False)
+        logs_table.add_column("Time", style="dim", no_wrap=True)
+        logs_table.add_column("Lvl", style="cyan", no_wrap=True)
+        logs_table.add_column("Comp", style="magenta", no_wrap=True)
+        logs_table.add_column("Message", style="white", overflow="fold")
+
+        for rec in list(self._log_records)[-20:]:
+            logs_table.add_row(
+                rec.get("time", ""),
+                rec.get("level", ""),
+                rec.get("component", ""),
+                rec.get("message", ""),
+            )
+
+        layout["logs"].update(Panel(logs_table, border_style="white"))
 
         # Strategy panel
         strategy_info = Table(title="Strategy Info", show_header=False)
@@ -330,8 +384,12 @@ class Dashboard:
                 if self.polaris.strategy:
                     self._cached_perf_metrics = await self.polaris.strategy.get_performance_metrics()
             except Exception as e:
-                # Log error but continue running
-                print(f"[Dashboard] Error updating metrics cache: {e}")
+                # Log error but continue running (to framework logger, not stdout)
+                try:
+                    logger = logging.getLogger("polaris.dashboard")
+                    logger.error("Error updating dashboard metrics cache", error=str(e))
+                except Exception:
+                    pass
             await asyncio.sleep(5)  # Update every 5 seconds
 
     async def run(self, refresh_rate: float = 1.0):
@@ -342,7 +400,6 @@ class Dashboard:
             refresh_rate: Update frequency in seconds
         """
         self.running = True
-        print("[Dashboard] Starting dashboard...")
 
         # Start background metrics update task
         metrics_task = asyncio.create_task(self._update_metrics_cache())
@@ -361,3 +418,11 @@ class Dashboard:
                     await metrics_task
                 except asyncio.CancelledError:
                     pass
+
+                # Detach dashboard log handler on exit to avoid leaks
+                if self._log_handler is not None:
+                    try:
+                        root_logger = logging.getLogger("polaris")
+                        root_logger.removeHandler(self._log_handler)
+                    except Exception:
+                        pass

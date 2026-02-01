@@ -2,7 +2,7 @@
 LLM-based meta-learner using AI for intelligent parameter tuning.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import uuid
 import json
@@ -15,7 +15,7 @@ from polaris.abstractions.meta_learner import (
 )
 from polaris.abstractions.strategy import AdaptationStrategy
 from polaris.abstractions.knowledge_store import KnowledgeStore
-from polaris.abstractions.observability import Logger
+from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 
 
@@ -33,7 +33,8 @@ class LLMMetaLearner(MetaLearner):
         knowledge_store: KnowledgeStore,
         logger: Logger,
         auto_apply: bool = False,
-        temperature: float = 0.1
+        temperature: float = 0.1,
+        metrics: Optional[MetricsCollector] = None,
     ):
         """
         Initialize LLM meta-learner.
@@ -50,6 +51,7 @@ class LLMMetaLearner(MetaLearner):
         self.logger = logger
         self.auto_apply = auto_apply
         self.temperature = temperature
+        self.metrics = metrics
 
     async def analyze_performance(
         self,
@@ -57,6 +59,12 @@ class LLMMetaLearner(MetaLearner):
         time_window_hours: float = 24.0
     ) -> PerformanceAnalysis:
         """Analyze system performance using LLM."""
+
+        if self.metrics:
+            self.metrics.increment(
+                "polaris.meta_learning.llm.analysis_requests",
+                tags={"system_id": system_id},
+            )
 
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=time_window_hours)
@@ -95,11 +103,20 @@ class LLMMetaLearner(MetaLearner):
                 LLMMessage(role="user", content=analysis_prompt)
             ]
 
+            llm_start = datetime.now(timezone.utc)
             response = await self.llm.generate(
                 messages,
                 temperature=self.temperature,
                 max_tokens=1024
             )
+
+            if self.metrics:
+                duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
+                self.metrics.histogram(
+                    "polaris.meta_learning.llm.analysis_llm_duration_seconds",
+                    duration,
+                    tags={"system_id": system_id},
+                )
 
             # Parse LLM response
             analysis_data = self._parse_analysis_response(response.content)
@@ -112,6 +129,12 @@ class LLMMetaLearner(MetaLearner):
                 'identified_issues': analysis_data.get('issues', [])
             }
 
+            if self.metrics:
+                self.metrics.increment(
+                    "polaris.meta_learning.llm.analysis_success",
+                    tags={"system_id": system_id},
+                )
+
             return PerformanceAnalysis(
                 system_id=system_id,
                 time_window_hours=time_window_hours,
@@ -122,6 +145,11 @@ class LLMMetaLearner(MetaLearner):
 
         except Exception as e:
             self.logger.error(f"LLM analysis failed: {e}")
+            if self.metrics:
+                self.metrics.increment(
+                    "polaris.meta_learning.llm.analysis_errors",
+                    tags={"system_id": system_id},
+                )
             # Fallback to basic analysis
             return PerformanceAnalysis(
                 system_id=system_id,
@@ -138,10 +166,21 @@ class LLMMetaLearner(MetaLearner):
     ) -> List[ParameterProposal]:
         """Use LLM to propose parameter updates."""
 
+        if self.metrics:
+            self.metrics.increment(
+                "polaris.meta_learning.llm.proposals_requests",
+                tags={"system_id": analysis.system_id},
+            )
+
         # Get tunable parameters
         tunable_params = strategy.get_tunable_parameters()
 
         if not tunable_params:
+            if self.metrics:
+                self.metrics.increment(
+                    "polaris.meta_learning.llm.proposals_no_tunable_parameters",
+                    tags={"system_id": analysis.system_id},
+                )
             return []
 
         # Build prompt for parameter optimization
@@ -191,10 +230,22 @@ class LLMMetaLearner(MetaLearner):
                     created_at=datetime.now(timezone.utc)
                 ))
 
+            if self.metrics:
+                self.metrics.gauge(
+                    "polaris.meta_learning.llm.proposals_generated",
+                    len(proposals),
+                    tags={"system_id": analysis.system_id},
+                )
+
             return proposals
 
         except Exception as e:
             self.logger.error(f"LLM proposal generation failed: {e}")
+            if self.metrics:
+                self.metrics.increment(
+                    "polaris.meta_learning.llm.proposals_errors",
+                    tags={"system_id": analysis.system_id},
+                )
             return []
 
     async def validate_proposals(
@@ -203,13 +254,28 @@ class LLMMetaLearner(MetaLearner):
     ) -> List[ParameterProposal]:
         """Validate proposals (approve high-confidence ones)."""
 
+        approved = 0
+        rejected = 0
+
         validated = []
         for proposal in proposals:
             if proposal.confidence >= 0.7:
                 proposal.status = ProposalStatus.APPROVED
                 validated.append(proposal)
+                approved += 1
             else:
                 proposal.status = ProposalStatus.REJECTED
+                rejected += 1
+
+        if self.metrics:
+            self.metrics.gauge(
+                "polaris.meta_learning.llm.proposals_approved",
+                approved,
+            )
+            self.metrics.gauge(
+                "polaris.meta_learning.llm.proposals_rejected",
+                rejected,
+            )
 
         return validated
 

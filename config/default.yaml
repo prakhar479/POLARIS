@@ -36,16 +36,59 @@ strategy:
     enabled: true
 
   # LLM Reasoning Strategy Settings (uncomment to use)
-  # llm_reasoning:
-  #   system_description: "SWIM web application server pool"
-  #   adaptation_goals: "Maintain performance with minimal resource usage"
-  #   temperature: 0.1
+  llm_reasoning:
+    system_description: "SWIM web application server pool"
+    adaptation_goals: "Maintain performance with minimal resource usage"
+    temperature: 0.1
+    # resilience:
+    #   rps: 2
+    #   burst: 4
+    #   concurrency: 4
+    #   max_retries: 4
+    #   base_backoff_ms: 200
+    #   max_backoff_ms: 4000
+    #   # keys_env_var: OPENAI_API_KEYS  # optional custom env var for key rotation
+
+  # hybrid:
+  #   selection_mode: confidence
+  #   min_confidence: 0.7
+  #   strategies:
+  #     - type: threshold
+  #       priority: 0.8
+  #       threshold:
+  #         thresholds:
+  #           cpu_usage: { high: 80.0, low: 20.0 }
+  #         cooldown_seconds: 45
+  #     - type: llm_reasoning
+  #       priority: 0.6
+  #       llm_reasoning:
+  #         system_description: "SWIM web application server pool"
+  #         adaptation_goals: "Maintain performance with minimal resource usage"
+  #         temperature: 0.1
+  #         resilience:
+  #           rps: 2
+  #           burst: 4
+  #           max_retries: 4
+  #           base_backoff_ms: 200
+  #           max_backoff_ms: 4000
+  #           concurrency: 4
 
 # World Model (optional)
 world_model:
   type: "statistical"
   statistical:
+    # Number of recent samples to keep per metric in memory
     window_size: 100
+    # Enable lightweight Kalman-style filtering for smoother predictions
+    # and a variance-based confidence score. When false, the model uses
+    # simple historical means.
+    use_kalman: true
+
+    # Simple regime tracking (HMM-style) is always enabled for the
+    # statistical world model. Regimes ("low", "normal", "high") are
+    # inferred from metrics such as cpu_usage/response_time and are
+    # exposed via world_model.get_insights() and the PredictionResult
+    # reasoning string.
 
 # Knowledge Store (optional)
 knowledge:
@@ -53,12 +96,19 @@ knowledge:
   memory:
     max_states_per_system: 1000
 
-# Meta-Learner (optional, disabled by default)
+# Meta-Learner (optional, enabled here for demonstration)
 meta_learner:
   enabled: true
   type: "statistical"
   analysis_interval_hours: 0.01
   conservative_mode: true
+  # When a statistical world model is provided to Polaris, the
+  # StatisticalMetaLearner automatically consumes its insights via
+  # world_model.get_insights(). The meta-learner aggregates basic
+  # uncertainty information (e.g., average metric std and regime
+  # estimates) into analysis.insights["world_model_uncertainty"], and
+  # uses this to slightly adjust proposal confidence (more cautious
+  # when variability is high).
 
 # Observability
 observability:

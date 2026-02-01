@@ -22,6 +22,11 @@ class TestStatisticalWorldModel:
         return StatisticalWorldModel(knowledge_store)
     
     @pytest.fixture
+    def kalman_world_model(self, knowledge_store):
+        """Create statistical world model with Kalman filtering enabled."""
+        return StatisticalWorldModel(knowledge_store, use_kalman=True)
+    
+    @pytest.fixture
     def sample_state(self):
         """Create sample system state."""
         return SystemState(
@@ -246,6 +251,75 @@ class TestStatisticalWorldModel:
         """Test getting insights with no data."""
         insights = await world_model.get_insights()
         assert insights == {}
+    
+    @pytest.mark.asyncio
+    async def test_regime_tracking_in_insights(self, world_model):
+        """Test that regime probabilities are tracked and exposed in insights."""
+        # Create states that clearly indicate a high-load regime
+        for _ in range(5):
+            state = SystemState(
+                system_id="test-system",
+                timestamp=datetime.now(timezone.utc),
+                metrics={
+                    "cpu_usage": MetricValue("cpu_usage", 90.0, "percent"),
+                    "response_time": MetricValue("response_time", 600.0, "ms"),
+                },
+                health_status=HealthStatus.HEALTHY,
+            )
+            await world_model.update(state)
+
+        insights = await world_model.get_insights()
+        assert "test-system" in insights
+        system_insights = insights["test-system"]
+        assert "regime" in system_insights
+        regime_info = system_insights["regime"]
+        assert "probabilities" in regime_info
+        assert "most_likely" in regime_info
+        # High CPU/response_time should bias towards 'high' regime
+        assert regime_info["most_likely"] in {"high", "normal"}
+
+    @pytest.mark.asyncio
+    async def test_reasoning_mentions_kalman_and_regime(self, kalman_world_model, sample_action, sample_state):
+        """Test that reasoning string reflects Kalman usage and regime estimate."""
+        # Build up some history to initialize Kalman filters and regime
+        for _ in range(3):
+            state = SystemState(
+                system_id="test-system",
+                timestamp=datetime.now(timezone.utc),
+                metrics={
+                    "cpu_usage": MetricValue("cpu_usage", 85.0, "percent"),
+                    "response_time": MetricValue("response_time", 550.0, "ms"),
+                },
+                health_status=HealthStatus.HEALTHY,
+            )
+            await kalman_world_model.update(state)
+
+        prediction = await kalman_world_model.predict(sample_action, sample_state)
+        reasoning = prediction.reasoning
+        assert "Kalman-smoothed" in reasoning
+        assert "Estimated regime" in reasoning
+
+    @pytest.mark.asyncio
+    async def test_predict_with_kalman_enabled(self, kalman_world_model, sample_action, sample_state):
+        """Test prediction when Kalman filtering is enabled."""
+        # Build up some history
+        for cpu_value in [60.0, 70.0, 80.0]:
+            state = SystemState(
+                system_id="test-system",
+                timestamp=datetime.now(timezone.utc),
+                metrics={
+                    "cpu_usage": MetricValue("cpu_usage", cpu_value, "percent"),
+                },
+                health_status=HealthStatus.HEALTHY
+            )
+            await kalman_world_model.update(state)
+
+        prediction = await kalman_world_model.predict(sample_action, sample_state)
+
+        # Should still predict for metrics with history
+        assert "cpu_usage" in prediction.predicted_metrics
+        # Confidence should be derived from Kalman variance and lie in (0, 1]
+        assert 0.0 < prediction.confidence <= 1.0
     
     @pytest.mark.asyncio
     async def test_multiple_systems(self, world_model):

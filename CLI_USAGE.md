@@ -32,6 +32,7 @@ python -m polaris.cli [OPTIONS]
 | `--dashboard` | `-d` | Launch interactive dashboard |
 | `--interactive` | `-i` | Launch interactive CLI in separate terminal |
 | `--both` | `-b` | Launch both dashboard and interactive CLI |
+| `--no-clear` | `-` | Do not clear the terminal when launching the dashboard |
 
 ### Logging Options
 
@@ -89,6 +90,7 @@ The dashboard provides real-time monitoring with:
 - Recent adaptation events
 - Strategy performance information
 - System metrics (monitoring, telemetry, adaptations)
+- Latest summarized logs panel (time, level, component, short message)
 
 Navigation: Use Ctrl+C to exit.
 
@@ -144,5 +146,6 @@ systems:
 
 - The interactive CLI runs in a separate terminal when using `--interactive`
 - Dashboard updates in real-time (1-second intervals)
+- Dashboard log panel shows a concise, human-readable summary of recent logs; full raw logs remain available via log files/exports.
 - All CLI options can be combined as needed
 - Metrics collection can be disabled for minimal overhead

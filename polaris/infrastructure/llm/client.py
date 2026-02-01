@@ -8,6 +8,11 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import os
+import asyncio
+import time
+import random
+import logging
+from pathlib import Path
 
 
 @dataclass
@@ -180,6 +185,193 @@ class OpenAIClient(LLMClient):
             raise RuntimeError(f"OpenAI API error: {e}") from e
 
 
+class ResilientLLMClient(LLMClient):
+    """Resilience wrapper adding retries, rate limiting, and API key rotation."""
+
+    def __init__(
+        self,
+        provider: str,
+        model: Optional[str] = None,
+        inner_kwargs: Optional[Dict[str, Any]] = None,
+        resilience: Optional[Dict[str, Any]] = None,
+    ):
+        self.provider = provider.lower()
+        self.model = model
+        self.inner_kwargs = inner_kwargs or {}
+        self.resilience = resilience or {}
+
+        rps = float(self.resilience.get("rps", 2.0))
+        burst = int(self.resilience.get("burst", 4))
+        concurrency = int(self.resilience.get("concurrency", burst))
+        self.max_retries = int(self.resilience.get("max_retries", 4))
+        self.base_backoff_ms = int(self.resilience.get("base_backoff_ms", 200))
+        self.max_backoff_ms = int(self.resilience.get("max_backoff_ms", 4000))
+
+        self._semaphore = asyncio.Semaphore(concurrency)
+        # token bucket
+        self._capacity = max(1, burst)
+        self._tokens = float(self._capacity)
+        self._refill_rate = float(rps)
+        self._last_refill = time.monotonic()
+
+        # Build inner clients per API key (if provided)
+        self._clients: List[LLMClient] = []
+        keys_env_var = self.resilience.get("keys_env_var")
+        keys: List[str] = []
+        if keys_env_var and os.getenv(keys_env_var):
+            keys = [k.strip() for k in os.getenv(keys_env_var, "").split(",") if k.strip()]
+        else:
+            if self.provider == "openai" and os.getenv("OPENAI_API_KEYS"):
+                keys = [k.strip() for k in os.getenv("OPENAI_API_KEYS", "").split(",") if k.strip()]
+            if self.provider in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"):
+                keys = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
+
+        if not keys:
+            # Single client fallback using default env
+            self._clients.append(self._create_provider_client())
+        else:
+            for key in keys:
+                client = self._create_provider_client(api_key=key)
+                self._clients.append(client)
+
+        self._client_idx = 0
+
+        # Setup logging to a dedicated file for LLM debugging
+        log_dir = Path(self.resilience.get("log_dir", "./logs"))
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self._logger = logging.getLogger("polaris.llm")
+        self._logger.setLevel(logging.INFO)
+        log_path = log_dir / "llm_debug.log"
+        if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "").endswith(str(log_path)) for h in self._logger.handlers):
+            fh = logging.FileHandler(str(log_path))
+            fh.setLevel(logging.INFO)
+            formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+            fh.setFormatter(formatter)
+            self._logger.addHandler(fh)
+
+    def _create_provider_client(self, api_key: Optional[str] = None) -> LLMClient:
+        if self.provider == "openai":
+            return OpenAIClient(api_key=api_key, model=self.model or self.inner_kwargs.get("model", "gpt-4"))
+        # default to google
+        return GoogleGeminiClient(api_key=api_key, model=self.model or self.inner_kwargs.get("model", "gemini-2.5-flash"))
+
+    def _current_client(self) -> LLMClient:
+        return self._clients[self._client_idx % len(self._clients)]
+
+    def _rotate_client(self) -> None:
+        self._client_idx = (self._client_idx + 1) % len(self._clients)
+
+    async def _acquire_token(self) -> None:
+        while True:
+            now = time.monotonic()
+            elapsed = now - self._last_refill
+            if elapsed > 0:
+                self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_rate)
+                self._last_refill = now
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return
+            await asyncio.sleep(0.01)
+
+    def _classify_retryable(self, err: Exception) -> tuple[bool, bool, str]:
+        msg = str(err).lower()
+        is_rate = any(x in msg for x in ["rate limit", "429", "too many requests", "quota"])
+        is_retryable = is_rate or any(x in msg for x in ["timeout", "timed out", "connection reset", "503", "502", "500"])
+        etype = "rate_limited" if is_rate else ("retryable" if is_retryable else "fatal")
+        return is_retryable, is_rate, etype
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024
+    ) -> LLMResponse:
+        await self._semaphore.acquire()
+        try:
+            await self._acquire_token()
+            attempt = 0
+            while True:
+                attempt += 1
+                start = time.monotonic()
+                try:
+                    resp = await self._current_client().generate(messages, temperature=temperature, max_tokens=max_tokens)
+                    latency_ms = int((time.monotonic() - start) * 1000)
+                    self._logger.info(
+                        "provider=%s model=%s status=success latency_ms=%d tokens=%s",
+                        self.provider,
+                        getattr(resp, "model", "unknown"),
+                        latency_ms,
+                        getattr(resp, "tokens_used", None),
+                    )
+                    # Also write response content for debugging
+                    try:
+                        preview = resp.content if len(resp.content) <= 2000 else resp.content[:2000]
+                        self._logger.info("response_preview=%s", preview)
+                    except Exception:
+                        pass
+                    return resp
+                except Exception as e:
+                    latency_ms = int((time.monotonic() - start) * 1000)
+                    is_retryable, is_rate, etype = self._classify_retryable(e)
+                    self._logger.info(
+                        "provider=%s model=%s status=error error_type=%s latency_ms=%d error=%s attempt=%d",
+                        self.provider,
+                        self.model or "unknown",
+                        etype,
+                        latency_ms,
+                        str(e).replace("\n", " ")[:512],
+                        attempt,
+                    )
+                    if is_rate and len(self._clients) > 1:
+                        self._rotate_client()
+                        self._logger.info("provider=%s action=key_rotation new_index=%d", self.provider, self._client_idx)
+                    if not is_retryable or attempt > self.max_retries:
+                        raise
+                    backoff = min(self.max_backoff_ms, self.base_backoff_ms * (2 ** (attempt - 1)))
+                    backoff = backoff * (0.5 + random.random())
+                    await asyncio.sleep(backoff / 1000.0)
+        finally:
+            self._semaphore.release()
+
+    def update_resilience(self, new_resilience: Dict[str, Any]) -> None:
+        """Hot-update resilience parameters at runtime.
+
+        Safe to call while requests are in-flight. New settings apply to subsequent calls.
+        """
+        if not isinstance(new_resilience, dict):
+            return
+        self.resilience.update(new_resilience)
+        # Update rate limiter
+        if 'burst' in new_resilience:
+            try:
+                new_cap = max(1, int(new_resilience['burst']))
+                self._capacity = new_cap
+                self._tokens = min(self._tokens, float(self._capacity))
+            except Exception:
+                pass
+        if 'rps' in new_resilience:
+            try:
+                self._refill_rate = float(new_resilience['rps'])
+            except Exception:
+                pass
+        # Update retries/backoff
+        for k in ('max_retries', 'base_backoff_ms', 'max_backoff_ms'):
+            if k in new_resilience:
+                try:
+                    setattr(self, k, int(new_resilience[k]))
+                except Exception:
+                    pass
+        # Update concurrency by swapping semaphore
+        if 'concurrency' in new_resilience:
+            try:
+                new_conc = int(new_resilience['concurrency'])
+                if new_conc > 0:
+                    self._semaphore = asyncio.Semaphore(new_conc)
+                # else ignore invalid
+            except Exception:
+                pass
+
+
 def create_llm_client(provider: str = "google", **kwargs) -> LLMClient:
     """
     Factory function to create LLM client.
@@ -191,6 +383,19 @@ def create_llm_client(provider: str = "google", **kwargs) -> LLMClient:
     Returns:
         LLMClient instance
     """
+    resilience: Optional[Dict[str, Any]] = kwargs.pop("resilience", None)
+    model = kwargs.get("model")
+
+    # If resilience is explicitly provided or env enables it, wrap with ResilientLLMClient
+    enabled_env = os.getenv("LLM_RESILIENCE_ENABLED", "0").lower() in ("1", "true", "yes")
+    has_multi_keys = (
+        (provider.lower() == "openai" and os.getenv("OPENAI_API_KEYS")) or
+        (provider.lower() in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"))
+    )
+
+    if resilience or enabled_env or has_multi_keys:
+        return ResilientLLMClient(provider=provider, model=model, inner_kwargs=kwargs, resilience=resilience)
+
     if provider.lower() == "google":
         return GoogleGeminiClient(**kwargs)
     elif provider.lower() == "openai":

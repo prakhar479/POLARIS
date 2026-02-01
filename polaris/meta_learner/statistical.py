@@ -2,7 +2,7 @@
 Statistical meta-learner with Bayesian optimization and Kalman filtering.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import uuid
 
@@ -15,6 +15,7 @@ from polaris.abstractions.meta_learner import (
 from polaris.abstractions.strategy import AdaptationStrategy
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger
+from polaris.abstractions.world_model import WorldModel
 
 
 class StatisticalMetaLearner(MetaLearner):
@@ -29,11 +30,14 @@ class StatisticalMetaLearner(MetaLearner):
         self,
         knowledge_store: KnowledgeStore,
         logger: Logger,
-        conservative_mode: bool = True
+        conservative_mode: bool = True,
+        world_model: Optional[WorldModel] = None,
     ):
         self.knowledge_store = knowledge_store
         self.logger = logger
         self.conservative_mode = conservative_mode
+        # Optional world model for incorporating predictive uncertainty
+        self.world_model = world_model
 
     async def analyze_performance(
         self,
@@ -70,6 +74,32 @@ class StatisticalMetaLearner(MetaLearner):
             'success_rate': success_rate,
             'time_window_hours': time_window_hours
         }
+
+        # Optionally augment with world model uncertainty information
+        if self.world_model is not None:
+            try:
+                wm_insights = await self.world_model.get_insights()
+                system_insights = wm_insights.get(system_id, {})
+
+                # Aggregate simple uncertainty metrics (e.g., average std across metrics)
+                std_values = []
+                for name, info in system_insights.items():
+                    if isinstance(info, dict) and 'std' in info:
+                        try:
+                            std_values.append(float(info['std']))
+                        except (TypeError, ValueError):
+                            continue
+
+                avg_std = sum(std_values) / len(std_values) if std_values else 0.0
+
+                regime_info = system_insights.get('regime') if isinstance(system_insights, dict) else None
+
+                insights['world_model_uncertainty'] = {
+                    'avg_metric_std': avg_std,
+                    'regime': regime_info,
+                }
+            except Exception:  # Best-effort, do not break analysis on WM issues
+                pass
 
         # Basic recommendations
         recommendations = []
@@ -114,6 +144,15 @@ class StatisticalMetaLearner(MetaLearner):
                         proposed = min(current * 1.10, max_val)
 
                     if proposed != current:
+                        base_confidence = 0.6
+                        wm_unc = analysis.insights.get('world_model_uncertainty', {})
+                        avg_std = wm_unc.get('avg_metric_std', 0.0) if isinstance(wm_unc, dict) else 0.0
+                        # If world model suggests high variability, be slightly more cautious
+                        if avg_std > 10.0:
+                            confidence = max(0.4, base_confidence - 0.1)
+                        else:
+                            confidence = base_confidence
+
                         proposals.append(ParameterProposal(
                             proposal_id=str(uuid.uuid4()),
                             parameter_path=param_path,
@@ -123,7 +162,7 @@ class StatisticalMetaLearner(MetaLearner):
                                 f"Low success rate ({analysis.success_rate:.2%}). "
                                 f"Increasing threshold to reduce adaptation frequency."
                             ),
-                            confidence=0.6,
+                            confidence=confidence,
                             expected_impact="May reduce false positives",
                             status=ProposalStatus.PENDING
                         ))

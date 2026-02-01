@@ -289,9 +289,10 @@ polaris = Polaris(
 ### Built-in Implementations
 - **ThresholdReactiveStrategy**: Triggers adaptations when metrics cross thresholds
 - **SWIMConnector**: Connects to SWIM exemplar system
-- **StatisticalWorldModel**: Uses mean/std for simple predictions
+- **StatisticalWorldModel**: Uses mean/std for simple predictions and, when enabled via configuration, adds lightweight Kalman-style smoothing and simple regime tracking ("low", "normal", "high") with uncertainty-aware reasoning.
 - **InMemoryKnowledgeStore**: Non-persistent storage for testing
-- **StatisticalMetaLearner**: Rule-based parameter optimization
+- **StatisticalMetaLearner**: Rule-based parameter optimization that can optionally consume world model insights (e.g., metric variability and regimes) to adjust proposal confidence.
+- **LLMMetaLearner**: LLM-powered optimization
 
 ### Extension Points Summary
 - **Connector**: Integrate new managed systems

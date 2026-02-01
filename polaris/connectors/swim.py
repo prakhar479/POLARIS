@@ -6,10 +6,11 @@ Connects Polaris to the SWIM exemplar system for self-adaptation.
 
 import asyncio
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
 from polaris.abstractions.connector import Connector
+from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
     SystemState,
     AdaptationAction,
@@ -28,11 +29,20 @@ class SWIMConnector(Connector):
     Communicates via TCP socket using line-based protocol.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 4242, timeout: float = 30.0):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 4242,
+        timeout: float = 30.0,
+        logger: Optional[Logger] = None,
+        metrics: Optional[MetricsCollector] = None,
+    ):
         self.host = host
         self.port = port
         self.timeout = timeout
         self._connected = False
+        self._logger = logger
+        self._metrics = metrics
 
     async def connect(self) -> bool:
         """Connect to SWIM system by testing connectivity."""
@@ -41,14 +51,37 @@ class SWIMConnector(Connector):
             response = await self._send_command("get_servers")
             int(response)  # Verify response is numeric
             self._connected = True
+            if self._logger:
+                self._logger.info(
+                    "SWIMConnector connected",
+                    host=self.host,
+                    port=self.port,
+                )
+            if self._metrics:
+                self._metrics.increment("polaris.connector.swim.connected")
             return True
         except Exception:
             self._connected = False
+            if self._logger:
+                self._logger.error(
+                    "SWIMConnector connection failed",
+                    error=str(Exception),
+                )
+            if self._metrics:
+                self._metrics.increment("polaris.connector.swim.connection_errors")
             return False
 
     async def disconnect(self) -> bool:
         """Disconnect from SWIM system."""
         self._connected = False
+        if self._logger:
+            self._logger.info(
+                "SWIMConnector disconnected",
+                host=self.host,
+                port=self.port,
+            )
+        if self._metrics:
+            self._metrics.increment("polaris.connector.swim.disconnected")
         return True
 
     async def get_system_id(self) -> str:
@@ -57,7 +90,13 @@ class SWIMConnector(Connector):
 
     async def collect_telemetry(self) -> SystemState:
         """Collect current state from SWIM."""
+        if self._metrics:
+            self._metrics.increment("polaris.connector.swim.telemetry_calls")
         if not self._connected:
+            if self._logger:
+                self._logger.warning("SWIMConnector collect_telemetry called while not connected")
+            if self._metrics:
+                self._metrics.increment("polaris.connector.swim.telemetry_not_connected")
             return SystemState(
                 system_id="swim",
                 timestamp=datetime.now(timezone.utc),
@@ -66,6 +105,7 @@ class SWIMConnector(Connector):
                 metadata={"error": "Not connected"},
             )
 
+        start_time = time.monotonic()
         try:
             metrics = {}
 
@@ -196,6 +236,12 @@ class SWIMConnector(Connector):
             # Debug: metrics collected successfully
             # print(f"Collected metrics: {metrics}")
 
+            if self._metrics:
+                duration = time.monotonic() - start_time
+                self._metrics.histogram(
+                    "polaris.connector.swim.telemetry_duration_seconds",
+                    duration,
+                )
             return SystemState(
                 system_id="swim",
                 timestamp=datetime.now(timezone.utc),
@@ -204,6 +250,13 @@ class SWIMConnector(Connector):
             )
 
         except Exception as e:
+            if self._logger:
+                self._logger.error(
+                    "SWIMConnector telemetry collection failed",
+                    error=str(e),
+                )
+            if self._metrics:
+                self._metrics.increment("polaris.connector.swim.telemetry_errors")
             return SystemState(
                 system_id="swim",
                 timestamp=datetime.now(timezone.utc),
@@ -222,6 +275,7 @@ class SWIMConnector(Connector):
                 error_message="Not connected to SWIM",
             )
 
+        start_time = time.monotonic()
         try:
             # Map action types to SWIM commands
             command = None
@@ -231,6 +285,8 @@ class SWIMConnector(Connector):
                 current = int(await self._send_command("get_servers"))
                 max_servers = int(await self._send_command("get_max_servers"))
                 if current >= max_servers:
+                    if self._metrics:
+                        self._metrics.increment("polaris.connector.swim.actions_validation_failed")
                     return ExecutionResult(
                         action_id=action.action_id,
                         status=ExecutionStatus.FAILED,
@@ -254,6 +310,8 @@ class SWIMConnector(Connector):
             elif action.action_type.upper() in ["SET_DIMMER", "ADJUST_QOS"]:
                 dimmer_value = action.parameters.get("value", 1.0)
                 if not 0.0 <= dimmer_value <= 1.0:
+                    if self._metrics:
+                        self._metrics.increment("polaris.connector.swim.actions_validation_failed")
                     return ExecutionResult(
                         action_id=action.action_id,
                         status=ExecutionStatus.FAILED,
@@ -263,6 +321,8 @@ class SWIMConnector(Connector):
                 command = f"set_dimmer {dimmer_value}"
 
             else:
+                if self._metrics:
+                    self._metrics.increment("polaris.connector.swim.actions_unsupported")
                 return ExecutionResult(
                     action_id=action.action_id,
                     status=ExecutionStatus.FAILED,
@@ -272,6 +332,24 @@ class SWIMConnector(Connector):
 
             # Execute command
             response = await self._send_command(command)
+
+            if self._metrics:
+                duration = time.monotonic() - start_time
+                self._metrics.histogram(
+                    "polaris.connector.swim.action_execution_duration_seconds",
+                    duration,
+                    tags={"action_type": action.action_type},
+                )
+                self._metrics.increment(
+                    "polaris.connector.swim.actions_executed",
+                    tags={"action_type": action.action_type, "status": ExecutionStatus.SUCCESS.value},
+                )
+            if self._logger:
+                self._logger.info(
+                    "SWIMConnector action executed successfully",
+                    action_type=action.action_type,
+                    command=command,
+                )
 
             return ExecutionResult(
                 action_id=action.action_id,
@@ -284,6 +362,23 @@ class SWIMConnector(Connector):
             )
 
         except Exception as e:
+            if self._metrics:
+                duration = time.monotonic() - start_time
+                self._metrics.histogram(
+                    "polaris.connector.swim.action_execution_duration_seconds",
+                    duration,
+                    tags={"action_type": action.action_type},
+                )
+                self._metrics.increment(
+                    "polaris.connector.swim.actions_executed",
+                    tags={"action_type": action.action_type, "status": ExecutionStatus.FAILED.value},
+                )
+            if self._logger:
+                self._logger.error(
+                    "SWIMConnector action execution failed",
+                    action_type=action.action_type,
+                    error=str(e),
+                )
             return ExecutionResult(
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
@@ -330,6 +425,7 @@ class SWIMConnector(Connector):
         Returns:
             Response from SWIM
         """
+        start_time = time.monotonic()
         try:
             # Open connection
             reader, writer = await asyncio.wait_for(
@@ -348,9 +444,26 @@ class SWIMConnector(Connector):
             writer.close()
             await writer.wait_closed()
 
+            if self._metrics:
+                duration = time.monotonic() - start_time
+                self._metrics.histogram(
+                    "polaris.connector.swim.command_duration_seconds",
+                    duration,
+                    tags={"command": command},
+                )
             return response
 
         except asyncio.TimeoutError:
+            if self._metrics:
+                self._metrics.increment(
+                    "polaris.connector.swim.command_timeouts",
+                    tags={"command": command},
+                )
             raise TimeoutError(f"Command '{command}' timed out")
         except Exception as e:
+            if self._metrics:
+                self._metrics.increment(
+                    "polaris.connector.swim.command_errors",
+                    tags={"command": command},
+                )
             raise ConnectionError(f"Command '{command}' failed: {e}")
