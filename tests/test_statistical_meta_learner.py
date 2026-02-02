@@ -25,6 +25,14 @@ class DummyStrategy(AdaptationStrategy):
     async def apply_parameters(self, parameters: Dict[str, Any]) -> None:  # pragma: no cover - not used here
         pass
 
+    async def assess(self, state, context):  # type: ignore[override]
+        """Minimal implementation to satisfy abstract interface; not used in these tests."""
+        return None
+
+    async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:  # type: ignore[override]
+        """Minimal implementation that always reports success; used indirectly by meta-learner tuning."""
+        return True
+
 
 @pytest.mark.asyncio
 async def test_analyze_performance_includes_world_model_uncertainty():

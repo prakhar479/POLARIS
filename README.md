@@ -115,6 +115,46 @@ observability:
 
 CLI options override config file settings.
 
+### LLM Strategies and Provider Selection
+
+Polaris supports multiple LLM-powered strategies:
+
+- `llm_reasoning`: single-shot LLM decision-making
+- `agentic_llm`: iterative tool-using loop with the LLM calling safe tools
+- `hybrid`: combine strategies, including LLM-based ones
+
+You can choose the LLM provider per strategy. Supported providers: `google` (Gemini, default) and `openai`.
+
+Example (agentic LLM strategy):
+
+```yaml
+strategy:
+  type: agentic_llm
+  agentic_llm:
+    provider: google   # or "openai"
+    steps_limit: 3
+    temperature: 0.1
+    tools:
+      enabled:
+        - get_recent_states
+        - summarize_metric_trends
+        - get_world_model_insights
+        - predict_outcome
+        - get_action_history
+        - list_supported_actions
+    resilience:
+      rps: 2
+      burst: 4
+      concurrency: 4
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+```
+
+For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `hybrid`, each `llm_reasoning` sub-strategy can specify its own provider under its block.
+
+The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
+
 ## Architecture
 
 Polaris follows a modular, interface-driven design:

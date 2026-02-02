@@ -44,10 +44,11 @@ class StrategyConfig:
     threshold: Optional[Dict[str, Any]] = None
     llm: Optional[Dict[str, Any]] = None
     hybrid: Optional[Dict[str, Any]] = None
+    agentic: Optional[Dict[str, Any]] = None
     
     def __post_init__(self):
         """Validate strategy configuration after initialization."""
-        supported_strategies = ["threshold", "llm_reasoning", "hybrid"]
+        supported_strategies = ["threshold", "llm_reasoning", "hybrid", "agentic_llm"]
         if self.type not in supported_strategies:
             raise ValueError(f"Unsupported strategy type '{self.type}'. Supported: {supported_strategies}")
         
@@ -96,6 +97,11 @@ class StrategyConfig:
                         float(s["priority"])
                     except Exception:
                         raise ValueError(f"Hybrid.strategies[{idx}].priority must be a number if provided")
+
+        # Validate agentic strategy parameters
+        if self.type == "agentic_llm":
+            if self.agentic is not None and not isinstance(self.agentic, dict):
+                raise ValueError("Agentic LLM strategy requires 'agentic_llm' configuration block to be a dict if provided")
 
 
 @dataclass
@@ -148,7 +154,8 @@ class PolarisConfig:
             type=strategy_data.get('type', 'threshold'),
             threshold=strategy_data.get('threshold'),
             llm=strategy_data.get('llm_reasoning'),
-            hybrid=strategy_data.get('hybrid')
+            hybrid=strategy_data.get('hybrid'),
+            agentic=strategy_data.get('agentic_llm')
         )
 
         return cls(

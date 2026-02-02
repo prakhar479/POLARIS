@@ -18,7 +18,7 @@ monitoring:
 
 # Adaptation Strategy
 strategy:
-  type: "threshold" # Options: threshold, llm_reasoning, hybrid
+  type: "threshold" # Options: threshold, llm_reasoning, hybrid, agentic_llm
 
   # Threshold Strategy Settings
   threshold:
@@ -40,6 +40,7 @@ strategy:
     system_description: "SWIM web application server pool"
     adaptation_goals: "Maintain performance with minimal resource usage"
     temperature: 0.1
+    provider: google  # Options: google (default), openai
     # resilience:
     #   rps: 2
     #   burst: 4
@@ -65,6 +66,7 @@ strategy:
   #         system_description: "SWIM web application server pool"
   #         adaptation_goals: "Maintain performance with minimal resource usage"
   #         temperature: 0.1
+  #         provider: openai
   #         resilience:
   #           rps: 2
   #           burst: 4
@@ -72,6 +74,27 @@ strategy:
   #           base_backoff_ms: 200
   #           max_backoff_ms: 4000
   #           concurrency: 4
+
+  # Agentic LLM Strategy Settings (uncomment to use)
+  # agentic_llm:
+  #   provider: google  # or "openai"
+  #   steps_limit: 3
+  #   temperature: 0.1
+  #   tools:
+  #     enabled:
+  #       - get_recent_states
+  #       - summarize_metric_trends
+  #       - get_world_model_insights
+  #       - predict_outcome
+  #       - get_action_history
+  #       - list_supported_actions  # connector-aware when supported
+  #   resilience:
+  #     rps: 2
+  #     burst: 4
+  #     concurrency: 4
+  #     max_retries: 4
+  #     base_backoff_ms: 200
+  #     max_backoff_ms: 4000
 
 # World Model (optional)
 world_model:

@@ -270,6 +270,7 @@ class StatisticalWorldModel(WorldModel):
         insights = {}
         for system_id, metrics in self._metric_history.items():
             insights[system_id] = {}
+            has_metric_insights = False
             for metric_name, values in metrics.items():
                 if len(values) >= 2:
                     insights[system_id][metric_name] = {
@@ -278,6 +279,16 @@ class StatisticalWorldModel(WorldModel):
                         'min': min(values),
                         'max': max(values)
                     }
+                    has_metric_insights = True
+
+            # Attach regime information only if we have at least one metric insight
+            regime_probs = self._regime_probs.get(system_id)
+            if has_metric_insights and regime_probs:
+                most_likely = max(regime_probs.items(), key=lambda x: x[1])
+                insights[system_id]["regime"] = {
+                    "probabilities": regime_probs,
+                    "most_likely": most_likely[0],
+                }
         if self._metrics:
             self._metrics.gauge(
                 "polaris.world_model.statistical.systems_with_insights",

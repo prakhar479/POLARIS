@@ -309,7 +309,8 @@ class Polaris:
                 
                 # Create LLM client (defaults to Google Gemini)
                 resilience_cfg = strategy_config.llm.get('resilience') if strategy_config.llm else None
-                llm_client = create_llm_client("google", resilience=resilience_cfg)
+                provider = strategy_config.llm.get('provider', 'google') if strategy_config.llm else 'google'
+                llm_client = create_llm_client(provider, resilience=resilience_cfg)
                 
                 return LLMReasoningStrategy(
                     llm_client=llm_client,
@@ -356,7 +357,8 @@ class Polaris:
 
                     elif s_type == 'llm_reasoning':
                         llm_cfg = s.get('llm_reasoning', {})
-                        llm_client = create_llm_client("google", resilience=llm_cfg.get('resilience'))
+                        provider = llm_cfg.get('provider', 'google')
+                        llm_client = create_llm_client(provider, resilience=llm_cfg.get('resilience'))
                         sub = LLMReasoningStrategy(
                             llm_client=llm_client,
                             system_description=llm_cfg.get('system_description', 'Managed system'),
@@ -385,6 +387,34 @@ class Polaris:
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to initialize hybrid strategy: {e}. Falling back to threshold strategy.")
+                return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+        
+        elif strategy_config.type == "agentic_llm":
+            try:
+                from polaris.strategies import AgenticLLMStrategy
+                from polaris.infrastructure.llm import create_llm_client
+
+                agent_conf = strategy_config.agentic or {}
+                steps_limit = int(agent_conf.get('steps_limit', 3))
+                temperature = float(agent_conf.get('temperature', 0.1))
+                allowed_tools = agent_conf.get('tools', {}).get('enabled') if isinstance(agent_conf.get('tools'), dict) else None
+
+                provider = agent_conf.get('provider', 'google')
+                llm_client = create_llm_client(provider, resilience=agent_conf.get('resilience'))
+
+                return AgenticLLMStrategy(
+                    llm_client=llm_client,
+                    knowledge_store=self.knowledge_store,
+                    world_model=self.world_model,
+                    connector_getter=self.registry.get,
+                    steps_limit=steps_limit,
+                    temperature=temperature,
+                    allowed_tools=allowed_tools,
+                    logger=self.logger,
+                    metrics=strategy_metrics,
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize agentic LLM strategy: {e}. Falling back to threshold strategy.")
                 return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
         
         else:
