@@ -12,6 +12,14 @@ systems:
     monitoring:
       collection_interval: 5 # seconds
 
+  - id: "wildfire"
+    connector_type: "wildfire"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 5000        # or use base_url: "http://localhost:5000"
+      timeout: 10.0
+
 # Monitoring Configuration
 monitoring:
   interval_seconds: 30 # How often to run the monitoring loop
@@ -31,6 +39,12 @@ strategy:
         low: 25.0
       average_response_time:
         high: 500.0 # milliseconds
+    # thresholds:
+    #   fire_cells_burning_ratio:
+    #     high: 70.0
+    #     low: 10.0
+    #   mr1_avg:
+    #     low: 0.2
 
     cooldown_seconds: 60
     enabled: true

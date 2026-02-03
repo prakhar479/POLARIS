@@ -25,7 +25,7 @@ class SystemConfig:
             raise ValueError("System ID cannot be empty")
         
         # Validate connector type
-        supported_connectors = ["swim"]  # Add more as implemented
+        supported_connectors = ["swim", "wildfire"]  # Add more as implemented
         if self.connector_type not in supported_connectors:
             raise ValueError(f"Unsupported connector type '{self.connector_type}'. Supported: {supported_connectors}")
         
@@ -35,6 +35,15 @@ class SystemConfig:
                 raise ValueError("SWIM connection port must be an integer")
             if "port" in self.connection and not (1 <= self.connection["port"] <= 65535):
                 raise ValueError("SWIM connection port must be between 1 and 65535")
+
+        # Validate connection parameters for Wildfire
+        if self.connector_type == "wildfire" and self.connection:
+            if "base_url" in self.connection and not isinstance(self.connection["base_url"], str):
+                raise ValueError("Wildfire base_url must be a string")
+            if "port" in self.connection and not isinstance(self.connection["port"], int):
+                raise ValueError("Wildfire connection port must be an integer")
+            if "port" in self.connection and not (1 <= self.connection["port"] <= 65535):
+                raise ValueError("Wildfire connection port must be between 1 and 65535")
 
 
 @dataclass

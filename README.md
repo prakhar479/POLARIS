@@ -49,6 +49,15 @@ polaris = Polaris(
 )
 ```
 
+## Supported Connectors
+
+Polaris includes built-in connectors for common exemplar systems:
+
+- **SWIM**: Connects to SWIM (Simulated Web Infrastructure Manager) via TCP.
+- **Wildfire**: Connects to the WildFire multi-UAV fire suppression simulation via REST API.
+
+See [CONFIGURATION.md](./CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
+
 ## CLI Usage
 
 ### Basic Commands

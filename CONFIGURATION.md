@@ -14,7 +14,7 @@ monitoring:
 # Managed systems
 systems:
   - id: "system-name"
-    connector_type: "swim"  # Currently supported: swim
+    connector_type: "swim"  # Currently supported: swim, wildfire
     enabled: true
     connection:
       host: "localhost"
@@ -119,6 +119,97 @@ observability:
       meta_learner: true
 ```
 
+## Connectors
+
+### SWIM Connector
+
+The SWIM connector connects to a SWIM (Simulated Web Infrastructure Manager) server via TCP.
+
+```yaml
+systems:
+  - id: "swim"
+    connector_type: "swim"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 4242
+    monitoring:
+      collection_interval: 5
+```
+
+**Connection parameters:**
+- `host` (string): SWIM server host. Default: `"localhost"`
+- `port` (int): SWIM server port. Default: `4242`
+
+**Metrics provided:**
+- `server_count`, `active_servers`, `max_servers`
+- `dimmer`
+- `basic_response_time`, `basic_throughput`
+- `optional_response_time`, `optional_throughput`
+- `average_response_time`, `average_utilization`
+
+**Supported actions:**
+- `scale_up` / `add_server`
+- `scale_down` / `remove_server`
+- `set_dimmer` / `adjust_qos`
+
+### Wildfire Connector
+
+The Wildfire connector connects to a WildFire simulation REST API (Flask adapter).
+
+```yaml
+systems:
+  - id: "wildfire"
+    connector_type: "wildfire"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 5000
+      # OR use full base_url
+      # base_url: "http://localhost:5000"
+      timeout: 10.0
+      session_id: null  # optional: reuse an existing session
+    monitoring:
+      collection_interval: 5
+```
+
+**Connection parameters:**
+- `host` (string): Adapter host. Default: `"localhost"`
+- `port` (int): Adapter port. Default: `5000`
+- `base_url` (string): Full base URL. Overrides `host`/`port` if provided.
+- `timeout` (float): HTTP request timeout in seconds. Default: `10.0`
+- `session_id` (string, optional): Reuse an existing session ID. If omitted and `auto_create_session` is true, a new session is created automatically.
+
+**Metrics provided:**
+- `timestep` (int): Current simulation timestep
+- `num_agents` (int): Number of UAV agents
+- `mr1_avg` (float): Average MR1 (detection reward) across agents
+- `mr2_value` (float): MR2 (collision avoidance) metric
+- `fire_cells_burning` (int): Number of currently burning cells
+- `fire_cells_burning_ratio` (float): Percentage of fire cells burning
+
+**Supported actions:**
+- `wildfire_reset`: Reset simulation to timestep 0
+- `wildfire_pause`: Pause simulation
+- `wildfire_resume`: Resume simulation
+- `wildfire_step`: Execute a single simulation step (no actions)
+- `wildfire_move`: Execute UAV moves. Parameters:
+  ```yaml
+  parameters:
+    actions:
+      - uav: 0
+        move: "north"  # one of: north, south, east, west, hold
+      - uav: 1
+        move: "hold"
+  ```
+- `wildfire_batch_actions`: Execute multiple timesteps with per-step action lists. Parameters:
+  ```yaml
+  parameters:
+    actions:
+      - [ {uav: 0, move: "north"}, {uav: 1, move: "east"} ]
+      - [ {uav: 0, move: "south"}, {uav: 1, move: "hold"} ]
+  ```
+
 ## Environment Variables
 
 ### Required Environment Variables
@@ -156,8 +247,8 @@ The framework validates configuration at startup:
 
 ### System Configuration Validation
 - `id` cannot be empty
-- `connector_type` must be supported ("swim" currently)
-- `port` must be a valid integer between 1-65535
+- `connector_type` must be supported ("swim", "wildfire" currently)
+- `port` must be a valid integer between 1-65535 (for connectors that use it)
 
 ### Strategy Configuration Validation
 - `type` must be one of: "threshold", "llm_reasoning", "hybrid"

@@ -440,6 +440,26 @@ class Polaris:
                 )
                 connectors.append(connector)
 
+            elif system.connector_type == "wildfire":
+                from polaris.connectors import WildfireConnector
+                connector_metrics = self.metrics if self._should_collect_component_metrics('connectors') else None
+
+                base_url = system.connection.get('base_url')
+                if not base_url:
+                    host = system.connection.get('host', 'localhost')
+                    port = system.connection.get('port', 5000)
+                    base_url = f"http://{host}:{port}"
+
+                connector = WildfireConnector(
+                    base_url=base_url,
+                    system_id=system.id,
+                    timeout=system.connection.get('timeout', 10.0),
+                    session_id=system.connection.get('session_id'),
+                    logger=self.logger,
+                    metrics=connector_metrics,
+                )
+                connectors.append(connector)
+
         return connectors
 
     async def run(self) -> None:
