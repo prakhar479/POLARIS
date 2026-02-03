@@ -43,6 +43,19 @@ strategy:
     system_description: "Web application server pool"
     adaptation_goals: "Maintain performance with minimal resource usage"
     temperature: 0.1
+    # Optional: global system prompt template (supports {system_id}, {system_description}, {adaptation_goals})
+    # system_prompt: |
+    #   You are an intelligent adaptation controller for a self-adaptive system.
+    #   System Description: {system_description}
+    #   Adaptation Goals: {adaptation_goals}
+    #   Managed System ID: {system_id}
+    #
+    # Optional: per-system prompt overrides keyed by systems[].id (e.g. "swim", "wildfire")
+    # per_system_prompts:
+    #   swim: |
+    #     You are an adaptation controller for the SWIM web application server pool...
+    #   wildfire: |
+    #     You are an adaptation controller for the Wildfire UAV-fire simulation...
 
 # World model configuration
 world_model:
@@ -70,7 +83,7 @@ knowledge:
 # Meta-learner configuration
 meta_learner:
   enabled: true
-  type: "statistical"
+  type: "statistical"  # Options: statistical, llm
   analysis_interval_hours: 1.0
   conservative_mode: true
 
@@ -81,6 +94,45 @@ meta_learner:
   # estimates) into analysis.insights["world_model_uncertainty"], and
   # uses this to slightly adjust proposal confidence (more cautious
   # when variability is high).
+
+# Example: LLM-based meta-learner configuration
+# meta_learner:
+#   enabled: true
+#   type: "llm"
+#   analysis_interval_hours: 1.0   # Controls how often the meta-learning loop runs
+#   llm:
+#     provider: google             # or "openai"
+#     temperature: 0.1             # LLM temperature for analysis and proposals
+#     auto_apply: false            # Whether to auto-apply approved proposals
+#
+#     # Optional: global prompts used for *all* systems
+#     # analysis_system_prompt: |
+#     #   You are an expert system analyst for self-adaptive systems...
+#     # optimization_system_prompt: |
+#     #   You are an expert parameter optimizer for self-adaptive systems...
+#
+#     # Optional: per-system overrides keyed by systems[].id (e.g. "swim", "wildfire").
+#     # These take precedence over the global prompts for that system.
+#     # per_system_prompts:
+#     #   swim:
+#     #     analysis_system_prompt: |
+#     #       Analyze SWIM-specific performance metrics (response time, throughput, utilization)...
+#     #     optimization_system_prompt: |
+#     #       Propose threshold and cooldown changes for SWIM's adaptation strategy...
+#     #   wildfire:
+#     #     analysis_system_prompt: |
+#     #       Analyze Wildfire-specific metrics (fire_cells_burning_ratio, mr1_avg, safety)...
+#     #     optimization_system_prompt: |
+#     #       Propose parameter changes that balance fire containment and UAV safety...
+#
+#     # Optional: LLM resilience configuration (same semantics as strategy.llm_reasoning.resilience)
+#     # resilience:
+#     #   rps: 2
+#     #   burst: 4
+#     #   concurrency: 4
+#     #   max_retries: 4
+#     #   base_backoff_ms: 200
+#     #   max_backoff_ms: 4000
 
 # Observability configuration
 observability:
@@ -330,6 +382,25 @@ strategy:
     system_description: "SWIM web application server pool"
     adaptation_goals: "Maintain performance with minimal resource usage"
     temperature: 0.1  # Lower = more deterministic
+    # Optional: global system prompt template. The following placeholders are supported:
+    #   {system_id}, {system_description}, {adaptation_goals}
+    # system_prompt: |
+    #   You are an intelligent adaptation controller for a self-adaptive system.
+    #   System Description: {system_description}
+    #   Adaptation Goals: {adaptation_goals}
+    #   Managed System ID: {system_id}
+    #
+    # Optional: per-system prompt overrides keyed by systems[].id (e.g. "swim", "wildfire").
+    # When present, these take precedence over system_prompt for that system_id.
+    # per_system_prompts:
+    #   swim: |
+    #     You are an adaptation controller for the SWIM web application server pool.
+    #     Focus on response time, throughput, and server utilization when
+    #     deciding whether to scale up/down or adjust QoS dimmer settings.
+    #   wildfire: |
+    #     You are an adaptation controller for the Wildfire UAV-fire simulation.
+    #     Focus on fire_cells_burning_ratio, mr1_avg, and safety metrics when
+    #     deciding which wildfire_* actions to trigger.
 ```
 
 **Requirements**: 
@@ -432,7 +503,7 @@ When Polaris is started with a `config_path`, it detects configuration file chan
 
 What is hot-reloaded:
 - Threshold strategy: `cooldown_seconds` and per-metric `thresholds.{metric}.{high|low}`
-- LLM reasoning: `temperature`, `system_description`, and LLM `resilience` (when using the resilient client)
+- LLM reasoning: `temperature`, `system_description`, `system_prompt`, `per_system_prompts`, and LLM `resilience` (when using the resilient client)
 - Hybrid strategy: `selection_mode`, `min_confidence`, and sub-strategy parameters (index-matched), including resilience for LLM sub-strategies
 
 Limitations:

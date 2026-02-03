@@ -29,6 +29,8 @@ class LLMReasoningStrategy(AdaptationStrategy):
         system_description: str = "A web application server",
         adaptation_goals: str = "Maintain performance and availability",
         temperature: float = 0.1,
+        system_prompt: Optional[str] = None,
+        per_system_prompts: Optional[Dict[str, str]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None
     ):
@@ -47,6 +49,8 @@ class LLMReasoningStrategy(AdaptationStrategy):
         self.system_description = system_description
         self.adaptation_goals = adaptation_goals
         self.temperature = temperature
+        self._system_prompt_template = system_prompt
+        self._per_system_prompts = per_system_prompts or {}
         self.logger = logger
         self.metrics = metrics
         self._adaptation_count = 0
@@ -77,7 +81,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
 
         # Call LLM
         messages = [
-            LLMMessage(role="system", content=self._get_system_prompt()),
+            LLMMessage(role="system", content=self._get_system_prompt(state.system_id)),
             LLMMessage(role="user", content=prompt)
         ]
 
@@ -148,8 +152,28 @@ class LLMReasoningStrategy(AdaptationStrategy):
                 )
             return None
 
-    def _get_system_prompt(self) -> str:
-        """Get system prompt for LLM."""
+    def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
+        """Get system prompt for LLM, with optional system-specific overrides."""
+
+        # Per-system override if provided
+        if system_id and self._per_system_prompts:
+            override = self._per_system_prompts.get(system_id)
+            if override:
+                return override
+
+        # Global template override, optionally formatted
+        if self._system_prompt_template:
+            try:
+                return self._system_prompt_template.format(
+                    system_id=system_id or "",
+                    system_description=self.system_description,
+                    adaptation_goals=self.adaptation_goals,
+                )
+            except Exception:
+                # If formatting fails, fall back to the raw template
+                return self._system_prompt_template
+
+        # Default generic prompt
         return f"""You are an intelligent adaptation controller for a self-adaptive system.
 
 System Description: {self.system_description}
@@ -410,6 +434,11 @@ Should this system be adapted right now? Analyze the state and provide your deci
             await self.update_parameter("temperature", config['temperature'])
         if 'system_description' in config:
             await self.update_parameter("system_description", config['system_description'])
+
+        if 'system_prompt' in config:
+            self._system_prompt_template = config['system_prompt']
+        if 'per_system_prompts' in config and isinstance(config['per_system_prompts'], dict):
+            self._per_system_prompts = config['per_system_prompts']
 
         resil = config.get('resilience')
         if resil and hasattr(self.llm, "update_resilience"):

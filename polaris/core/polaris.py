@@ -110,9 +110,22 @@ class Polaris:
             from polaris.strategies import ThresholdReactiveStrategy
             self.strategy = ThresholdReactiveStrategy()
 
-        # Set up meta-learner if enabled
-        self.meta_learner = meta_learner if (
-            enable_meta_learning or meta_learner) else None
+        # Set up meta-learner (explicit instance takes precedence over config)
+        self.meta_learner = meta_learner if meta_learner is not None else None
+
+        # Default meta-learning interval (seconds)
+        self._meta_learning_interval_seconds = 3600
+
+        # If no explicit meta-learner was provided, optionally create from config
+        if self.meta_learner is None:
+            meta_cfg = getattr(self.config, 'meta_learner', None)
+            meta_enabled = False
+            if isinstance(meta_cfg, dict):
+                meta_enabled = bool(meta_cfg.get('enabled', False))
+
+            # Backwards-compatible behavior: allow enable_meta_learning flag
+            if enable_meta_learning or meta_enabled:
+                self.meta_learner = self._create_meta_learner_from_config(meta_cfg)
 
         # Set up registry and connectors
         registry_metrics = self.metrics if self._should_collect_component_metrics('registry') else None
@@ -317,6 +330,8 @@ class Polaris:
                     system_description=strategy_config.llm.get('system_description', 'Managed system'),
                     adaptation_goals=strategy_config.llm.get('adaptation_goals', 'Maintain optimal performance'),
                     temperature=strategy_config.llm.get('temperature', 0.1),
+                    system_prompt=strategy_config.llm.get('system_prompt'),
+                    per_system_prompts=strategy_config.llm.get('per_system_prompts'),
                     logger=self.logger,
                     metrics=strategy_metrics
                 )
@@ -364,6 +379,8 @@ class Polaris:
                             system_description=llm_cfg.get('system_description', 'Managed system'),
                             adaptation_goals=llm_cfg.get('adaptation_goals', 'Maintain optimal performance'),
                             temperature=llm_cfg.get('temperature', 0.1),
+                            system_prompt=llm_cfg.get('system_prompt'),
+                            per_system_prompts=llm_cfg.get('per_system_prompts'),
                             logger=self.logger,
                             metrics=strategy_metrics
                         )
@@ -377,6 +394,78 @@ class Polaris:
                 if not sub_strategies:
                     # Safety fallback
                     return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+
+    def _create_meta_learner_from_config(self, meta_config: Optional[Dict[str, Any]]) -> Optional[MetaLearner]:
+        """Create meta-learner from configuration.
+
+        Supports both statistical and LLM-based meta-learners. When an
+        analysis_interval_hours value is provided, it is used to configure
+        the background meta-learning loop interval.
+        """
+
+        if not isinstance(meta_config, dict):
+            return None
+
+        # Configure meta-learning loop interval in seconds (default 1 hour)
+        try:
+            interval_hours = float(meta_config.get('analysis_interval_hours', 1.0))
+            if interval_hours > 0:
+                self._meta_learning_interval_seconds = interval_hours * 3600.0
+        except Exception:
+            # Keep default on any parsing issue
+            self._meta_learning_interval_seconds = 3600.0
+
+        meta_type = meta_config.get('type', 'statistical')
+
+        # Reuse metrics component flag for meta-learner
+        meta_metrics = self.metrics if self._should_collect_component_metrics('meta_learner') else None
+
+        if meta_type == 'statistical':
+            from polaris.meta_learner import StatisticalMetaLearner
+
+            conservative_mode = bool(meta_config.get('conservative_mode', True))
+            return StatisticalMetaLearner(
+                knowledge_store=self.knowledge_store,
+                logger=self.logger,
+                conservative_mode=conservative_mode,
+                world_model=self.world_model,
+            )
+
+        if meta_type == 'llm':
+            try:
+                from polaris.meta_learner import LLMMetaLearner
+                from polaris.infrastructure.llm import create_llm_client
+
+                llm_cfg = meta_config.get('llm', {}) or {}
+
+                provider = llm_cfg.get('provider', 'google')
+                resilience_cfg = llm_cfg.get('resilience')
+                llm_client = create_llm_client(provider, resilience=resilience_cfg)
+
+                temperature = float(llm_cfg.get('temperature', 0.1))
+                auto_apply = bool(llm_cfg.get('auto_apply', False))
+
+                analysis_prompt = llm_cfg.get('analysis_system_prompt')
+                optimization_prompt = llm_cfg.get('optimization_system_prompt')
+                per_system_prompts = llm_cfg.get('per_system_prompts')
+
+                return LLMMetaLearner(
+                    llm_client=llm_client,
+                    knowledge_store=self.knowledge_store,
+                    logger=self.logger,
+                    auto_apply=auto_apply,
+                    temperature=temperature,
+                    analysis_system_prompt=analysis_prompt,
+                    optimization_system_prompt=optimization_prompt,
+                    per_system_prompts=per_system_prompts,
+                    metrics=meta_metrics,
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize LLM meta-learner from config: {e}")
+                return None
+
+        self.logger.warning(f"Unknown meta_learner type '{meta_type}'. Meta-learning will be disabled.")
+        return None
 
                 return HybridStrategy(
                     strategies=sub_strategies,
@@ -708,7 +797,8 @@ class Polaris:
         )
         self.metrics.gauge(
             "polaris.monitoring.systems_processed",
-            systems_processed,
+            syst# Sleep eccording to configured analysis interval (defaults to 1 hour)
+                ams_processed,self._meta_learning_itral_scnds)
         )
         self.metrics.gauge(
             "polaris.monitoring.adaptations_executed",

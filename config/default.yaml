@@ -55,6 +55,25 @@ strategy:
     adaptation_goals: "Maintain performance with minimal resource usage"
     temperature: 0.1
     provider: google  # Options: google (default), openai
+    # Optional: global system prompt template (supports {system_id}, {system_description}, {adaptation_goals})
+    # system_prompt: |
+    #   You are an intelligent adaptation controller for a self-adaptive system.
+    #   System Description: {system_description}
+    #   Adaptation Goals: {adaptation_goals}
+    #   Managed System ID: {system_id}
+    #   ...
+    #
+    # Optional: per-system prompt overrides keyed by systems[].id (e.g. "swim", "wildfire")
+    # per_system_prompts:
+    #   swim: |
+    #     You are an adaptation controller for the SWIM web application server pool.
+    #     Focus on response time, throughput, and server utilization when deciding
+    #     whether to scale up/down or adjust QoS dimmer settings.
+    #   wildfire: |
+    #     You are an adaptation controller for the Wildfire UAV-fire simulation.
+    #     Focus on fire_cells_burning_ratio, mr1_avg, and safety metrics when
+    #     deciding which wildfire_* actions to trigger.
+    #
     # resilience:
     #   rps: 2
     #   burst: 4
@@ -81,6 +100,14 @@ strategy:
   #         adaptation_goals: "Maintain performance with minimal resource usage"
   #         temperature: 0.1
   #         provider: openai
+  #         # Optional: system_prompt / per_system_prompts as in top-level llm_reasoning
+  #         # system_prompt: | 
+  #         #   ...
+  #         # per_system_prompts:
+  #         #   swim: |
+  #         #     ...
+  #         #   wildfire: |
+  #         #     ...
   #         resilience:
   #           rps: 2
   #           burst: 4
@@ -146,6 +173,41 @@ meta_learner:
   # estimates) into analysis.insights["world_model_uncertainty"], and
   # uses this to slightly adjust proposal confidence (more cautious
   # when variability is high).
+
+  # Example: LLM-based meta-learner (alternative to statistical)
+  # type: "llm"
+  # analysis_interval_hours: 1.0
+  # llm:
+  #   provider: google  # or "openai"
+  #   temperature: 0.1
+  #   auto_apply: false  # whether to auto-apply approved proposals
+  #
+  #   # Optional: global analysis/optimization prompts
+  #   # analysis_system_prompt: |
+  #   #   You are an expert system analyst for self-adaptive systems...
+  #   # optimization_system_prompt: |
+  #   #   You are an expert parameter optimizer for self-adaptive systems...
+  #   #
+  #   # Optional: per-system prompt overrides keyed by systems[].id (e.g. "swim", "wildfire")
+  #   # per_system_prompts:
+  #   #   swim:
+  #   #     analysis_system_prompt: |
+  #   #       Analyze SWIM-specific performance metrics (response time, throughput, utilization)...
+  #   #     optimization_system_prompt: |
+  #   #       Propose threshold and cooldown changes for SWIM's adaptation strategy...
+  #   #   wildfire:
+  #   #     analysis_system_prompt: |
+  #   #       Analyze Wildfire-specific metrics (fire_cells_burning_ratio, mr1_avg, safety)...
+  #   #     optimization_system_prompt: |
+  #   #       Propose parameter changes that balance fire containment and UAV safety...
+  #   #
+  #   # resilience:
+  #   #   rps: 2
+  #   #   burst: 4
+  #   #   concurrency: 4
+  #   #   max_retries: 4
+  #   #   base_backoff_ms: 200
+  #   #   max_backoff_ms: 4000
 
 # Observability
 observability:

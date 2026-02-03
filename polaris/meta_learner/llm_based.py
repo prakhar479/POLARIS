@@ -34,6 +34,9 @@ class LLMMetaLearner(MetaLearner):
         logger: Logger,
         auto_apply: bool = False,
         temperature: float = 0.1,
+        analysis_system_prompt: Optional[str] = None,
+        optimization_system_prompt: Optional[str] = None,
+        per_system_prompts: Optional[Dict[str, Dict[str, str]]] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
         """
@@ -52,6 +55,9 @@ class LLMMetaLearner(MetaLearner):
         self.auto_apply = auto_apply
         self.temperature = temperature
         self.metrics = metrics
+        self.analysis_system_prompt = analysis_system_prompt
+        self.optimization_system_prompt = optimization_system_prompt
+        self._per_system_prompts = per_system_prompts or {}
 
     async def analyze_performance(
         self,
@@ -99,7 +105,7 @@ class LLMMetaLearner(MetaLearner):
         try:
             # Call LLM for analysis
             messages = [
-                LLMMessage(role="system", content=self._get_system_prompt()),
+                LLMMessage(role="system", content=self._get_system_prompt(system_id)),
                 LLMMessage(role="user", content=analysis_prompt)
             ]
 
@@ -192,7 +198,7 @@ class LLMMetaLearner(MetaLearner):
         try:
             messages = [
                 LLMMessage(role="system",
-                           content=self._get_optimization_system_prompt()),
+                           content=self._get_optimization_system_prompt(analysis.system_id)),
                 LLMMessage(role="user", content=prompt)
             ]
 
@@ -279,8 +285,23 @@ class LLMMetaLearner(MetaLearner):
 
         return validated
 
-    def _get_system_prompt(self) -> str:
-        """System prompt for performance analysis."""
+    def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
+        """System prompt for performance analysis, with optional system-specific overrides."""
+
+        # Per-system override if provided
+        if system_id and self._per_system_prompts:
+            per_system = self._per_system_prompts.get(system_id, {})
+            override = per_system.get('analysis_system_prompt')
+            if override:
+                return override
+
+        # Global analysis prompt override
+        if self.analysis_system_prompt:
+            try:
+                return self.analysis_system_prompt.format(system_id=system_id or "")
+            except Exception:
+                return self.analysis_system_prompt
+
         return """You are an expert system analyst for self-adaptive systems.
 
 Analyze the historical performance data and identify:
@@ -298,8 +319,23 @@ Respond in JSON format:
 
 Be thorough and data-driven in your analysis."""
 
-    def _get_optimization_system_prompt(self) -> str:
-        """System prompt for parameter optimization."""
+    def _get_optimization_system_prompt(self, system_id: Optional[str] = None) -> str:
+        """System prompt for parameter optimization, with optional system-specific overrides."""
+
+        # Per-system override if provided
+        if system_id and self._per_system_prompts:
+            per_system = self._per_system_prompts.get(system_id, {})
+            override = per_system.get('optimization_system_prompt')
+            if override:
+                return override
+
+        # Global optimization prompt override
+        if self.optimization_system_prompt:
+            try:
+                return self.optimization_system_prompt.format(system_id=system_id or "")
+            except Exception:
+                return self.optimization_system_prompt
+
         return """You are an expert parameter optimizer for self-adaptive systems.
 
 Given performance analysis and tunable parameters, propose specific parameter changes to improve system performance.
