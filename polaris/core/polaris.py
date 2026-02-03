@@ -519,139 +519,22 @@ class Polaris:
 
         while self._running:
             try:
-                # Apply hot-reload if config file changed
                 await self._maybe_hot_reload_config()
                 loop_start = datetime.now(timezone.utc)
                 systems_processed = 0
                 adaptations_executed = 0
-                
-                # Collect telemetry from all systems
+
                 for connector in self.registry.all():
-                    try:
-                        # Collect current state
-                        state = await connector.collect_telemetry()
-                        systems_processed += 1
-                        
-                        # Track telemetry collection
-                        if self.metrics and self._should_collect_component_metrics('monitoring_loop'):
-                            self.metrics.increment("polaris.telemetry.collected", 
-                                                 tags={"system_id": state.system_id})
+                    result = await self._process_system_iteration(connector)
+                    systems_processed += result["systems_processed"]
+                    adaptations_executed += result["adaptations_executed"]
 
-                        # Store in knowledge base
-                        if self.knowledge_store:
-                            await self.knowledge_store.store_state(state)
-                            if self.metrics and self._should_collect_component_metrics('knowledge_store'):
-                                self.metrics.increment("polaris.knowledge.state_stored",
-                                                     tags={"system_id": state.system_id})
+                self._record_monitoring_loop_metrics(
+                    loop_start,
+                    systems_processed,
+                    adaptations_executed,
+                )
 
-                        # Update world model
-                        if self.world_model:
-                            await self.world_model.update(state)
-                            if self.metrics and self._should_collect_component_metrics('world_model'):
-                                self.metrics.increment("polaris.world_model.updated",
-                                                     tags={"system_id": state.system_id})
-
-                        # Publish telemetry event
-                        await self.event_bus.publish(TelemetryEvent(
-                            system_id=state.system_id,
-                            state=state,
-                            timestamp=state.timestamp
-                        ))
-                        if self.metrics and self._should_collect_component_metrics('event_bus'):
-                            self.metrics.increment("polaris.events.telemetry_published",
-                                                 tags={"system_id": state.system_id})
-
-                        # Assess if adaptation is needed (only if strategy exists)
-                        if self.strategy:
-                            from polaris.abstractions.strategy import AdaptationContext
-
-                            context = AdaptationContext(
-                                system_id=state.system_id,
-                                historical_states=[],
-                                world_model_insights=await self.world_model.get_insights() if self.world_model else None
-                            )
-
-                            action = await self.strategy.assess(state, context)
-                            if self.metrics and self._should_collect_component_metrics('strategy'):
-                                self.metrics.increment("polaris.strategy.assessments",
-                                                     tags={"system_id": state.system_id})
-
-                            if action:
-                                self.logger.info(
-                                    f"Adaptation proposed for {state.system_id}: {action.action_type}",
-                                    action_id=action.action_id
-                                )
-                                if self.metrics and self._should_collect_component_metrics('core_framework'):
-                                    self.metrics.increment("polaris.adaptations.proposed",
-                                                         tags={"system_id": state.system_id, 
-                                                               "action_type": action.action_type})
-
-                                # Validate action
-                                if await connector.validate_action(action):
-                                    # Execute action
-                                    result = await connector.execute_action(action)
-                                    adaptations_executed += 1
-                                    
-                                    # Track execution result
-                                    if self.metrics and self._should_collect_component_metrics('core_framework'):
-                                        self.metrics.increment("polaris.adaptations.executed",
-                                                             tags={"system_id": state.system_id,
-                                                                   "action_type": action.action_type,
-                                                                   "status": result.status.value})
-
-                                    # Store result
-                                    if self.knowledge_store:
-                                        await self.knowledge_store.store_action(action, result)
-
-                                    # Notify strategy
-                                    await self.strategy.on_action_executed(action, result)
-
-                                    # Publish adaptation event
-                                    await self.event_bus.publish(AdaptationEvent(
-                                        action=action,
-                                        result=result,
-                                        timestamp=result.completed_at
-                                    ))
-                                    if self.metrics and self._should_collect_component_metrics('event_bus'):
-                                        self.metrics.increment("polaris.events.adaptation_published",
-                                                             tags={"system_id": state.system_id})
-
-                                    self.logger.info(
-                                        f"Adaptation executed: {action.action_type} -> {result.status.value}",
-                                        action_id=action.action_id
-                                    )
-                                else:
-                                    self.logger.warning(
-                                        f"Action validation failed for {action.action_type}",
-                                        action_id=action.action_id
-                                    )
-                                    if self.metrics and self._should_collect_component_metrics('core_framework'):
-                                        self.metrics.increment("polaris.adaptations.validation_failed",
-                                                             tags={"system_id": state.system_id,
-                                                                   "action_type": action.action_type})
-
-                    except Exception as e:
-                        system_id = await connector.get_system_id()
-                        self.logger.error(
-                            f"Error monitoring system {system_id}: {e}",
-                            error=str(e)
-                        )
-                        if self.metrics and self._should_collect_component_metrics('monitoring_loop'):
-                            self.metrics.increment("polaris.monitoring.errors",
-                                                 tags={"system_id": system_id})
-
-                # Record loop metrics
-                if self.metrics and self._should_collect_component_metrics('monitoring_loop'):
-                    loop_duration = (datetime.now(timezone.utc) - loop_start).total_seconds()
-                    self.metrics.histogram("polaris.monitoring.loop_duration_seconds", loop_duration)
-                    self.metrics.gauge("polaris.monitoring.systems_processed", systems_processed)
-                    self.metrics.gauge("polaris.monitoring.adaptations_executed", adaptations_executed)
-                    self.metrics.gauge(
-                        "polaris.monitoring.last_iteration_timestamp",
-                        datetime.now(timezone.utc).timestamp()
-                    )
-
-                # Wait before next iteration
                 await asyncio.sleep(self._monitoring_interval)
 
             except asyncio.CancelledError:
@@ -666,6 +549,175 @@ class Polaris:
         self.logger.info("Monitoring loop stopped")
         if self.metrics and self._should_collect_component_metrics('core_framework'):
             self.metrics.increment("polaris.monitoring.stopped")
+
+    async def _process_system_iteration(self, connector: Connector) -> Dict[str, int]:
+        systems_processed = 0
+        adaptations_executed = 0
+
+        try:
+            state = await connector.collect_telemetry()
+            systems_processed = 1
+
+            if self.metrics and self._should_collect_component_metrics('monitoring_loop'):
+                self.metrics.increment(
+                    "polaris.telemetry.collected",
+                    tags={"system_id": state.system_id},
+                )
+
+            if self.knowledge_store:
+                await self.knowledge_store.store_state(state)
+                if self.metrics and self._should_collect_component_metrics('knowledge_store'):
+                    self.metrics.increment(
+                        "polaris.knowledge.state_stored",
+                        tags={"system_id": state.system_id},
+                    )
+
+            if self.world_model:
+                await self.world_model.update(state)
+                if self.metrics and self._should_collect_component_metrics('world_model'):
+                    self.metrics.increment(
+                        "polaris.world_model.updated",
+                        tags={"system_id": state.system_id},
+                    )
+
+            await self.event_bus.publish(
+                TelemetryEvent(
+                    system_id=state.system_id,
+                    state=state,
+                    timestamp=state.timestamp,
+                )
+            )
+            if self.metrics and self._should_collect_component_metrics('event_bus'):
+                self.metrics.increment(
+                    "polaris.events.telemetry_published",
+                    tags={"system_id": state.system_id},
+                )
+
+            if self.strategy:
+                from polaris.abstractions.strategy import AdaptationContext
+
+                context = AdaptationContext(
+                    system_id=state.system_id,
+                    historical_states=[],
+                    world_model_insights=await self.world_model.get_insights()
+                    if self.world_model
+                    else None,
+                )
+
+                action = await self.strategy.assess(state, context)
+                if self.metrics and self._should_collect_component_metrics('strategy'):
+                    self.metrics.increment(
+                        "polaris.strategy.assessments",
+                        tags={"system_id": state.system_id},
+                    )
+
+                if action:
+                    self.logger.info(
+                        f"Adaptation proposed for {state.system_id}: {action.action_type}",
+                        action_id=action.action_id,
+                    )
+                    if self.metrics and self._should_collect_component_metrics('core_framework'):
+                        self.metrics.increment(
+                            "polaris.adaptations.proposed",
+                            tags={
+                                "system_id": state.system_id,
+                                "action_type": action.action_type,
+                            },
+                        )
+
+                    if await connector.validate_action(action):
+                        result = await connector.execute_action(action)
+                        adaptations_executed = 1
+
+                        if self.metrics and self._should_collect_component_metrics('core_framework'):
+                            self.metrics.increment(
+                                "polaris.adaptations.executed",
+                                tags={
+                                    "system_id": state.system_id,
+                                    "action_type": action.action_type,
+                                    "status": result.status.value,
+                                },
+                            )
+
+                        if self.knowledge_store:
+                            await self.knowledge_store.store_action(action, result)
+
+                        await self.strategy.on_action_executed(action, result)
+
+                        await self.event_bus.publish(
+                            AdaptationEvent(
+                                action=action,
+                                result=result,
+                                timestamp=result.completed_at,
+                            )
+                        )
+                        if self.metrics and self._should_collect_component_metrics('event_bus'):
+                            self.metrics.increment(
+                                "polaris.events.adaptation_published",
+                                tags={"system_id": state.system_id},
+                            )
+
+                        self.logger.info(
+                            f"Adaptation executed: {action.action_type} -> {result.status.value}",
+                            action_id=action.action_id,
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Action validation failed for {action.action_type}",
+                            action_id=action.action_id,
+                        )
+                        if self.metrics and self._should_collect_component_metrics('core_framework'):
+                            self.metrics.increment(
+                                "polaris.adaptations.validation_failed",
+                                tags={
+                                    "system_id": state.system_id,
+                                    "action_type": action.action_type,
+                                },
+                            )
+
+        except Exception as e:
+            system_id = await connector.get_system_id()
+            self.logger.error(
+                f"Error monitoring system {system_id}: {e}",
+                error=str(e),
+            )
+            if self.metrics and self._should_collect_component_metrics('monitoring_loop'):
+                self.metrics.increment(
+                    "polaris.monitoring.errors",
+                    tags={"system_id": system_id},
+                )
+
+        return {
+            "systems_processed": systems_processed,
+            "adaptations_executed": adaptations_executed,
+        }
+
+    def _record_monitoring_loop_metrics(
+        self,
+        loop_start: datetime,
+        systems_processed: int,
+        adaptations_executed: int,
+    ) -> None:
+        if not self.metrics or not self._should_collect_component_metrics('monitoring_loop'):
+            return
+
+        loop_duration = (datetime.now(timezone.utc) - loop_start).total_seconds()
+        self.metrics.histogram(
+            "polaris.monitoring.loop_duration_seconds",
+            loop_duration,
+        )
+        self.metrics.gauge(
+            "polaris.monitoring.systems_processed",
+            systems_processed,
+        )
+        self.metrics.gauge(
+            "polaris.monitoring.adaptations_executed",
+            adaptations_executed,
+        )
+        self.metrics.gauge(
+            "polaris.monitoring.last_iteration_timestamp",
+            datetime.now(timezone.utc).timestamp(),
+        )
 
     async def _maybe_hot_reload_config(self) -> None:
         """Check for config changes and apply strategy/resilience updates."""
@@ -711,76 +763,27 @@ class Polaris:
         if desired_type == "hybrid" and current_type != "HybridStrategy":
             self.logger.info("Strategy type changed in config; restart required to apply.")
             return
-
-        # Threshold updates
-        from polaris.strategies import ThresholdReactiveStrategy
-        if desired_type == "threshold" and isinstance(self.strategy, ThresholdReactiveStrategy):
-            th = strategy_config.threshold or {}
-            cooldown = th.get('cooldown_seconds')
-            if cooldown is not None:
-                await self.strategy.update_parameter("cooldown_seconds", cooldown)
-            thresholds = (th or {}).get('thresholds', {})
-            for metric, vals in thresholds.items():
-                if 'high' in vals:
-                    await self.strategy.update_parameter(f"thresholds.{metric}.high", vals['high'])
-                if 'low' in vals:
-                    await self.strategy.update_parameter(f"thresholds.{metric}.low", vals['low'])
+        if desired_type == "agentic_llm" and current_type != "AgenticLLMStrategy":
+            self.logger.info("Strategy type changed in config; restart required to apply.")
             return
 
-        # LLM reasoning updates
-        from polaris.strategies import LLMReasoningStrategy
-        if desired_type == "llm_reasoning" and isinstance(self.strategy, LLMReasoningStrategy):
-            llm_cfg = strategy_config.llm or {}
-            if 'temperature' in llm_cfg:
-                await self.strategy.update_parameter("temperature", llm_cfg['temperature'])
-            if 'system_description' in llm_cfg:
-                await self.strategy.update_parameter("system_description", llm_cfg['system_description'])
-            # Resilience updates
-            resil = llm_cfg.get('resilience')
-            if resil and hasattr(self.strategy.llm, "update_resilience"):
-                try:
-                    self.strategy.llm.update_resilience(resil)
-                except Exception as e:
-                    self.logger.warning(f"Failed to hot-update LLM resilience: {e}")
-            return
+        # Build a type-specific configuration payload and delegate to the strategy
+        config_payload: Dict[str, Any]
+        if desired_type == "threshold":
+            config_payload = strategy_config.threshold or {}
+        elif desired_type == "llm_reasoning":
+            config_payload = strategy_config.llm or {}
+        elif desired_type == "hybrid":
+            config_payload = strategy_config.hybrid or {}
+        elif desired_type == "agentic_llm":
+            config_payload = strategy_config.agentic or {}
+        else:
+            config_payload = {}
 
-        # Hybrid updates
-        from polaris.strategies import HybridStrategy
-        if desired_type == "hybrid" and isinstance(self.strategy, HybridStrategy):
-            hy = strategy_config.hybrid or {}
-            if 'selection_mode' in hy:
-                await self.strategy.update_parameter("selection_mode", hy['selection_mode'])
-            if 'min_confidence' in hy:
-                await self.strategy.update_parameter("min_confidence", hy['min_confidence'])
-            # Sub-strategies (best-effort: index-based update when counts match)
-            new_subs = hy.get('strategies', [])
-            if isinstance(new_subs, list) and len(new_subs) == len(self.strategy.strategies):
-                for idx, (sub_conf, (sub_strategy, _prio)) in enumerate(zip(new_subs, self.strategy.strategies)):
-                    s_type = sub_conf.get('type')
-                    if s_type == 'threshold':
-                        th = sub_conf.get('threshold', {})
-                        cd = th.get('cooldown_seconds')
-                        if cd is not None and hasattr(sub_strategy, 'update_parameter'):
-                            await sub_strategy.update_parameter("cooldown_seconds", cd)
-                        thresh = th.get('thresholds', {})
-                        for metric, vals in thresh.items():
-                            if 'high' in vals:
-                                await sub_strategy.update_parameter(f"thresholds.{metric}.high", vals['high'])
-                            if 'low' in vals:
-                                await sub_strategy.update_parameter(f"thresholds.{metric}.low", vals['low'])
-                    elif s_type == 'llm_reasoning':
-                        llm_cfg = sub_conf.get('llm_reasoning', {})
-                        if 'temperature' in llm_cfg and hasattr(sub_strategy, 'update_parameter'):
-                            await sub_strategy.update_parameter("temperature", llm_cfg['temperature'])
-                        if 'system_description' in llm_cfg and hasattr(sub_strategy, 'update_parameter'):
-                            await sub_strategy.update_parameter("system_description", llm_cfg['system_description'])
-                        resil = llm_cfg.get('resilience')
-                        if resil and hasattr(sub_strategy, 'llm') and hasattr(sub_strategy.llm, 'update_resilience'):
-                            try:
-                                sub_strategy.llm.update_resilience(resil)
-                            except Exception as e:
-                                self.logger.warning(f"Failed to hot-update sub-strategy LLM resilience: {e}")
-            return
+        try:
+            await self.strategy.apply_config_update(config_payload)
+        except Exception as e:
+            self.logger.warning(f"Failed to apply strategy config update: {e}")
 
     async def _meta_learning_loop(self) -> None:
         """Meta-learning loop for autonomous optimization."""

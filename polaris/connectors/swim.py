@@ -60,12 +60,12 @@ class SWIMConnector(Connector):
             if self._metrics:
                 self._metrics.increment("polaris.connector.swim.connected")
             return True
-        except Exception:
+        except Exception as e:
             self._connected = False
             if self._logger:
                 self._logger.error(
                     "SWIMConnector connection failed",
-                    error=str(Exception),
+                    error=str(e),
                 )
             if self._metrics:
                 self._metrics.increment("polaris.connector.swim.connection_errors")

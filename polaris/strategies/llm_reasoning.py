@@ -373,12 +373,14 @@ Should this system be adapted right now? Analyze the state and provide your deci
                 type=float,
                 min_value=0.0,
                 max_value=2.0,
-                description="LLM temperature for reasoning"
+                description="LLM temperature for reasoning",
+                kind="llm_temperature",
             ),
             "system_description": ParameterSpec(
                 current_value=self.system_description,
                 type=str,
-                description="Description of the managed system"
+                description="Description of the managed system",
+                kind="llm_system_description",
             )
         }
 
@@ -399,6 +401,23 @@ Should this system be adapted right now? Analyze the state and provide your deci
         if self.logger:
             self.logger.warn(f"[LLM Reasoner] Unknown parameter: {parameter_path}")
         return False
+
+    async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        if not isinstance(config, dict):
+            return
+
+        if 'temperature' in config:
+            await self.update_parameter("temperature", config['temperature'])
+        if 'system_description' in config:
+            await self.update_parameter("system_description", config['system_description'])
+
+        resil = config.get('resilience')
+        if resil and hasattr(self.llm, "update_resilience"):
+            try:
+                self.llm.update_resilience(resil)
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"[LLM Reasoner] Failed to hot-update LLM resilience: {e}")
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

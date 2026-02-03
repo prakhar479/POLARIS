@@ -228,7 +228,8 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                     type=float,
                     min_value=50.0,
                     max_value=95.0,
-                    description=f"High threshold for {metric}"
+                    description=f"High threshold for {metric}",
+                    kind="threshold_high",
                 )
             if 'low' in thresholds:
                 params[f"thresholds.{metric}.low"] = ParameterSpec(
@@ -236,7 +237,8 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                     type=float,
                     min_value=5.0,
                     max_value=50.0,
-                    description=f"Low threshold for {metric}"
+                    description=f"Low threshold for {metric}",
+                    kind="threshold_low",
                 )
 
         # Cooldown
@@ -245,7 +247,8 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
             type=int,
             min_value=10,
             max_value=300,
-            description="Minimum seconds between adaptations"
+            description="Minimum seconds between adaptations",
+            kind="cooldown",
         )
 
         return params
@@ -265,6 +268,23 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                     return True
 
         return False
+
+    async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        if not isinstance(config, dict):
+            return
+
+        cooldown = config.get('cooldown_seconds')
+        if cooldown is not None:
+            await self.update_parameter("cooldown_seconds", cooldown)
+
+        thresholds = config.get('thresholds', {}) or {}
+        for metric, vals in thresholds.items():
+            if not isinstance(vals, dict):
+                continue
+            if 'high' in vals:
+                await self.update_parameter(f"thresholds.{metric}.high", vals['high'])
+            if 'low' in vals:
+                await self.update_parameter(f"thresholds.{metric}.low", vals['low'])
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

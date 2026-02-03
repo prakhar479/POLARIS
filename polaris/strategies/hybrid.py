@@ -236,14 +236,16 @@ class HybridStrategy(AdaptationStrategy):
             current_value=self.selection_mode,
             type=str,
             allowed_values=['first', 'priority', 'confidence'],
-            description="How to select between multiple strategy proposals"
+            description="How to select between multiple strategy proposals",
+            kind="selection_mode",
         )
         params["min_confidence"] = ParameterSpec(
             current_value=self.min_confidence,
             type=float,
             min_value=0.0,
             max_value=1.0,
-            description="Minimum confidence threshold for action selection"
+            description="Minimum confidence threshold for action selection",
+            kind="confidence_threshold",
         )
 
         return params
@@ -270,6 +272,51 @@ class HybridStrategy(AdaptationStrategy):
             return True
 
         return False
+
+    async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        if not isinstance(config, dict):
+            return
+
+        if 'selection_mode' in config:
+            await self.update_parameter("selection_mode", config['selection_mode'])
+        if 'min_confidence' in config:
+            await self.update_parameter("min_confidence", config['min_confidence'])
+
+        new_subs = config.get('strategies', [])
+        if isinstance(new_subs, list) and len(new_subs) == len(self.strategies):
+            for sub_conf, (sub_strategy, _prio) in zip(new_subs, self.strategies):
+                if not isinstance(sub_conf, dict):
+                    continue
+                s_type = sub_conf.get('type')
+                if s_type == 'threshold':
+                    th = sub_conf.get('threshold', {}) or {}
+                    cd = th.get('cooldown_seconds')
+                    if cd is not None and hasattr(sub_strategy, 'update_parameter'):
+                        await sub_strategy.update_parameter("cooldown_seconds", cd)
+                    thresh = th.get('thresholds', {}) or {}
+                    for metric, vals in thresh.items():
+                        if not isinstance(vals, dict):
+                            continue
+                        if 'high' in vals:
+                            await sub_strategy.update_parameter(f"thresholds.{metric}.high", vals['high'])
+                        if 'low' in vals:
+                            await sub_strategy.update_parameter(f"thresholds.{metric}.low", vals['low'])
+                elif s_type == 'llm_reasoning':
+                    llm_cfg = sub_conf.get('llm_reasoning', {}) or {}
+                    if 'temperature' in llm_cfg and hasattr(sub_strategy, 'update_parameter'):
+                        await sub_strategy.update_parameter("temperature", llm_cfg['temperature'])
+                    if 'system_description' in llm_cfg and hasattr(sub_strategy, 'update_parameter'):
+                        await sub_strategy.update_parameter("system_description", llm_cfg['system_description'])
+                    resil = llm_cfg.get('resilience')
+                    if resil and hasattr(sub_strategy, 'llm') and hasattr(sub_strategy.llm, 'update_resilience'):
+                        try:
+                            sub_strategy.llm.update_resilience(resil)
+                        except Exception as e:
+                            if self._logger:
+                                self._logger.warning(
+                                    "Failed to hot-update sub-strategy LLM resilience",
+                                    error=str(e),
+                                )
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

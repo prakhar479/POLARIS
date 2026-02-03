@@ -148,8 +148,22 @@ class AgenticLLMStrategy(AdaptationStrategy):
 
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
         return {
-            "temperature": ParameterSpec(current_value=self.temperature, type=float, min_value=0.0, max_value=2.0, description=""),
-            "steps_limit": ParameterSpec(current_value=self.steps_limit, type=int, min_value=1, max_value=10, description=""),
+            "temperature": ParameterSpec(
+                current_value=self.temperature,
+                type=float,
+                min_value=0.0,
+                max_value=2.0,
+                description="",
+                kind="llm_temperature",
+            ),
+            "steps_limit": ParameterSpec(
+                current_value=self.steps_limit,
+                type=int,
+                min_value=1,
+                max_value=10,
+                description="",
+                kind="agent_steps_limit",
+            ),
         }
 
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
@@ -160,6 +174,29 @@ class AgenticLLMStrategy(AdaptationStrategy):
             self.steps_limit = int(new_value)
             return True
         return False
+
+    async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        if not isinstance(config, dict):
+            return
+
+        if "temperature" in config:
+            await self.update_parameter("temperature", config["temperature"])
+        if "steps_limit" in config:
+            await self.update_parameter("steps_limit", config["steps_limit"])
+
+        tools_cfg = config.get("tools")
+        if isinstance(tools_cfg, dict):
+            enabled = tools_cfg.get("enabled")
+            if isinstance(enabled, list):
+                self.allowed_tools = enabled
+
+        resil = config.get("resilience")
+        if resil and hasattr(self.llm, "update_resilience"):
+            try:
+                self.llm.update_resilience(resil)
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning("AgenticLLMStrategy resilience update failed", error=str(e))
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         if self._adaptation_count == 0:

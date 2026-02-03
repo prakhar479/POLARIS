@@ -131,62 +131,79 @@ class StatisticalMetaLearner(MetaLearner):
         # Simple heuristic: if success rate is low, suggest small adjustments
         if analysis.success_rate < 0.7:
             for param_path, spec in tunable_params.items():
-                if 'threshold' in param_path.lower() and 'high' in param_path.lower():
-                    # Suggest increasing high thresholds slightly
-                    current = spec.current_value
-                    max_val = spec.max_value or (current * 1.5)
+                kind = getattr(spec, 'kind', None)
+                is_high_threshold = kind == 'threshold_high'
+                if not is_high_threshold:
+                    # Fallback to legacy name-based heuristic
+                    is_high_threshold = (
+                        'threshold' in param_path.lower()
+                        and 'high' in param_path.lower()
+                    )
+                if not is_high_threshold:
+                    continue
 
-                    if self.conservative_mode:
-                        # Small 5% increase
-                        proposed = min(current * 1.05, max_val)
+                # Suggest increasing high thresholds slightly
+                current = spec.current_value
+                max_val = spec.max_value or (current * 1.5)
+
+                if self.conservative_mode:
+                    # Small 5% increase
+                    proposed = min(current * 1.05, max_val)
+                else:
+                    # Larger 10% increase
+                    proposed = min(current * 1.10, max_val)
+
+                if proposed != current:
+                    base_confidence = 0.6
+                    wm_unc = analysis.insights.get('world_model_uncertainty', {})
+                    avg_std = wm_unc.get('avg_metric_std', 0.0) if isinstance(wm_unc, dict) else 0.0
+                    # If world model suggests high variability, be slightly more cautious
+                    if avg_std > 10.0:
+                        confidence = max(0.4, base_confidence - 0.1)
                     else:
-                        # Larger 10% increase
-                        proposed = min(current * 1.10, max_val)
+                        confidence = base_confidence
 
-                    if proposed != current:
-                        base_confidence = 0.6
-                        wm_unc = analysis.insights.get('world_model_uncertainty', {})
-                        avg_std = wm_unc.get('avg_metric_std', 0.0) if isinstance(wm_unc, dict) else 0.0
-                        # If world model suggests high variability, be slightly more cautious
-                        if avg_std > 10.0:
-                            confidence = max(0.4, base_confidence - 0.1)
-                        else:
-                            confidence = base_confidence
-
-                        proposals.append(ParameterProposal(
-                            proposal_id=str(uuid.uuid4()),
-                            parameter_path=param_path,
-                            current_value=current,
-                            proposed_value=proposed,
-                            rationale=(
-                                f"Low success rate ({analysis.success_rate:.2%}). "
-                                f"Increasing threshold to reduce adaptation frequency."
-                            ),
-                            confidence=confidence,
-                            expected_impact="May reduce false positives",
-                            status=ProposalStatus.PENDING
-                        ))
+                    proposals.append(ParameterProposal(
+                        proposal_id=str(uuid.uuid4()),
+                        parameter_path=param_path,
+                        current_value=current,
+                        proposed_value=proposed,
+                        rationale=(
+                            f"Low success rate ({analysis.success_rate:.2%}). "
+                            f"Increasing threshold to reduce adaptation frequency."
+                        ),
+                        confidence=confidence,
+                        expected_impact="May reduce false positives",
+                        status=ProposalStatus.PENDING
+                    ))
 
         # Suggest increase cooldown if too many adaptations
         if analysis.insights.get('total_adaptations', 0) > 100:
             for param_path, spec in tunable_params.items():
-                if 'cooldown' in param_path.lower():
-                    current = spec.current_value
-                    max_val = spec.max_value or 300
+                kind = getattr(spec, 'kind', None)
+                is_cooldown = kind == 'cooldown'
+                if not is_cooldown:
+                    # Fallback to legacy name-based heuristic
+                    is_cooldown = 'cooldown' in param_path.lower()
+                if not is_cooldown:
+                    continue
 
-                    proposed = min(current * 1.2, max_val)  # 20% increase
+                current = spec.current_value
+                max_val = spec.max_value or 300
 
-                    if proposed != current:
-                        proposals.append(ParameterProposal(
-                            proposal_id=str(uuid.uuid4()),
-                            parameter_path=param_path,
-                            current_value=current,
-                            proposed_value=proposed,
-                            rationale="High adaptation frequency. Increasing cooldown.",
-                            confidence=0.7,
-                            expected_impact="Reduce adaptation churn",
-                            status=ProposalStatus.PENDING
-                        ))
+                proposed = min(current * 1.2, max_val)  # 20% increase
+
+                if proposed != current:
+                    proposals.append(ParameterProposal(
+                        proposal_id=str(uuid.uuid4()),
+                        parameter_path=param_path,
+                        current_value=current,
+                        proposed_value=proposed,
+                        rationale="High adaptation frequency. Increasing cooldown.",
+                        confidence=0.7,
+                        expected_impact="Reduce adaptation churn",
+                        status=ProposalStatus.PENDING
+                    ))
 
         return proposals
 

@@ -27,6 +27,7 @@ class ParameterSpec:
     max_value: Optional[Any] = None
     allowed_values: Optional[list] = None
     description: str = ""
+    kind: Optional[str] = None
 
 
 class AdaptationStrategy(ABC):
@@ -91,6 +92,10 @@ class AdaptationStrategy(ABC):
             True if update succeeded, False otherwise
         """
         pass
+
+    async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        """Optional hook to apply configuration updates for hot-reload."""
+        return
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """
