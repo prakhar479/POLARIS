@@ -17,6 +17,7 @@ from polaris.abstractions import (
 )
 from polaris.core.events import EventBus, TelemetryEvent, AdaptationEvent
 from polaris.core.registry import ConnectorRegistry
+from polaris.core.factories import get_strategy_factory, get_connector_factory
 from polaris.knowledge import InMemoryKnowledgeStore
 from polaris.world_model import StatisticalWorldModel
 from polaris.infrastructure.observability import StructuredLogger, SimpleMetricsCollector
@@ -85,7 +86,10 @@ class Polaris:
         # Set up infrastructure with defaults
         self.logger = logger or self._create_logger_from_config()
         self.metrics = metrics or self._create_metrics_from_config()
-        self.event_bus = event_bus or EventBus(metrics=self.metrics if self._should_collect_component_metrics('event_bus') else None)
+        self.event_bus = event_bus or EventBus(
+            metrics=self.metrics if self._should_collect_component_metrics('event_bus') else None,
+            logger=self.logger,
+        )
 
         # Set up core components with defaults
         knowledge_metrics = self.metrics if self._should_collect_component_metrics('knowledge_store') else None
@@ -99,6 +103,11 @@ class Polaris:
             logger=self.logger,
             metrics=world_model_metrics
         )
+
+        # Set up registry before strategy so factories can depend on it
+        registry_metrics = self.metrics if self._should_collect_component_metrics('registry') else None
+        self.registry = ConnectorRegistry(metrics=registry_metrics)
+        self._connectors = connectors or []
 
         # Strategy - use provided or create from config or default
         self.strategy = strategy
@@ -127,11 +136,6 @@ class Polaris:
             if enable_meta_learning or meta_enabled:
                 self.meta_learner = self._create_meta_learner_from_config(meta_cfg)
 
-        # Set up registry and connectors
-        registry_metrics = self.metrics if self._should_collect_component_metrics('registry') else None
-        self.registry = ConnectorRegistry(metrics=registry_metrics)
-        self._connectors = connectors or []
-
         # Load connectors from config if available
         if hasattr(self.config, 'systems') and self.config.systems and not connectors:
             self._connectors = self._create_connectors_from_config(
@@ -141,10 +145,27 @@ class Polaris:
         self._running = False
         self._tasks: List[asyncio.Task] = []
         
-        # Get monitoring interval from config or CLI override
-        self._monitoring_interval = self.cli_overrides.get('monitoring_interval', 30)
+        # Get monitoring interval from config and allow CLI override
+        self._monitoring_interval = 30
         if hasattr(self.config, 'monitoring') and self.config.monitoring:
             self._monitoring_interval = self.config.monitoring.get('interval_seconds', self._monitoring_interval)
+        if 'monitoring_interval' in self.cli_overrides:
+            self._monitoring_interval = self.cli_overrides['monitoring_interval']
+
+        # Guard against invalid/non-positive intervals
+        try:
+            self._monitoring_interval = float(self._monitoring_interval)
+        except Exception:
+            self.logger.warning(
+                f"Invalid monitoring interval {self._monitoring_interval}; falling back to 30 seconds",
+            )
+            self._monitoring_interval = 30.0
+
+        if self._monitoring_interval <= 0:
+            self.logger.warning(
+                f"Non-positive monitoring interval {self._monitoring_interval}; falling back to 30 seconds",
+            )
+            self._monitoring_interval = 30.0
         
         # Setup metrics configuration
         self._setup_metrics_auto_export()
@@ -288,112 +309,32 @@ class Polaris:
 
     def _create_strategy_from_config(self, strategy_config):
         """Create strategy from configuration."""
-        from polaris.strategies import ThresholdReactiveStrategy
-
         strategy_metrics = self.metrics if self._should_collect_component_metrics('strategy') else None
 
-        if strategy_config.type == "threshold":
-            if strategy_config.threshold:
-                thresholds = {}
-                threshold_data = strategy_config.threshold.get('thresholds', {})
-                for metric, values in threshold_data.items():
-                    thresholds[metric] = values
+        factory = get_strategy_factory(strategy_config.type)
+        if not factory:
+            self.logger.warning(
+                "No strategy factory registered for type '%s'; using threshold strategy instead",
+                strategy_config.type,
+            )
+            from polaris.strategies import ThresholdReactiveStrategy
+            return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
 
-                return ThresholdReactiveStrategy(
-                    thresholds=thresholds,
-                    cooldown_seconds=strategy_config.threshold.get('cooldown_seconds', 60),
-                    logger=self.logger,
-                    metrics=strategy_metrics
-                )
-            else:
-                # Default threshold strategy
-                return ThresholdReactiveStrategy(
-                    logger=self.logger,
-                    metrics=strategy_metrics
-                )
-        
-        elif strategy_config.type == "llm_reasoning":
-            try:
-                from polaris.strategies import LLMReasoningStrategy
-                from polaris.infrastructure.llm import create_llm_client
-                
-                if not strategy_config.llm:
-                    raise ValueError("LLM strategy requires 'llm_reasoning' configuration section")
-                
-                # Create LLM client (defaults to Google Gemini)
-                resilience_cfg = strategy_config.llm.get('resilience') if strategy_config.llm else None
-                provider = strategy_config.llm.get('provider', 'google') if strategy_config.llm else 'google'
-                llm_client = create_llm_client(provider, resilience=resilience_cfg)
-                
-                return LLMReasoningStrategy(
-                    llm_client=llm_client,
-                    system_description=strategy_config.llm.get('system_description', 'Managed system'),
-                    adaptation_goals=strategy_config.llm.get('adaptation_goals', 'Maintain optimal performance'),
-                    temperature=strategy_config.llm.get('temperature', 0.1),
-                    system_prompt=strategy_config.llm.get('system_prompt'),
-                    per_system_prompts=strategy_config.llm.get('per_system_prompts'),
-                    logger=self.logger,
-                    metrics=strategy_metrics
-                )
-            except ImportError as e:
-                self.logger.warning(f"LLM strategy not available: {e}. Falling back to threshold strategy.")
-                return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
-        
-        elif strategy_config.type == "hybrid":
-            try:
-                from polaris.strategies import HybridStrategy, LLMReasoningStrategy
-                from polaris.infrastructure.llm import create_llm_client
-
-                hybrid_conf = strategy_config.hybrid or {}
-                selection_mode = hybrid_conf.get('selection_mode', 'confidence')
-                min_confidence = float(hybrid_conf.get('min_confidence', 0.7))
-                sub_defs = hybrid_conf.get('strategies', [])
-
-                sub_strategies = []
-                for s in sub_defs:
-                    s_type = s.get('type', 'threshold')
-                    priority = float(s.get('priority', 0.5))
-
-                    if s_type == 'threshold':
-                        thresholds = None
-                        cooldown = 60
-                        if 'threshold' in s and isinstance(s['threshold'], dict):
-                            th = s['threshold']
-                            thresholds = th.get('thresholds')
-                            cooldown = th.get('cooldown_seconds', cooldown)
-
-                        sub = ThresholdReactiveStrategy(
-                            thresholds=thresholds,
-                            cooldown_seconds=cooldown,
-                            logger=self.logger,
-                            metrics=strategy_metrics
-                        )
-                        sub_strategies.append((sub, priority))
-
-                    elif s_type == 'llm_reasoning':
-                        llm_cfg = s.get('llm_reasoning', {})
-                        provider = llm_cfg.get('provider', 'google')
-                        llm_client = create_llm_client(provider, resilience=llm_cfg.get('resilience'))
-                        sub = LLMReasoningStrategy(
-                            llm_client=llm_client,
-                            system_description=llm_cfg.get('system_description', 'Managed system'),
-                            adaptation_goals=llm_cfg.get('adaptation_goals', 'Maintain optimal performance'),
-                            temperature=llm_cfg.get('temperature', 0.1),
-                            system_prompt=llm_cfg.get('system_prompt'),
-                            per_system_prompts=llm_cfg.get('per_system_prompts'),
-                            logger=self.logger,
-                            metrics=strategy_metrics
-                        )
-                        sub_strategies.append((sub, priority))
-
-                    else:
-                        # Fallback to threshold for unknown types
-                        sub = ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
-                        sub_strategies.append((sub, priority))
-
-                if not sub_strategies:
-                    # Safety fallback
-                    return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
+        try:
+            return factory(
+                strategy_config,
+                self.logger,
+                strategy_metrics,
+                self.knowledge_store,
+                self.world_model,
+                self.registry,
+            )
+        except Exception as e:
+            from polaris.strategies import ThresholdReactiveStrategy
+            self.logger.warning(
+                f"Failed to initialize strategy of type '{strategy_config.type}' from config: {e}. Falling back to threshold.",
+            )
+            return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
 
     def _create_meta_learner_from_config(self, meta_config: Optional[Dict[str, Any]]) -> Optional[MetaLearner]:
         """Create meta-learner from configuration.
@@ -467,50 +408,6 @@ class Polaris:
         self.logger.warning(f"Unknown meta_learner type '{meta_type}'. Meta-learning will be disabled.")
         return None
 
-                return HybridStrategy(
-                    strategies=sub_strategies,
-                    selection_mode=selection_mode,
-                    min_confidence=min_confidence,
-                    logger=self.logger,
-                    metrics=strategy_metrics
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize hybrid strategy: {e}. Falling back to threshold strategy.")
-                return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
-        
-        elif strategy_config.type == "agentic_llm":
-            try:
-                from polaris.strategies import AgenticLLMStrategy
-                from polaris.infrastructure.llm import create_llm_client
-
-                agent_conf = strategy_config.agentic or {}
-                steps_limit = int(agent_conf.get('steps_limit', 3))
-                temperature = float(agent_conf.get('temperature', 0.1))
-                allowed_tools = agent_conf.get('tools', {}).get('enabled') if isinstance(agent_conf.get('tools'), dict) else None
-
-                provider = agent_conf.get('provider', 'google')
-                llm_client = create_llm_client(provider, resilience=agent_conf.get('resilience'))
-
-                return AgenticLLMStrategy(
-                    llm_client=llm_client,
-                    knowledge_store=self.knowledge_store,
-                    world_model=self.world_model,
-                    connector_getter=self.registry.get,
-                    steps_limit=steps_limit,
-                    temperature=temperature,
-                    allowed_tools=allowed_tools,
-                    logger=self.logger,
-                    metrics=strategy_metrics,
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize agentic LLM strategy: {e}. Falling back to threshold strategy.")
-                return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
-        
-        else:
-            # Default to threshold strategy
-            self.logger.warning(f"Unknown strategy type '{strategy_config.type}'. Using threshold strategy.")
-            return ThresholdReactiveStrategy(logger=self.logger, metrics=strategy_metrics)
-
     def _create_connectors_from_config(self, systems_config):
         """Create connectors from configuration."""
         connectors = []
@@ -518,36 +415,28 @@ class Polaris:
             if not system.enabled:
                 continue
 
-            if system.connector_type == "swim":
-                from polaris.connectors import SWIMConnector
-                connector_metrics = self.metrics if self._should_collect_component_metrics('connectors') else None
-                connector = SWIMConnector(
-                    host=system.connection.get('host', 'localhost'),
-                    port=system.connection.get('port', 4242),
-                    logger=self.logger,
-                    metrics=connector_metrics,
+            factory = get_connector_factory(system.connector_type)
+            if not factory:
+                self.logger.error(
+                    "No connector factory registered for type '%s'; skipping system '%s'",
+                    system.connector_type,
+                    system.id,
                 )
-                connectors.append(connector)
+                continue
 
-            elif system.connector_type == "wildfire":
-                from polaris.connectors import WildfireConnector
-                connector_metrics = self.metrics if self._should_collect_component_metrics('connectors') else None
-
-                base_url = system.connection.get('base_url')
-                if not base_url:
-                    host = system.connection.get('host', 'localhost')
-                    port = system.connection.get('port', 5000)
-                    base_url = f"http://{host}:{port}"
-
-                connector = WildfireConnector(
-                    base_url=base_url,
-                    system_id=system.id,
-                    timeout=system.connection.get('timeout', 10.0),
-                    session_id=system.connection.get('session_id'),
-                    logger=self.logger,
-                    metrics=connector_metrics,
+            connector_metrics = self.metrics if self._should_collect_component_metrics('connectors') else None
+            try:
+                connector = factory(system, self.logger, connector_metrics)
+            except Exception as e:
+                self.logger.error(
+                    "Failed to create connector for system '%s' (type '%s'): %s",
+                    system.id,
+                    system.connector_type,
+                    e,
                 )
-                connectors.append(connector)
+                continue
+
+            connectors.append(connector)
 
         return connectors
 
@@ -624,7 +513,11 @@ class Polaris:
                     adaptations_executed,
                 )
 
-                await asyncio.sleep(self._monitoring_interval)
+                # Aim for approximately self._monitoring_interval seconds between
+                # the *starts* of successive iterations.
+                loop_duration = (datetime.now(timezone.utc) - loop_start).total_seconds()
+                sleep_for = max(0.0, float(self._monitoring_interval) - loop_duration)
+                await asyncio.sleep(sleep_for)
 
             except asyncio.CancelledError:
                 break
@@ -633,7 +526,7 @@ class Polaris:
                     f"Error in monitoring loop: {e}", error=str(e))
                 if self.metrics and self._should_collect_component_metrics('monitoring_loop'):
                     self.metrics.increment("polaris.monitoring.loop_errors")
-                await asyncio.sleep(self._monitoring_interval)
+                await asyncio.sleep(float(self._monitoring_interval))
 
         self.logger.info("Monitoring loop stopped")
         if self.metrics and self._should_collect_component_metrics('core_framework'):
@@ -757,13 +650,12 @@ class Polaris:
                         )
                         if self.metrics and self._should_collect_component_metrics('core_framework'):
                             self.metrics.increment(
-                                "polaris.adaptations.validation_failed",
+                                "polaris.adaptations.validation_errors",
                                 tags={
                                     "system_id": state.system_id,
                                     "action_type": action.action_type,
                                 },
                             )
-
         except Exception as e:
             system_id = await connector.get_system_id()
             self.logger.error(
@@ -797,8 +689,7 @@ class Polaris:
         )
         self.metrics.gauge(
             "polaris.monitoring.systems_processed",
-            syst# Sleep eccording to configured analysis interval (defaults to 1 hour)
-                ams_processed,self._meta_learning_itral_scnds)
+            systems_processed,
         )
         self.metrics.gauge(
             "polaris.monitoring.adaptations_executed",

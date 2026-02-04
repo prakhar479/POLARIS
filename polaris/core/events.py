@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Type, Optional
 from collections import defaultdict
 
 from polaris.core.models import SystemState, AdaptationAction, ExecutionResult
-from polaris.abstractions.observability import MetricsCollector
+from polaris.abstractions.observability import MetricsCollector, Logger
 
 
 @dataclass
@@ -31,10 +31,15 @@ class AdaptationEvent:
 class EventBus:
     """Simple async event bus for component communication."""
 
-    def __init__(self, metrics: Optional[MetricsCollector] = None):
+    def __init__(
+        self,
+        metrics: Optional[MetricsCollector] = None,
+        logger: Optional[Logger] = None,
+    ):
         self._handlers: Dict[Type, List[Callable]] = defaultdict(list)
         self._running = False
         self._metrics = metrics
+        self._logger = logger
 
     async def start(self) -> None:
         """Start the event bus."""
@@ -68,13 +73,18 @@ class EventBus:
                               tags={"event_type": event_type.__name__})
 
         # Call all handlers concurrently
-        tasks = []
+        tasks: List[asyncio.Future] = []
+        handler_names: List[str] = []
         for handler in handlers:
             if asyncio.iscoroutinefunction(handler):
                 tasks.append(handler(event))
             else:
                 # Wrap sync handlers
                 tasks.append(asyncio.to_thread(handler, event))
+
+            # Best-effort handler identifier for logging
+            name = getattr(handler, "__name__", None) or repr(handler)
+            handler_names.append(str(name))
 
         if tasks:
             start_time = datetime.now(timezone.utc)
@@ -90,8 +100,15 @@ class EventBus:
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     error_count += 1
-                    # Could add logging here if logger is available
-                    pass
+                    if self._logger:
+                        handler_name = handler_names[i] if i < len(handler_names) else str(i)
+                        self._logger.error(
+                            "EventBus handler error",
+                            event_type=event_type.__name__,
+                            handler_index=i,
+                            handler=handler_name,
+                            error=str(result),
+                        )
             
             if self._metrics and error_count > 0:
                 self._metrics.increment("polaris.event_bus.handler_errors",

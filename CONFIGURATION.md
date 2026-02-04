@@ -9,12 +9,12 @@ Polaris uses YAML configuration files with the following structure:
 ```yaml
 # Core monitoring settings
 monitoring:
-  interval_seconds: 30  # How often to run monitoring loop
+  interval_seconds: 30  # Target period between monitoring iterations (seconds)
 
 # Managed systems
 systems:
   - id: "system-name"
-    connector_type: "swim"  # Currently supported: swim, wildfire
+    connector_type: "swim"  # Must match a registered connector factory (built-ins: swim, wildfire)
     enabled: true
     connection:
       host: "localhost"
@@ -24,7 +24,7 @@ systems:
 
 # Adaptation strategy
 strategy:
-  type: "threshold"  # Options: threshold, llm_reasoning, hybrid
+  type: "threshold"  # Must match a registered strategy factory (built-ins: threshold, llm_reasoning, hybrid, agentic_llm)
   
   # Threshold strategy configuration
   threshold:
@@ -171,6 +171,57 @@ observability:
       meta_learner: true
 ```
 
+## Factory-based Registration (Connectors & Strategies)
+
+Polaris uses factory registries to map config type strings (for `systems[].connector_type` and `strategy.type`) to concrete implementations.
+
+- Built-in connector and strategy factories are registered at import-time in `polaris.core.factories`.
+- Configuration validation uses the *registered* types, so custom types must be registered before loading config.
+
+### Registering a Custom Connector Factory
+
+```python
+from polaris.core.factories import register_connector_factory
+
+def my_connector_factory(system_cfg, logger, metrics):
+    # system_cfg is a SystemConfig-like object with .id and .connection
+    return MyConnector(
+        base_url=system_cfg.connection.get("base_url"),
+        logger=logger,
+        metrics=metrics,
+    )
+
+register_connector_factory("my_connector", my_connector_factory)
+```
+
+Then use it in YAML:
+
+```yaml
+systems:
+  - id: "my-system"
+    connector_type: "my_connector"
+    connection:
+      base_url: "http://localhost:1234"
+```
+
+### Registering a Custom Strategy Factory
+
+```python
+from polaris.core.factories import register_strategy_factory
+
+def my_strategy_factory(strategy_cfg, logger, metrics, knowledge_store, world_model, registry):
+    return MyStrategy(logger=logger, metrics=metrics)
+
+register_strategy_factory("my_strategy", my_strategy_factory)
+```
+
+Then use it in YAML:
+
+```yaml
+strategy:
+  type: "my_strategy"
+```
+
 ## Connectors
 
 ### SWIM Connector
@@ -299,11 +350,13 @@ The framework validates configuration at startup:
 
 ### System Configuration Validation
 - `id` cannot be empty
-- `connector_type` must be supported ("swim", "wildfire" currently)
+- `connector_type` must be one of the types registered in the connector factory registry
+  (built-ins: `"swim"`, `"wildfire"`)
 - `port` must be a valid integer between 1-65535 (for connectors that use it)
 
 ### Strategy Configuration Validation
-- `type` must be one of: "threshold", "llm_reasoning", "hybrid"
+- `type` must be one of the types registered in the strategy factory registry
+  (built-ins: `"threshold"`, `"llm_reasoning"`, `"hybrid"`, `"agentic_llm"`)
 - For threshold strategy:
   - High thresholds must be greater than low thresholds
   - `cooldown_seconds` must be non-negative
@@ -337,7 +390,7 @@ polaris --config config.yaml --log-level DEBUG --log-format structured
 # Override metrics settings
 polaris --config config.yaml --metrics-export ./output --disable-metrics
 
-# Override monitoring interval
+# Override monitoring interval (target seconds between monitoring iterations)
 polaris --config config.yaml --monitoring-interval 60
 ```
 

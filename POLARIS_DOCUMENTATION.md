@@ -13,6 +13,15 @@ Polaris is a modular self-adaptive systems framework that enables autonomous man
 
 ## High-Level Architecture
 
+### Factory-based Registration
+
+When running Polaris from YAML config, `systems[].connector_type` and `strategy.type` are resolved through factory registries.
+
+- Built-in factories are registered at import time in `polaris.core.factories`.
+- Custom types can be added by calling `register_connector_factory` and/or `register_strategy_factory` before loading configuration.
+
+See `CONFIGURATION.md` for end-to-end examples.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Polaris Framework                         │
@@ -230,7 +239,7 @@ class MyMetaLearner(MetaLearner):
 systems:
   - id: my_system
     enabled: true
-    connector_type: custom
+    connector_type: swim
     connection:
       host: localhost
       port: 8080

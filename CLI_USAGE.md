@@ -130,6 +130,11 @@ systems:
     enabled: true
 ```
 
+Connector types (`systems[].connector_type`) and strategy types (`strategy.type`) must match types registered in Polaris' factory registries.
+Built-in types are registered automatically; custom types can be registered via the factory registration APIs.
+
+See `CONFIGURATION.md` for the registration pattern and examples.
+
 ## Exit Codes
 
 - `0`: Success

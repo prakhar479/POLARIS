@@ -234,7 +234,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
             response = response.strip()
             if not response:
                 if self.logger:
-                    self.logger.warn("[LLM Reasoner] Empty response from LLM")
+                    self.logger.warning("[LLM Reasoner] Empty response from LLM")
                 return None
             
             json_content = response
@@ -269,7 +269,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
                 # Check if JSON appears incomplete
                 if json_content.rstrip().endswith(('", ', '"')):
                     if self.logger:
-                        self.logger.warn("[LLM Reasoner] Response appears incomplete - attempting to repair")
+                        self.logger.warning("[LLM Reasoner] Response appears incomplete - attempting to repair")
                     # Try to auto-complete the JSON structure
                     try:
                         # Count unclosed braces and brackets
@@ -289,7 +289,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
                             self.logger.debug(f"[LLM Reasoner] Auto-repaired JSON by adding closing braces/brackets")
                     except Exception as repair_error:
                         if self.logger:
-                            self.logger.warn(f"[LLM Reasoner] Could not auto-repair JSON: {repair_error}")
+                            self.logger.warning(f"[LLM Reasoner] Could not auto-repair JSON: {repair_error}")
 
             data = json.loads(json_content)
             
@@ -300,7 +300,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
             # Validate response structure
             if not isinstance(data, dict):
                 if self.logger:
-                    self.logger.warn("[LLM Reasoner] Response is not a JSON object")
+                    self.logger.warning("[LLM Reasoner] Response is not a JSON object")
                 return None
 
             needs_adaptation = data.get("needs_adaptation", False)
@@ -318,7 +318,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
             action_data = data.get("action", {})
             if not isinstance(action_data, dict):
                 if self.logger:
-                    self.logger.warn("[LLM Reasoner] Action data is not a dictionary")
+                    self.logger.warning("[LLM Reasoner] Action data is not a dictionary")
                 return None
                 
             action_type = action_data.get("type")
@@ -330,7 +330,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
 
             if not action_type or not isinstance(parameters, dict):
                 if self.logger:
-                    self.logger.warn(f"[LLM Reasoner] Invalid action structure - type: {action_type}, params type: {type(parameters)}")
+                    self.logger.warning(f"[LLM Reasoner] Invalid action structure - type: {action_type}, params type: {type(parameters)}")
                 return None
 
             adaptation_action = AdaptationAction(
@@ -423,7 +423,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
                 self.logger.info(f"[LLM Reasoner] Updated system_description: {old_value} -> {self.system_description}")
             return True
         if self.logger:
-            self.logger.warn(f"[LLM Reasoner] Unknown parameter: {parameter_path}")
+            self.logger.warning(f"[LLM Reasoner] Unknown parameter: {parameter_path}")
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:

@@ -58,6 +58,17 @@ Polaris includes built-in connectors for common exemplar systems:
 
 See [CONFIGURATION.md](./CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
 
+## Factory-based Registration
+
+Polaris uses factory registries to map configuration type strings to concrete connector and strategy implementations.
+
+- Connector type strings come from `systems[].connector_type` and must match a registered connector factory.
+- Strategy type strings come from `strategy.type` and must match a registered strategy factory.
+
+Built-in factories are registered at import time in `polaris.core.factories`. To add your own connector/strategy type without changing Polaris core, register a factory in your code and use the new type string in YAML.
+
+See [CONFIGURATION.md](./CONFIGURATION.md#factory-based-registration-connectors--strategies) for the full pattern and examples.
+
 ## CLI Usage
 
 ### Basic Commands

@@ -160,7 +160,7 @@ def main():
             cli_overrides['metrics_experiment_name'] = args.metrics_experiment
         if args.auto_export_metrics is not None:
             cli_overrides['metrics_auto_export_interval'] = args.auto_export_metrics
-        if args.monitoring_interval:
+        if args.monitoring_interval is not None:
             cli_overrides['monitoring_interval'] = args.monitoring_interval
 
         polaris = Polaris(config_path=config_path, cli_overrides=cli_overrides)

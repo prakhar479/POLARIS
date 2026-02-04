@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 
+from polaris.core.factories import registered_connector_types, registered_strategy_types
+
 
 @dataclass
 class SystemConfig:
@@ -24,10 +26,12 @@ class SystemConfig:
         if not self.id or not self.id.strip():
             raise ValueError("System ID cannot be empty")
         
-        # Validate connector type
-        supported_connectors = ["swim", "wildfire"]  # Add more as implemented
+        # Validate connector type against registered factories
+        supported_connectors = registered_connector_types()
         if self.connector_type not in supported_connectors:
-            raise ValueError(f"Unsupported connector type '{self.connector_type}'. Supported: {supported_connectors}")
+            raise ValueError(
+                f"Unsupported connector type '{self.connector_type}'. Supported: {supported_connectors}"
+            )
         
         # Validate connection parameters for SWIM
         if self.connector_type == "swim" and self.connection:
@@ -57,7 +61,7 @@ class StrategyConfig:
     
     def __post_init__(self):
         """Validate strategy configuration after initialization."""
-        supported_strategies = ["threshold", "llm_reasoning", "hybrid", "agentic_llm"]
+        supported_strategies = registered_strategy_types()
         if self.type not in supported_strategies:
             raise ValueError(f"Unsupported strategy type '{self.type}'. Supported: {supported_strategies}")
         

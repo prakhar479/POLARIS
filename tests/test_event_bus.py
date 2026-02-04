@@ -162,7 +162,40 @@ class TestEventBus:
         # Both handlers should have been called
         failing_handler.assert_called_once_with(event)
         success_handler.assert_called_once_with(event)
-    
+
+    @pytest.mark.asyncio
+    async def test_handler_exception_logging(self, mock_metrics, mock_logger):
+        """Test that handler exceptions are logged when a logger is provided."""
+        bus = EventBus(metrics=mock_metrics, logger=mock_logger)
+        await bus.start()
+
+        async def failing_handler(event):
+            raise RuntimeError("boom")
+
+        bus.subscribe(TelemetryEvent, failing_handler)
+
+        event = TelemetryEvent(
+            system_id="test-system",
+            state=SystemState(
+                system_id="test-system",
+                timestamp=datetime.now(timezone.utc),
+                metrics={},
+                health_status=HealthStatus.HEALTHY,
+            ),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        # Should not raise despite handler failure
+        await bus.publish(event)
+
+        # One error log should have been recorded with expected context keys
+        error_logs = [l for l in mock_logger.logs if l[0] == "error" and l[1] == "EventBus handler error"]
+        assert len(error_logs) == 1
+        _level, _msg, ctx = error_logs[0]
+        assert ctx.get("event_type") == "TelemetryEvent"
+        assert ctx.get("handler_index") == 0
+        assert "boom" in ctx.get("error", "")
+
     @pytest.mark.asyncio
     async def test_unsubscribe(self, event_bus):
         """Test unsubscribing from events."""
