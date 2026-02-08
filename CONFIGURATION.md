@@ -1,10 +1,89 @@
 # Polaris Configuration Guide
 
-This document provides comprehensive information about configuring the Polaris framework.
+Complete reference and guide for configuring the Polaris self-adaptive framework. This document contains all configuration information in one place.
 
-## Configuration File Structure
+**Quick Navigation:**
+- [Quick Start](#quick-start) - Get started in 5 minutes
+- [Complete File Structure](#complete-configuration-file-structure) - Full YAML structure
+- [Systems Configuration](#systems) - Managed systems setup
+- [Monitoring](#monitoring) - Loop frequency settings
+- [Adaptation Strategies](#adaptation-strategies) - Decision-making (4 types)
+- [World Model & Knowledge](#world-model--knowledge-store) - System insights
+- [Meta-Learner](#meta-learner) - Parameter optimization
+- [Observability](#observability) - Logging, metrics, export
+- [Configuration Examples](#configuration-examples) - Real-world patterns
+- [Validation Checklist](#configuration-validation-checklist) - Pre-deployment verification
+- [API Reference](#complete-parameter-reference) - All parameters documented
+- [Code Mapping](#configuration-variable-mapping) - Where values are used
+- [Troubleshooting](#troubleshooting-guide) - Common issues & solutions
 
-Polaris uses YAML configuration files with the following structure:
+## Quick Start
+
+### For New Users (5 minutes)
+
+1. **Create a configuration file** by copying `config/default.yaml`
+2. **Update system connection details** (host, port)
+3. **Choose your strategy** (recommend: `threshold` for starting)
+4. **Validate** using the settings below
+5. **Deploy** and monitor
+
+### Minimal Configuration (Development)
+
+```yaml
+systems:
+  - id: "swim"
+    connector_type: "swim"
+    connection:
+      host: "localhost"
+      port: 4242
+
+monitoring:
+  interval_seconds: 30
+
+strategy:
+  type: "threshold"
+  threshold:
+    thresholds:
+      cpu_usage: { high: 80.0, low: 20.0 }
+      memory_usage: { high: 85.0, low: 25.0 }
+    cooldown_seconds: 60
+
+observability:
+  logging:
+    type: "human"
+    level: "INFO"
+```
+
+### Production Configuration (LLM-based)
+
+```yaml
+systems:
+  - id: "swim"
+    connector_type: "swim"
+
+strategy:
+  type: "llm_reasoning"
+  llm_reasoning:
+    provider: "openai"
+    system_description: "SWIM web application server"
+    adaptation_goals: "Maintain performance with minimal latency"
+    temperature: 0.1
+
+observability:
+  logging:
+    type: "structured"
+    level: "INFO"
+  metrics:
+    enabled: true
+    export:
+      enabled: true
+      output_dir: "./metrics"
+      auto_export_interval_minutes: 60
+```
+
+---
+
+## Complete Configuration File Structure
 
 ```yaml
 # Core monitoring settings
@@ -569,70 +648,734 @@ Best practices:
 - Avoid frequent file writes; changes are detected each iteration of the monitoring loop
 ```
 
-## Configuration Loading Order
+## Hot Reload of Strategy Parameters and Resilience
 
-1. Load YAML file
-2. Substitute environment variables (`${VAR}` syntax)
-3. Validate configuration structure
-4. Apply CLI overrides
-5. Create Polaris instance
+When Polaris is started with a `config_path`, it detects configuration file changes and hot-applies parameter updates during the monitoring loop.
 
-## Error Handling
+What is hot-reloaded:
+- Threshold strategy: `cooldown_seconds` and per-metric `thresholds.{metric}.{high|low}`
+- LLM reasoning: `temperature`, `system_description`, `system_prompt`, `per_system_prompts`, and LLM `resilience` (when using the resilient client)
+- Hybrid strategy: `selection_mode`, `min_confidence`, and sub-strategy parameters (index-matched), including resilience for LLM sub-strategies
 
-The framework provides clear error messages for configuration issues:
+Limitations:
+- Changing the strategy type (e.g., threshold → hybrid) requires a restart
+- Hybrid sub-strategy updates are index-based; to change counts or order, restart with the new configuration
+- Resilience updates require the LLM client to be the resilient wrapper; otherwise the update is skipped with a warning
 
+Best practices:
+- Keep resilience and strategy parameters in the main config file passed to Polaris
+- Avoid frequent file writes; changes are detected each iteration of the monitoring loop
+
+---
+
+## Configuration Examples
+
+### Example 1: Minimal Development Setup
+
+```yaml
+systems:
+  - id: "swim"
+    connector_type: "swim"
+    connection:
+      host: "localhost"
+      port: 4242
+    monitoring:
+      collection_interval: 5
+
+monitoring:
+  interval_seconds: 30
+
+strategy:
+  type: "threshold"
+  threshold:
+    thresholds:
+      cpu_usage: { high: 80.0, low: 20.0 }
+    cooldown_seconds: 60
+
+observability:
+  logging:
+    type: "human"
+    level: "DEBUG"
 ```
-ValueError: Unsupported connector type 'invalid'. Supported: ['swim']
-ValueError: Environment variable 'MISSING_VAR' not found. Please set it or remove ${MISSING_VAR} from config.
-ValueError: High threshold must be greater than low threshold for 'cpu_usage'
+
+**Use Case**: Getting started, local testing, development
+
+### Example 2: Production with LLM Strategy
+
+```yaml
+systems:
+  - id: "swim"
+    connector_type: "swim"
+    connection:
+      host: "swim.example.com"
+      port: 4242
+
+monitoring:
+  interval_seconds: 60
+
+strategy:
+  type: "llm_reasoning"
+  llm_reasoning:
+    provider: "openai"
+    system_description: "Production SWIM web cluster"
+    adaptation_goals: "Maintain 99.9% uptime with <100ms latency"
+    temperature: 0.1
+    resilience:
+      rps: 2
+      burst: 4
+      max_retries: 4
+
+observability:
+  logging:
+    type: "structured"
+    level: "INFO"
+  metrics:
+    enabled: true
+    export:
+      enabled: true
+      output_dir: "./metrics"
+      auto_export_interval_minutes: 60
+      experiment_name: "production-swim-v1"
 ```
 
-## Best Practices
+**Use Case**: Production deployments, critical systems, LLM-based decisions
 
-1. **Use environment variables** for sensitive data (API keys, passwords)
-2. **Validate configuration** using the provided validation example
-3. **Start with default.yaml** and customize as needed
-4. **Use CLI overrides** for development and testing
-5. **Enable structured logging** for production environments
-6. **Configure metrics export** for analysis and debugging
+### Example 3: Advanced with Meta-Learning
 
-## Example Configurations
+```yaml
+systems:
+  - id: "swim"
+    connector_type: "swim"
+  - id: "wildfire"
+    connector_type: "wildfire"
+    connection:
+      base_url: "http://wildfire.example.com"
+      timeout: 15.0
 
-See the `examples/` directory for complete configuration examples:
+strategy:
+  type: "hybrid"
+  hybrid:
+    selection_mode: "confidence"
+    min_confidence: 0.7
+    strategies:
+      - type: "threshold"
+        priority: 0.5
+        threshold:
+          thresholds:
+            cpu_usage: { high: 80.0, low: 20.0 }
+      - type: "llm_reasoning"
+        priority: 0.8
+        llm_reasoning:
+          provider: "openai"
+          system_description: "Hybrid managed systems"
+          temperature: 0.2
 
-- `examples/config_usage.py` - Basic configuration usage
-- `examples/config_validation.py` - Configuration validation testing
-- `examples/llm_powered.py` - LLM strategy configuration
-- `config/default.yaml` - Complete example configuration
+world_model:
+  type: "statistical"
+  statistical:
+    window_size: 200
+    use_kalman: true
 
-## Troubleshooting
+meta_learner:
+  enabled: true
+  type: "llm"
+  analysis_interval_hours: 2.0
+  llm:
+    provider: "openai"
+    temperature: 0.1
+    auto_apply: false
 
-### Common Issues
+observability:
+  logging:
+    type: "structured"
+    level: "INFO"
+  metrics:
+    enabled: true
+    export:
+      enabled: true
+      output_dir: "./metrics"
+      auto_export_interval_minutes: 30
+      include_timestamp: true
+```
 
-1. **"Environment variable not found"**
-   - Set the required environment variable or remove `${VAR}` from config
+**Use Case**: Multi-system management, advanced ML-based adaptation, continuous learning
 
-2. **"Unsupported connector type"**
-   - Currently only "swim" connector is supported
+---
 
-3. **"LLM strategy not available"**
-   - Install required packages: `pip install google-generativeai`
-   - Set API key environment variable
+## Configuration Validation Checklist
 
-4. **"Config file not found"**
-   - Check file path and ensure file exists
-   - Use absolute path if needed
+### Before Starting ✓
 
-### Debug Configuration Loading
+- [ ] Python 3.8+
+- [ ] `pyyaml` package installed
+- [ ] Configuration file created or `config/default.yaml` available
+- [ ] API credentials set (if using LLM strategies)
 
-Enable debug logging to see configuration loading details:
+### Configuration Completeness Checklist
+
+#### 1. Systems Configuration
+
+- [ ] At least one system defined in `systems` array
+- [ ] Each system has required fields:
+  - [ ] `id`: Unique system identifier (e.g., "swim", "wildfire-sim")
+  - [ ] `connector_type`: "swim" or "wildfire"
+  - [ ] `enabled`: true or false (boolean)
+  - [ ] `connection`: Object with connector-specific params
+
+**SWIM System:**
+- [ ] `connection.host`: Hostname or IP (or string "localhost")
+- [ ] `connection.port`: Integer between 1-65535
+- [ ] `monitoring.collection_interval`: Positive integer (seconds)
+
+**Wildfire System:**
+- [ ] Either `connection.base_url` OR both `connection.host` + `connection.port`
+- [ ] `connection.timeout`: Positive float (seconds)
+- [ ] `connection.session_id`: Optional string identifier
+- [ ] `monitoring.collection_interval`: Positive integer (seconds)
+
+#### 2. Monitoring Configuration
+
+- [ ] `monitoring.interval_seconds`: Positive integer (default: 30)
+- [ ] Value is reasonable (not too small, e.g., >= 1)
+
+#### 3. Adaptation Strategy Configuration
+
+- [ ] `strategy.type`: One of: "threshold", "llm_reasoning", "hybrid", "agentic_llm"
+- [ ] Strategy-specific block present and valid
+
+**Threshold Strategy:**
+- [ ] `strategy.threshold.thresholds`: Object with metric mappings
+- [ ] Each metric has `high` and/or `low` values (floats/ints)
+- [ ] `high` > `low` (if both present)
+- [ ] `strategy.threshold.cooldown_seconds`: Non-negative integer
+
+**LLM Reasoning Strategy:**
+- [ ] `strategy.llm_reasoning.provider`: "google" or "openai"
+- [ ] `strategy.llm_reasoning.system_description`: Non-empty string
+- [ ] `strategy.llm_reasoning.adaptation_goals`: Non-empty string
+- [ ] `strategy.llm_reasoning.temperature`: Float between 0.0-1.0
+- [ ] API credentials available: `GOOGLE_API_KEY` or `OPENAI_API_KEY` env var set
+
+**Hybrid Strategy:**
+- [ ] `strategy.hybrid.strategies`: Non-empty array
+- [ ] Each sub-strategy has `type` field
+- [ ] `strategy.hybrid.selection_mode`: "first", "priority", or "confidence"
+- [ ] `strategy.hybrid.min_confidence`: Float between 0.0-1.0
+
+**Agentic LLM Strategy:**
+- [ ] `strategy.agentic_llm.provider`: "google" or "openai"
+- [ ] `strategy.agentic_llm.steps_limit`: Positive integer (default: 3)
+- [ ] `strategy.agentic_llm.temperature`: Float between 0.0-1.0
+- [ ] `strategy.agentic_llm.tools.enabled`: Array of tool names (non-empty)
+
+#### 4. World Model Configuration (Optional)
+
+- [ ] If present: `world_model.type`: "statistical"
+- [ ] `world_model.statistical.window_size`: Positive integer
+- [ ] `world_model.statistical.use_kalman`: boolean
+
+#### 5. Knowledge Store Configuration (Optional)
+
+- [ ] If present: `knowledge.type`: "memory"
+- [ ] `knowledge.memory.max_states_per_system`: Positive integer
+
+#### 6. Meta-Learner Configuration (Optional)
+
+- [ ] If `meta_learner.enabled: true`:
+  - [ ] `meta_learner.type`: "statistical" or "llm"
+  - [ ] `meta_learner.analysis_interval_hours`: Positive float
+  - [ ] If type="llm": API credentials available
+
+#### 7. Observability Configuration (Optional)
+
+**Logging:**
+- [ ] `observability.logging.type`: "human" or "structured"
+- [ ] `observability.logging.level`: "DEBUG", "INFO", "WARNING", or "ERROR"
+- [ ] `observability.logging.console`: boolean
+- [ ] If `file: true`: `observability.logging.file_path` is valid directory path
+
+**Metrics:**
+- [ ] `observability.metrics.enabled`: boolean
+- [ ] If `export.enabled: true`:
+  - [ ] `observability.metrics.export.output_dir`: Valid directory path
+  - [ ] Directory is writable
+  - [ ] `observability.metrics.export.formats`: Array with "json" and/or "csv"
+
+### Syntax & Format Validation
 
 ```bash
-polaris --config config.yaml --log-level DEBUG
+# Validate YAML syntax
+python3 -c "import yaml; yaml.safe_load(open('config/default.yaml'))"
+echo "✓ YAML is valid" || echo "✗ YAML syntax error"
 ```
 
-This will show:
-- Configuration file loading
-- Environment variable substitution
-- Validation results
-- Component creation details
+### Type Validation
+
+- [ ] Strings are quoted if needed
+- [ ] Numbers are not quoted
+- [ ] Booleans are `true` or `false` (lowercase, unquoted)
+- [ ] Arrays use `- item` format
+- [ ] Objects use `key: value` pairs with proper indentation
+
+### Runtime Validation
+
+```python
+from polaris.infrastructure.config import load_config
+
+try:
+    config = load_config("config/default.yaml")
+    print(f"✓ Config loaded successfully")
+    print(f"  Systems: {len(config.systems)}")
+    print(f"  Strategy: {config.strategy.type}")
+except Exception as e:
+    print(f"✗ Config loading failed: {e}")
+```
+
+---
+
+## Complete Parameter Reference
+
+### Systems
+
+Configure the managed systems to monitor and adapt.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `systems[].id` | string | - | Unique system identifier (required) |
+| `systems[].connector_type` | string | - | Connector type: `swim` or `wildfire` (required) |
+| `systems[].enabled` | boolean | `true` | Enable/disable monitoring for this system |
+| `systems[].connection.host` | string | `localhost` | Server host name or IP (SWIM/Wildfire) |
+| `systems[].connection.port` | integer | `4242`/`5000` | Server port (1-65535) |
+| `systems[].connection.base_url` | string | - | Full base URL (Wildfire, overrides host/port) |
+| `systems[].connection.timeout` | float | `10.0` | Request timeout in seconds (Wildfire) |
+| `systems[].connection.session_id` | string | - | Optional session ID (Wildfire) |
+| `systems[].monitoring.collection_interval` | integer | - | Collection interval in seconds |
+
+### Monitoring
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `monitoring.interval_seconds` | integer | `30` | Monitoring loop interval in seconds |
+
+### Strategy
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy.type` | string | `threshold` | Strategy type: threshold, llm_reasoning, hybrid, agentic_llm |
+
+**Threshold Strategy Parameters:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy.threshold.thresholds` | object | - | Metric thresholds mapping (high/low per metric) |
+| `strategy.threshold.cooldown_seconds` | integer | `60` | Minimum seconds between successive adaptations |
+| `strategy.threshold.enabled` | boolean | `true` | Enable/disable threshold strategy |
+
+**LLM Reasoning Strategy Parameters:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy.llm_reasoning.provider` | string | `google` | LLM provider: google or openai |
+| `strategy.llm_reasoning.system_description` | string | - | Description of the managed system |
+| `strategy.llm_reasoning.adaptation_goals` | string | - | Adaptation objectives |
+| `strategy.llm_reasoning.temperature` | float | `0.1` | Model creativity (0.0-1.0) |
+| `strategy.llm_reasoning.system_prompt` | string | - | Custom system prompt |
+| `strategy.llm_reasoning.per_system_prompts` | object | - | Per-system prompt overrides |
+| `strategy.llm_reasoning.resilience.rps` | float | `2.0` | Requests per second |
+| `strategy.llm_reasoning.resilience.burst` | integer | `4` | Max burst size |
+| `strategy.llm_reasoning.resilience.concurrency` | integer | `4` | Max concurrent requests |
+| `strategy.llm_reasoning.resilience.max_retries` | integer | `4` | Retry attempts |
+
+**Hybrid Strategy Parameters:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy.hybrid.selection_mode` | string | `confidence` | Selection mode: first, priority, or confidence |
+| `strategy.hybrid.min_confidence` | float | `0.7` | Min confidence threshold (0.0-1.0) |
+| `strategy.hybrid.strategies` | array | - | Array of sub-strategies |
+
+**Agentic LLM Strategy Parameters:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy.agentic_llm.provider` | string | `google` | LLM provider: google or openai |
+| `strategy.agentic_llm.steps_limit` | integer | `3` | Maximum reasoning steps |
+| `strategy.agentic_llm.temperature` | float | `0.1` | Model creativity |
+| `strategy.agentic_llm.tools.enabled` | array | - | Enabled tools array |
+
+### World Model & Knowledge Store
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `world_model.type` | string | `statistical` | World model type |
+| `world_model.statistical.window_size` | integer | `100` | Recent samples to keep per metric |
+| `world_model.statistical.use_kalman` | boolean | `true` | Enable Kalman filtering |
+| `knowledge.type` | string | `memory` | Knowledge store type |
+| `knowledge.memory.max_states_per_system` | integer | `1000` | Max states per system |
+
+### Meta-Learner
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `meta_learner.enabled` | boolean | `true` | Enable/disable meta-learning |
+| `meta_learner.type` | string | `statistical` | Type: statistical or llm |
+| `meta_learner.analysis_interval_hours` | float | `1.0` | Analysis interval in hours |
+| `meta_learner.conservative_mode` | boolean | `true` | Conservative mode (cautious adjustments) |
+| `meta_learner.llm.provider` | string | `google` | LLM provider (if type=llm) |
+| `meta_learner.llm.temperature` | float | `0.1` | Model creativity |
+| `meta_learner.llm.auto_apply` | boolean | `false` | Auto-apply proposals |
+| `meta_learner.llm.resilience.*` | object | - | LLM resilience settings |
+
+### Observability
+
+**Logging:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `observability.logging.type` | string | `human` | Type: human or structured |
+| `observability.logging.level` | string | `INFO` | Level: DEBUG, INFO, WARNING, ERROR |
+| `observability.logging.console` | boolean | `true` | Log to console |
+| `observability.logging.file` | boolean | `true` | Log to file |
+| `observability.logging.file_path` | string | `./logs/polaris.log` | Log file path |
+| `observability.logging.use_colors` | boolean | `true` | Colorized output |
+
+**Metrics:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `observability.metrics.enabled` | boolean | `true` | Enable metrics collection |
+| `observability.metrics.collector_type` | string | `simple` | Collector: simple, prometheus, datadog |
+| `observability.metrics.simple.histogram_max_values` | integer | `1000` | Histogram max values |
+| `observability.metrics.export.enabled` | boolean | `false` | Enable metrics export |
+| `observability.metrics.export.formats` | array | `["json", "csv"]` | Export formats |
+| `observability.metrics.export.output_dir` | string | `./metrics` | Export directory |
+| `observability.metrics.export.auto_export_interval_minutes` | integer | `60` | Auto-export interval |
+| `observability.metrics.export.experiment_name` | string | - | Experiment name |
+| `observability.metrics.export.include_timestamp` | boolean | `true` | Include timestamp |
+| `observability.metrics.components.*` | boolean | `true` | Per-component metrics control |
+
+---
+
+## Configuration Variable Mapping
+
+### Where Configuration is Loaded
+
+| Config Path | Loaded By | File | Line |
+|-------------|-----------|------|------|
+| `systems` | [config.py](polaris/infrastructure/config.py) | SystemConfig.__init__ | 23 |
+| `monitoring.interval_seconds` | [polaris.py](polaris/core/polaris.py) | __init__ | 153-159 |
+| `strategy.type` | [config.py](polaris/infrastructure/config.py) | StrategyConfig | 166-172 |
+| `strategy.threshold` | [factories.py](polaris/core/factories.py) | _threshold_factory | 121-130 |
+| `strategy.llm_reasoning` | [factories.py](polaris/core/factories.py) | _llm_reasoning_factory | 143-161 |
+| `strategy.hybrid` | [factories.py](polaris/core/factories.py) | _hybrid_factory | 167-224 |
+| `strategy.agentic_llm` | [factories.py](polaris/core/factories.py) | _agentic_llm_factory | 231-282 |
+| `observability.logging` | [polaris.py](polaris/core/polaris.py) | _create_logger_from_config | 185-195 |
+| `observability.metrics` | [polaris.py](polaris/core/polaris.py) | _create_metrics_from_config | 206-225 |
+| `meta_learner` | [polaris.py](polaris/core/polaris.py) | _create_meta_learner_from_config | 327-395 |
+
+### Validation Rules
+
+| Validation | File | Line |
+|-----------|------|------|
+| System ID not empty | [config.py](polaris/infrastructure/config.py) | 28-29 |
+| Connector type registered | [config.py](polaris/infrastructure/config.py) | 31-35 |
+| Port 1-65535 | [config.py](polaris/infrastructure/config.py) | 40-42, 47-49 |
+| Threshold high > low | [config.py](polaris/infrastructure/config.py) | 75-77 |
+| Cooldown non-negative | [config.py](polaris/infrastructure/config.py) | 79-81 |
+| Hybrid selection_mode valid | [config.py](polaris/infrastructure/config.py) | 95-97 |
+| Min confidence 0.0-1.0 | [config.py](polaris/infrastructure/config.py) | 99-104 |
+
+### CLI Overrides
+
+| CLI Argument | Config Key | Code |
+|--------------|------------|------|
+| `--monitoring-interval` | `monitoring.interval_seconds` | [polaris.py](polaris/core/polaris.py#L162) |
+| `--log-format` | `observability.logging.type` | [polaris.py](polaris/core/polaris.py#L200) |
+| `--log-level` | `observability.logging.level` | [polaris.py](polaris/core/polaris.py#L201) |
+| `--log-file` | `observability.logging.file_path` | [polaris.py](polaris/core/polaris.py#L205) |
+| `--metrics-export-dir` | `observability.metrics.export.output_dir` | [polaris.py](polaris/core/polaris.py#L244) |
+
+---
+
+## Troubleshooting Guide
+
+### YAML Syntax Issues
+
+**Issue**: "YAML syntax error" or configuration fails to load
+
+**Solutions**:
+1. Use 2-space indentation (never tabs)
+2. Check for trailing colons after keys
+3. Ensure quotes are balanced
+4. Validate with: `python3 -c "import yaml; yaml.safe_load(open('config/default.yaml'))"`
+
+**Example errors**:
+```yaml
+# ❌ Wrong: trailing colon
+strategy: 
+  type: "threshold":
+
+# ✓ Correct
+strategy:
+  type: "threshold"
+```
+
+### Port Configuration
+
+**Issue**: "Port must be between 1 and 65535"
+
+**Solution**:
+- Port must be integer (not quoted string)
+- Value must be 1-65535
+
+**Example**:
+```yaml
+# ❌ Wrong
+port: "4242"  # String!
+
+# ✓ Correct
+port: 4242    # Integer
+```
+
+### Threshold Configuration
+
+**Issue**: "High threshold must be greater than low threshold"
+
+**Solution**:
+- For each metric, ensure `high > low`
+- Example: `{ high: 80.0, low: 20.0 }` ✓
+
+```yaml
+# ❌ Wrong
+cpu_usage:
+  high: 20.0
+  low: 80.0
+
+# ✓ Correct
+cpu_usage:
+  high: 80.0
+  low: 20.0
+```
+
+### API Credentials
+
+**Issue**: "API credentials not found" or "GOOGLE_API_KEY not set"
+
+**Solution**:
+```bash
+# For Google
+export GOOGLE_API_KEY="your-key-here"
+
+# OR for OpenAI
+export OPENAI_API_KEY="your-key-here"
+
+# Verify:
+echo $GOOGLE_API_KEY
+```
+
+### Environment Variables
+
+**Issue**: "Environment variable 'SWIM_HOST' not found"
+
+**Solution**:
+- Export the variable before running Polaris
+- Or remove `${VARIABLE}` syntax from config if not needed
+
+```bash
+export SWIM_HOST="localhost"
+export SWIM_PORT="4242"
+```
+
+### Temperature Validation
+
+**Issue**: "Temperature outside valid range"
+
+**Solution**:
+- Temperature must be between 0.0 and 1.0
+- 0.0 = deterministic (repeatable)
+- 1.0 = creative (variable)
+- Recommended: 0.1 for production
+
+### Confidence Range
+
+**Issue**: "min_confidence must be between 0.0 and 1.0"
+
+**Solution**:
+```yaml
+strategy:
+  hybrid:
+    min_confidence: 0.7  # Must be 0.0-1.0
+```
+
+### File Paths
+
+**Issue**: "Directory does not exist" for logs or metrics
+
+**Solution**:
+```bash
+# Create directories
+mkdir -p ./logs
+mkdir -p ./metrics
+
+# Ensure permissions (user can write)
+ls -ld ./logs ./metrics
+```
+
+### Common Configuration Patterns
+
+#### Development (Threshold)
+- Use simple threshold strategy
+- Enable DEBUG logging
+- Local connections (localhost)
+- Small monitoring intervals (10-30 seconds)
+
+#### Production (LLM-based)
+- Use LLM reasoning strategy
+- Enable structured logging
+- Remote connections with timeouts
+- Metrics export enabled
+- Meta-learning enabled
+
+#### Multi-system
+- Multiple entries in `systems` array
+- Hybrid strategy for fallbacks
+- Per-system prompts for specialized handling
+
+---
+
+## Advanced Configuration Topics
+
+### Registering Custom Connectors
+
+```python
+from polaris.core.factories import register_connector_factory
+
+def my_connector_factory(system_cfg, logger, metrics):
+    return MyConnector(
+        base_url=system_cfg.connection.get("base_url"),
+        logger=logger,
+        metrics=metrics,
+    )
+
+register_connector_factory("my_connector", my_connector_factory)
+```
+
+Use in config:
+```yaml
+systems:
+  - id: "my-system"
+    connector_type: "my_connector"
+    connection:
+      base_url: "http://localhost:1234"
+```
+
+### Registering Custom Strategies
+
+```python
+from polaris.core.factories import register_strategy_factory
+
+def my_strategy_factory(strategy_cfg, logger, metrics, knowledge_store, world_model, registry):
+    return MyStrategy(logger=logger, metrics=metrics)
+
+register_strategy_factory("my_strategy", my_strategy_factory)
+```
+
+Use in config:
+```yaml
+strategy:
+  type: "my_strategy"
+```
+
+### Environment Variable Substitution
+
+Use `${VARIABLE_NAME}` syntax in configuration:
+
+```yaml
+systems:
+  - id: "production"
+    connection:
+      host: "${SWIM_HOST}"
+      port: ${SWIM_PORT}
+```
+
+Export variables before loading:
+```bash
+export SWIM_HOST="swim.example.com"
+export SWIM_PORT="4242"
+```
+
+### Performance Tuning
+
+**Monitoring Interval**:
+- Too frequent (< 5s): May overload servers
+- Too infrequent (> 300s): May miss important changes
+- Recommended: 10-60 seconds
+
+**World Model Window Size**:
+- Too small (< 10): Limited trend data
+- Too large (> 1000): High memory usage
+- Recommended: 100-500
+
+**Knowledge Store Max States**:
+- Too small (< 100): Limited history
+- Too large (> 10000): High memory usage
+- Recommended: 500-2000
+
+**Metrics Histogram Max**:
+- Too small (< 100): Coarse data
+- Too large (> 10000): High memory
+- Recommended: 1000
+
+---
+
+## Security Best Practices
+
+### API Keys
+
+- **Never commit API keys** in configuration files
+- **Use environment variables** for all credentials
+- **Restrict file permissions**: `chmod 600 config/default.yaml`
+
+### Configuration Files
+
+```bash
+# Secure configuration
+chmod 600 config/default.yaml
+
+# If config contains secrets
+chmod 600 config/secrets.yaml
+```
+
+### Production Deployment
+
+1. Use structured logging (enables log analysis)
+2. Enable metrics export for monitoring
+3. Set reasonable monitoring intervals
+4. Use conservative mode for meta-learner
+5. Test configuration before deployment
+
+```bash
+# Validate before deploying
+python3 -c "from polaris.infrastructure.config import load_config; load_config('config/default.yaml')"
+```
+
+---
+
+## Configuration Loading Order
+
+1. Load YAML file from disk
+2. Substitute environment variables (`${VAR_NAME}` syntax)
+3. Validate configuration structure
+4. Register custom factories (if any)
+5. Apply CLI overrides
+6. Create Polaris instance with validated config
+
+---
+
+## See Also
+
+- [config/default.yaml](config/default.yaml) - Complete example configuration
+- [examples/config_usage.py](examples/config_usage.py) - Basic usage example
+- [examples/config_validation.py](examples/config_validation.py) - Validation testing
+- [examples/llm_powered.py](examples/llm_powered.py) - LLM strategy example
+- [README.md](README.md) - Project overview

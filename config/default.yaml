@@ -1,113 +1,199 @@
-# Polaris Framework Configuration
-# Simple example configuration
+################################################################################
+# Polaris Framework Configuration Guide
+################################################################################
+#
+# This is a complete configuration file for the Polaris self-adaptive framework.
+# It demonstrates all available configuration options with defaults, comments,
+# and examples for different deployment scenarios.
+#
+# Key Features:
+# - Manage multiple systems concurrently
+# - Multiple adaptation strategies (threshold, LLM reasoning, hybrid, agentic)
+# - Observability with metrics and structured/human-readable logging
+# - Meta-learning for continuous optimization
+# - World models for predictive capabilities
+# - Full traceability with knowledge stores
+#
+################################################################################
 
-# Managed Systems
+################################################################################
+# 1. MANAGED SYSTEMS
+################################################################################
+#
+# Define the managed (target) systems to monitor and adapt.
+# Each system requires a connector to communicate with it.
+#
+# Supported connector types:
+#   - swim:       SWIM web application server pool
+#   - wildfire:   Wildfire UAV-fire simulation
+#
+
 systems:
+  # Example 1: SWIM System
   - id: "swim"
-    connector_type: "swim"
-    enabled: true
+    connector_type: "swim"          # Type of connector to use
+    enabled: true                   # Enable/disable this system (bool)
     connection:
-      host: "localhost"
-      port: 4242
+      host: "localhost"             # SWIM host (default: localhost)
+      port: 4242                    # SWIM port (default: 4242)
     monitoring:
-      collection_interval: 5 # seconds
+      collection_interval: 5        # Collection interval in seconds
 
-  - id: "wildfire"
-    connector_type: "wildfire"
-    enabled: true
-    connection:
-      host: "localhost"
-      port: 5000        # or use base_url: "http://localhost:5000"
-      timeout: 10.0
+  # Example 2: Wildfire System (commented out)
+  # To enable, uncomment the following and configure your Wildfire endpoint:
+  # - id: "wildfire"
+  #   connector_type: "wildfire"
+  #   enabled: true
+  #   connection:
+  #     # Option A: Using base_url
+  #     base_url: "http://localhost:5000"
+  #     timeout: 10.0               # Request timeout in seconds (default: 10.0)
+  #     session_id: null            # Optional session ID for stateful connections
+  #
+  #     # Option B: Using host and port (if base_url not provided)
+  #     # host: "localhost"
+  #     # port: 5000
 
-# Monitoring Configuration
+
+################################################################################
+# 2. MONITORING CONFIGURATION
+################################################################################
+#
+# Controls how frequently the framework monitors and adapts systems.
+#
+
 monitoring:
-  interval_seconds: 30 # How often to run the monitoring loop
+  # Monitoring loop interval in seconds (default: 30)
+  # Controls how often Polaris collects telemetry and executes adaptations
+  interval_seconds: 10
 
-# Adaptation Strategy
+
+################################################################################
+# 3. ADAPTATION STRATEGY
+################################################################################
+#
+# Defines how the framework decides whether and what adaptations to apply.
+#
+# Available strategy types:
+#   - threshold:      Rule-based adaptation using metric thresholds
+#   - llm_reasoning:  AI-driven decisions using an LLM
+#   - hybrid:         Combine multiple strategies
+#   - agentic_llm:    LLM agent with tools and multi-step reasoning
+#
+
 strategy:
-  type: "threshold" # Options: threshold, llm_reasoning, hybrid, agentic_llm
+  type: "agentic_llm"  # DEFAULT: "threshold"
 
-  # Threshold Strategy Settings
-  threshold:
-    thresholds:
-      cpu_usage:
-        high: 80.0
-        low: 20.0
-      average_utilization:
-        high: 85.0
-        low: 25.0
-      average_response_time:
-        high: 500.0 # milliseconds
-    # thresholds:
-    #   fire_cells_burning_ratio:
-    #     high: 70.0
-    #     low: 10.0
-    #   mr1_avg:
-    #     low: 0.2
 
-    cooldown_seconds: 60
-    enabled: true
+###############################################################################
+  # STRATEGY A: Threshold-Based Adaptation
+###############################################################################
+  #
+  # Simple, deterministic adaptation based on metric thresholds.
+  # Triggers adaptations when metrics cross high/low boundaries.
+  #
+  # Suited for: Predictable workloads, strict performance SLAs
+  #
+  # threshold:
+  #   thresholds:
+  #     # Define thresholds for each metric your system exposes
+  #     # High threshold: triggers adaptation when exceeded
+  #     # Low threshold: triggers recovery/scale-down when below
+  #     cpu_usage:
+  #       high: 80.0      # Trigger scale-up at 80% CPU
+  #       low: 20.0       # Trigger scale-down at 20% CPU
+  #     average_utilization:
+  #       high: 85.0
+  #       low: 25.0
+  #     average_response_time:
+  #       high: 500.0     # milliseconds
+  #       # low: 200.0    # optional, triggers optimization
+  #
+  #     # Example for Wildfire systems
+  #     # fire_cells_burning_ratio:
+  #     #   high: 70.0
+  #     #   low: 10.0
+  #     # mr1_avg:
+  #     #   low: 0.2      # Only low threshold for this metric
+  #
+  #   cooldown_seconds: 60  # Min seconds between successive adaptations (default: 60)
+  #   enabled: true         # Enable/disable threshold strategy (default: true)
 
-  # LLM Reasoning Strategy Settings (uncomment to use)
-  llm_reasoning:
-    system_description: "SWIM web application server pool"
-    adaptation_goals: "Maintain performance with minimal resource usage"
-    temperature: 0.1
-    provider: google  # Options: google (default), openai
-    # Optional: global system prompt template (supports {system_id}, {system_description}, {adaptation_goals})
-    # system_prompt: |
-    #   You are an intelligent adaptation controller for a self-adaptive system.
-    #   System Description: {system_description}
-    #   Adaptation Goals: {adaptation_goals}
-    #   Managed System ID: {system_id}
-    #   ...
-    #
-    # Optional: per-system prompt overrides keyed by systems[].id (e.g. "swim", "wildfire")
-    # per_system_prompts:
-    #   swim: |
-    #     You are an adaptation controller for the SWIM web application server pool.
-    #     Focus on response time, throughput, and server utilization when deciding
-    #     whether to scale up/down or adjust QoS dimmer settings.
-    #   wildfire: |
-    #     You are an adaptation controller for the Wildfire UAV-fire simulation.
-    #     Focus on fire_cells_burning_ratio, mr1_avg, and safety metrics when
-    #     deciding which wildfire_* actions to trigger.
-    #
-    # resilience:
-    #   rps: 2
-    #   burst: 4
-    #   concurrency: 4
-    #   max_retries: 4
-    #   base_backoff_ms: 200
-    #   max_backoff_ms: 4000
-    #   # keys_env_var: OPENAI_API_KEYS  # optional custom env var for key rotation
 
+###############################################################################
+  # STRATEGY B: LLM Reasoning Strategy
+###############################################################################
+  #
+  # AI-driven adaptation decisions using a language model.
+  # Provides reasoning about metrics, trends, and optimal actions.
+  #
+  # Suited for: Complex systems, dynamic workloads, learning from patterns
+  #
+  # llm_reasoning:
+  #   provider: google              # "google" or "openai" (default: google)
+  #   system_description: "SWIM web application server pool"
+  #   adaptation_goals: "Maintain performance with minimal resource usage"
+  #   temperature: 0.1              # Model creativity (0.0=deterministic, 1.0=creative)
+  #
+  #   # Optional: Custom system prompt (supports {system_id}, {system_description}, {adaptation_goals})
+  #   # system_prompt: |
+  #   #   You are an intelligent adaptation controller for a self-adaptive system.
+  #   #   System Description: {system_description}
+  #   #   Adaptation Goals: {adaptation_goals}
+  #   #   Managed System ID: {system_id}
+  #   #   ...
+  #
+  #   # Per-system prompt overrides (keyed by systems[].id)
+  #   # per_system_prompts:
+  #   #   swim: |
+  #   #     You are an adaptation controller for SWIM.
+  #   #     Focus on response time, throughput, and server utilization...
+  #   #   wildfire: |
+  #   #     You are an adaptation controller for Wildfire.
+  #   #     Focus on fire containment while ensuring UAV safety...
+  #
+  #   resilience:                   # Resilience settings for LLM calls
+  #     rps: 2                      # Requests per second (default: 2)
+  #     burst: 4                    # Max concurrent requests (default: 4)
+  #     concurrency: 4              # Parallelism limit (default: 4)
+  #     max_retries: 4              # Retry attempts (default: 4)
+  #     base_backoff_ms: 200        # Initial backoff in ms (default: 200)
+  #     max_backoff_ms: 4000        # Max backoff in ms (default: 4000)
+  #     # keys_env_var: OPENAI_API_KEYS  # For key rotation (optional)
+
+
+###############################################################################
+  # STRATEGY C: Hybrid Strategy
+###############################################################################
+  #
+  # Combines multiple strategies, selecting best decision based on confidence.
+  # Allows fallback between strategies.
+  #
+  # Suited for: Critical systems requiring multiple decision pathways
+  #
   # hybrid:
-  #   selection_mode: confidence
-  #   min_confidence: 0.7
+  #   selection_mode: confidence    # "first", "priority", "confidence" (default: confidence)
+  #   min_confidence: 0.7           # Min confidence to trust a decision (default: 0.7)
+  #
+  #   # Define sub-strategies to combine
   #   strategies:
-  #     - type: threshold
-  #       priority: 0.8
+  #     - type: threshold           # Sub-strategy 1
+  #       priority: 0.8             # Priority weight for selection
   #       threshold:
   #         thresholds:
   #           cpu_usage: { high: 80.0, low: 20.0 }
   #         cooldown_seconds: 45
-  #     - type: llm_reasoning
+  #
+  #     - type: llm_reasoning       # Sub-strategy 2
   #       priority: 0.6
   #       llm_reasoning:
   #         system_description: "SWIM web application server pool"
   #         adaptation_goals: "Maintain performance with minimal resource usage"
   #         temperature: 0.1
-  #         provider: openai
-  #         # Optional: system_prompt / per_system_prompts as in top-level llm_reasoning
-  #         # system_prompt: | 
+  #         provider: google
+  #         # system_prompt: |
   #         #   ...
-  #         # per_system_prompts:
-  #         #   swim: |
-  #         #     ...
-  #         #   wildfire: |
-  #         #     ...
+  #         # per_system_prompts: { ... }
   #         resilience:
   #           rps: 2
   #           burst: 4
@@ -116,134 +202,200 @@ strategy:
   #           max_backoff_ms: 4000
   #           concurrency: 4
 
-  # Agentic LLM Strategy Settings (uncomment to use)
-  # agentic_llm:
-  #   provider: google  # or "openai"
-  #   steps_limit: 3
-  #   temperature: 0.1
-  #   tools:
-  #     enabled:
-  #       - get_recent_states
-  #       - summarize_metric_trends
-  #       - get_world_model_insights
-  #       - predict_outcome
-  #       - get_action_history
-  #       - list_supported_actions  # connector-aware when supported
-  #   resilience:
-  #     rps: 2
-  #     burst: 4
-  #     concurrency: 4
-  #     max_retries: 4
-  #     base_backoff_ms: 200
-  #     max_backoff_ms: 4000
 
-# World Model (optional)
+###############################################################################
+  # STRATEGY D: Agentic LLM Strategy (DEFAULT EXAMPLE)
+###############################################################################
+  #
+  # LLM agent with planning, tools, and multi-step reasoning.
+  # Can use specialized tools (world model, metrics analysis, etc.) to make decisions.
+  #
+  # Suited for: Complex adaptation requiring multi-step planning, trade-off analysis
+  #
+  agentic_llm:
+    provider: google              # "google" or "openai" (default: google)
+    steps_limit: 3                # Max reasoning steps (default: 3)
+    temperature: 0.1              # Model creativity (default: 0.1)
+    tools:
+      enabled:                    # List of available tools for the agent
+        - get_recent_states       # Recent system states
+        - summarize_metric_trends # Metric trend analysis
+        - get_world_model_insights # World model predictions
+        - predict_outcome         # Outcome prediction
+        - get_action_history      # Past adaptation history
+        - list_supported_actions  # Available adaptations (connector-aware)
+    resilience:                   # Resilience settings (same as LLM strategy)
+      rps: 2
+      burst: 4
+      concurrency: 4
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+
+
+################################################################################
+# 4. WORLD MODEL (OPTIONAL)
+################################################################################
+#
+# Provides predictions and insights about system behavior.
+# Helps strategies make better decisions based on trends.
+#
+# Supported types:
+#   - statistical: Mean, variance, Kalman filtering, regime tracking
+#
+
 world_model:
-  type: "statistical"
+  type: "statistical"           # DEFAULT: statistical
   statistical:
     # Number of recent samples to keep per metric in memory
-    window_size: 100
-    # Enable lightweight Kalman-style filtering for smoother predictions
-    # and a variance-based confidence score. When false, the model uses
-    # simple historical means.
-    use_kalman: true
+    window_size: 100            # DEFAULT: 100
+    
+    # Enable lightweight Kalman-style filtering
+    # - true: Smoother predictions with variance estimates (recommended)
+    # - false: Simple historical mean (lighter weight)
+    use_kalman: true            # DEFAULT: false
+    
+    # Note: Regime tracking (HMM-style) is always enabled
+    # Infers "low", "normal", "high" regimes from metrics
+    # Exposed via world_model.get_insights()
 
-    # Simple regime tracking (HMM-style) is always enabled for the
-    # statistical world model. Regimes ("low", "normal", "high") are
-    # inferred from metrics such as cpu_usage/response_time and are
-    # exposed via world_model.get_insights() and the PredictionResult
-    # reasoning string.
 
-# Knowledge Store (optional)
+################################################################################
+# 5. KNOWLEDGE STORE (OPTIONAL)
+################################################################################
+#
+# Stores and retrieves system states and adaptation history.
+# Used by meta-learner and strategies for learning from past behavior.
+#
+# Supported types:
+#   - memory: In-memory storage (good for dev/testing)
+#
+
 knowledge:
-  type: "memory"
+  type: "memory"                # DEFAULT: memory
   memory:
-    max_states_per_system: 1000
+    # Max states per system to keep in memory
+    max_states_per_system: 1000  # DEFAULT: 1000
 
-# Meta-Learner (optional, enabled here for demonstration)
+
+################################################################################
+# 6. META-LEARNER (OPTIONAL, DISABLED BY DEFAULT)
+################################################################################
+#
+# Continuously learns and optimizes adaptation parameters.
+# Analyzes past decisions and recommends strategy improvements.
+#
+# Note: Requires a World Model for best results
+#
+
 meta_learner:
-  enabled: true
-  type: "statistical"
-  analysis_interval_hours: 0.01
-  conservative_mode: true
-  # When a statistical world model is provided to Polaris, the
-  # StatisticalMetaLearner automatically consumes its insights via
-  # world_model.get_insights(). The meta-learner aggregates basic
-  # uncertainty information (e.g., average metric std and regime
-  # estimates) into analysis.insights["world_model_uncertainty"], and
-  # uses this to slightly adjust proposal confidence (more cautious
-  # when variability is high).
+  enabled: false                # Set to true to enable (default: false)
+  
+  # Type of meta-learner
+  type: "llm"                   # "statistical" or "llm" (default: statistical)
+  
+  # Interval between meta-learning analysis runs (hours)
+  analysis_interval_hours: 1.0  # DEFAULT: 1.0
 
-  # Example: LLM-based meta-learner (alternative to statistical)
-  # type: "llm"
-  # analysis_interval_hours: 1.0
-  # llm:
-  #   provider: google  # or "openai"
-  #   temperature: 0.1
-  #   auto_apply: false  # whether to auto-apply approved proposals
-  #
-  #   # Optional: global analysis/optimization prompts
-  #   # analysis_system_prompt: |
-  #   #   You are an expert system analyst for self-adaptive systems...
-  #   # optimization_system_prompt: |
-  #   #   You are an expert parameter optimizer for self-adaptive systems...
-  #   #
-  #   # Optional: per-system prompt overrides keyed by systems[].id (e.g. "swim", "wildfire")
-  #   # per_system_prompts:
-  #   #   swim:
-  #   #     analysis_system_prompt: |
-  #   #       Analyze SWIM-specific performance metrics (response time, throughput, utilization)...
-  #   #     optimization_system_prompt: |
-  #   #       Propose threshold and cooldown changes for SWIM's adaptation strategy...
-  #   #   wildfire:
-  #   #     analysis_system_prompt: |
-  #   #       Analyze Wildfire-specific metrics (fire_cells_burning_ratio, mr1_avg, safety)...
-  #   #     optimization_system_prompt: |
-  #   #       Propose parameter changes that balance fire containment and UAV safety...
-  #   #
-  #   # resilience:
-  #   #   rps: 2
-  #   #   burst: 4
-  #   #   concurrency: 4
-  #   #   max_retries: 4
-  #   #   base_backoff_ms: 200
-  #   #   max_backoff_ms: 4000
+  # For Statistical Meta-Learner
+  # statistical:
+  #   conservative_mode: true   # Conservative param changes (default: true)
+  #   # When a StatisticalWorldModel is provided, the meta-learner
+  #   # automatically consumes insights and adjusts confidence accordingly
+  #   # More cautious when metric variability is high
 
-# Observability
+  # For LLM-Based Meta-Learner
+  llm:
+    provider: google            # "google" or "openai" (default: google)
+    temperature: 0.1            # Model creativity (default: 0.1)
+    auto_apply: false           # Auto-apply approved proposals (default: false)
+    
+    # Optional: Custom analysis/optimization prompts
+    # analysis_system_prompt: |
+    #   You are an expert system analyst for self-adaptive systems...
+    # optimization_system_prompt: |
+    #   You are an expert parameter optimizer for self-adaptive systems...
+    
+    # Per-system prompt overrides (keyed by systems[].id)
+    # per_system_prompts:
+    #   swim:
+    #     analysis_system_prompt: |
+    #       Analyze SWIM-specific metrics (response time, throughput, utilization)...
+    #     optimization_system_prompt: |
+    #       Propose threshold and cooldown changes for SWIM...
+    #   wildfire:
+    #     analysis_system_prompt: |
+    #       Analyze Wildfire metrics (fire_cells_burning_ratio, mr1_avg, safety)...
+    #     optimization_system_prompt: |
+    #       Propose parameter changes for optimal fire containment...
+    
+    resilience:                 # Resilience settings for LLM calls
+      rps: 2
+      burst: 4
+      concurrency: 4
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+
+
+################################################################################
+# 7. OBSERVABILITY & LOGGING
+################################################################################
+#
+# Configure logging, metrics collection, and data export.
+#
+
 observability:
+
+  ###########################################################################
+  # Logging Configuration
+  ###########################################################################
   logging:
-    type: "human" # Options: "structured" (JSON), "human" (readable)
-    level: "DEBUG" # DEBUG, INFO, WARNING, ERROR
-    console: true
-    file: true
-    file_path: "./logs/polaris.log"
-    use_colors: true # For human-readable format (console only)
+    type: "human"               # "human" (readable) or "structured" (JSON)
+                                # DEFAULT: human
+    level: "DEBUG"              # DEBUG, INFO, WARNING, ERROR (default: INFO)
+    console: true               # Log to stdout (default: true)
+    file: true                  # Log to file (default: false)
+    file_path: "./logs/polaris.log"  # Log file location
+    use_colors: true            # Use colored output (human format only, default: true)
 
+  ###########################################################################
+  # Metrics Collection
+  ###########################################################################
   metrics:
-    enabled: true
-    collector_type: "simple" # Options: "simple", "prometheus", "datadog"
-
-    # Export settings
+    enabled: true               # Enable metrics collection (default: true)
+    collector_type: "simple"    # "simple", "prometheus", "datadog" (default: simple)
+    
+    ######## Export Settings ########
     export:
-      enabled: false
-      formats: ["json", "csv"] # Available: json, csv
-      output_dir: "./metrics"
-      auto_export_interval_minutes: 60 # 0 to disable auto-export
-      experiment_name: null # Optional experiment identifier
-      include_timestamp: true
+      enabled: true             # Enable metrics export (default: false)
+      formats:
+        - json                  # JSON format
+        - csv                   # CSV format
+      output_dir: "./metrics"   # Export directory (default: ./metrics)
+      # How often to auto-export metrics (minutes)
+      # Set to 0 to disable auto-export
+      auto_export_interval_minutes: 5  # DEFAULT: 0
+      # Optional: Name to include in exported filenames
+      experiment_name: null     # DEFAULT: null
+      # Include timestamp in export
+      include_timestamp: true   # DEFAULT: true
 
-    # Simple collector settings
+    ######## Simple Collector Settings ########
     simple:
-      histogram_max_values: 1000 # Max values to keep in histograms
+      # Max number of values to keep per histogram/metric
+      histogram_max_values: 1000  # DEFAULT: 1000
 
-    # Framework component metrics (can be disabled individually)
+    ######## Component Metrics ########
+    # Control which components emit metrics
+    # Setting to false reduces overhead but loses visibility
     components:
-      core_framework: true # Main Polaris lifecycle metrics
-      monitoring_loop: true # Monitoring loop performance
-      event_bus: true # Event system metrics
-      registry: true # Component registry metrics
-      strategy: true # Strategy-specific metrics
-      connectors: true # Connector operation metrics
-      world_model: true # World model metrics
-      knowledge_store: true # Knowledge store metrics
-      meta_learner: true # Meta-learner metrics (when enabled)
+      core_framework: true      # Main framework lifecycle metrics
+      monitoring_loop: true     # Monitoring loop performance
+      event_bus: true          # Event system metrics
+      registry: true           # Component registry metrics
+      strategy: true           # Strategy-specific metrics
+      connectors: true         # Connector operation metrics
+      world_model: true        # World model metrics
+      knowledge_store: true    # Knowledge store metrics
+      meta_learner: true       # Meta-learner metrics
