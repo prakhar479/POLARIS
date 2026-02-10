@@ -213,7 +213,7 @@ strategy:
   # Suited for: Complex adaptation requiring multi-step planning, trade-off analysis
   #
   agentic_llm:
-    provider: google              # "google" or "openai" (default: google)
+    provider: groq              # "google" or "openai" (default: google)
     steps_limit: 3                # Max reasoning steps (default: 3)
     temperature: 0.1              # Model creativity (default: 0.1)
     tools:

@@ -1,0 +1,181 @@
+{
+  "export_timestamp": "2026-02-10T05:11:46.442261+00:00",
+  "metrics": {
+    "counters": {
+      "polaris.world_model.statistical.initialized": 1.0,
+      "polaris.strategy.threshold.initialized": 1.0,
+      "polaris.core.initialized": 1.0,
+      "polaris.event_bus.subscriptions_added{event_type=TelemetryEvent}": 1.0,
+      "polaris.event_bus.subscriptions_added{event_type=AdaptationEvent}": 1.0,
+      "polaris.event_bus.started": 1.0,
+      "polaris.registry.connector_registered{system_id=swim}": 1.0,
+      "polaris.registry.system_ids_accessed": 299.0,
+      "polaris.connector.swim.connected": 1.0,
+      "polaris.monitoring.started": 1.0,
+      "polaris.registry.all_connectors_accessed": 30.0,
+      "polaris.connector.swim.telemetry_calls": 30.0,
+      "polaris.metrics.auto_export_started": 1.0,
+      "polaris.telemetry.collected{system_id=swim}": 30.0,
+      "polaris.knowledge.inmemory.states_stored{system_id=swim}": 30.0,
+      "polaris.knowledge.state_stored{system_id=swim}": 30.0,
+      "polaris.world_model.statistical.updates{system_id=swim}": 30.0,
+      "polaris.world_model.statistical.values_recorded": 300.0,
+      "polaris.world_model.updated{system_id=swim}": 30.0,
+      "polaris.event_bus.events_published{event_type=TelemetryEvent}": 30.0,
+      "polaris.events.telemetry_published{system_id=swim}": 30.0,
+      "polaris.world_model.statistical.insights_requested": 30.0,
+      "polaris.strategy.threshold.assessments{system_id=swim}": 30.0,
+      "polaris.strategy.threshold.no_action_needed{system_id=swim}": 30.0,
+      "polaris.strategy.assessments{system_id=swim}": 30.0
+    },
+    "gauges": {
+      "polaris.strategy.threshold.cooldown_seconds": 60,
+      "polaris.core.monitoring_interval_seconds": 10.0,
+      "polaris.event_bus.total_handlers": 2,
+      "polaris.registry.total_connectors": 1,
+      "polaris.knowledge.inmemory.states_per_system{system_id=swim}": 30,
+      "polaris.event_bus.handler_count{event_type=TelemetryEvent}": 1,
+      "polaris.world_model.statistical.systems_with_insights": 1,
+      "polaris.monitoring.systems_processed": 1,
+      "polaris.monitoring.adaptations_executed": 0,
+      "polaris.monitoring.last_iteration_timestamp": 1770700296.483823
+    },
+    "histograms": {
+      "polaris.connector.swim.command_duration_seconds{command=get_servers}": {
+        "count": 31,
+        "min": 0.0006623090000630327,
+        "max": 0.007575108999844815,
+        "avg": 0.001250150741923555
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_active_servers}": {
+        "count": 30,
+        "min": 0.0003043990000151098,
+        "max": 0.0022719460000644176,
+        "avg": 0.0006648611000173333
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_max_servers}": {
+        "count": 30,
+        "min": 0.00022297700002127385,
+        "max": 0.0017393640000591404,
+        "avg": 0.0005781580666810745
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_dimmer}": {
+        "count": 30,
+        "min": 0.00023176500008048606,
+        "max": 0.0014446919999500096,
+        "avg": 0.0005351465666763033
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_basic_rt}": {
+        "count": 30,
+        "min": 0.0002304269999058306,
+        "max": 0.0013443000000279426,
+        "avg": 0.0004717904666980151
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_basic_throughput}": {
+        "count": 30,
+        "min": 0.0002091750000090542,
+        "max": 0.0015365890001248772,
+        "avg": 0.0004940270000133751
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_opt_rt}": {
+        "count": 30,
+        "min": 0.00019431999999142135,
+        "max": 0.0012258640001618915,
+        "avg": 0.0004704046000066834
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_opt_throughput}": {
+        "count": 30,
+        "min": 0.00019791299996541056,
+        "max": 0.001048456000035003,
+        "avg": 0.0004264066666716341
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_utilization server1}": {
+        "count": 30,
+        "min": 0.00018740299992714426,
+        "max": 0.0010761989999537036,
+        "avg": 0.00042099199999180806
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_utilization server2}": {
+        "count": 30,
+        "min": 0.00017956700003196602,
+        "max": 0.0013372860000799847,
+        "avg": 0.00042404323336692564
+      },
+      "polaris.connector.swim.command_duration_seconds{command=get_utilization server3}": {
+        "count": 30,
+        "min": 0.00017793300003177137,
+        "max": 0.001154374999941865,
+        "avg": 0.0003902693333429852
+      },
+      "polaris.connector.swim.telemetry_duration_seconds": {
+        "count": 30,
+        "min": 0.0035189010000067356,
+        "max": 0.0178874129999258,
+        "avg": 0.006106995433348554
+      },
+      "polaris.event_bus.handler_duration_seconds{event_type=TelemetryEvent}": {
+        "count": 30,
+        "min": 6e-05,
+        "max": 0.000324,
+        "avg": 0.00011790000000000003
+      },
+      "polaris.monitoring.loop_duration_seconds": {
+        "count": 30,
+        "min": 0.00427,
+        "max": 0.019962,
+        "avg": 0.0073434
+      }
+    }
+  },
+  "last_updated": {
+    "polaris.world_model.statistical.initialized": "2026-02-10T05:06:46.430894+00:00",
+    "polaris.strategy.threshold.initialized": "2026-02-10T05:06:46.431035+00:00",
+    "polaris.strategy.threshold.cooldown_seconds": "2026-02-10T05:06:46.431037+00:00",
+    "polaris.core.initialized": "2026-02-10T05:06:46.431085+00:00",
+    "polaris.core.monitoring_interval_seconds": "2026-02-10T05:06:46.431086+00:00",
+    "polaris.event_bus.subscriptions_added{event_type=TelemetryEvent}": "2026-02-10T05:06:46.432714+00:00",
+    "polaris.event_bus.total_handlers": "2026-02-10T05:06:46.432727+00:00",
+    "polaris.event_bus.subscriptions_added{event_type=AdaptationEvent}": "2026-02-10T05:06:46.432726+00:00",
+    "polaris.event_bus.started": "2026-02-10T05:06:46.432982+00:00",
+    "polaris.registry.connector_registered{system_id=swim}": "2026-02-10T05:06:46.432994+00:00",
+    "polaris.registry.total_connectors": "2026-02-10T05:06:46.432995+00:00",
+    "polaris.registry.system_ids_accessed": "2026-02-10T05:11:45.707849+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_servers}": "2026-02-10T05:11:36.478941+00:00",
+    "polaris.connector.swim.connected": "2026-02-10T05:06:46.440717+00:00",
+    "polaris.monitoring.started": "2026-02-10T05:06:46.440875+00:00",
+    "polaris.registry.all_connectors_accessed": "2026-02-10T05:11:36.477927+00:00",
+    "polaris.connector.swim.telemetry_calls": "2026-02-10T05:11:36.477933+00:00",
+    "polaris.metrics.auto_export_started": "2026-02-10T05:06:46.440985+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_active_servers}": "2026-02-10T05:11:36.479779+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_max_servers}": "2026-02-10T05:11:36.480466+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_dimmer}": "2026-02-10T05:11:36.480889+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_basic_rt}": "2026-02-10T05:11:36.481166+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_basic_throughput}": "2026-02-10T05:11:36.481479+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_opt_rt}": "2026-02-10T05:11:36.481809+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_opt_throughput}": "2026-02-10T05:11:36.482050+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_utilization server1}": "2026-02-10T05:11:36.482314+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_utilization server2}": "2026-02-10T05:11:36.482560+00:00",
+    "polaris.connector.swim.command_duration_seconds{command=get_utilization server3}": "2026-02-10T05:11:36.482812+00:00",
+    "polaris.connector.swim.telemetry_duration_seconds": "2026-02-10T05:11:36.482818+00:00",
+    "polaris.telemetry.collected{system_id=swim}": "2026-02-10T05:11:36.482826+00:00",
+    "polaris.knowledge.inmemory.states_stored{system_id=swim}": "2026-02-10T05:11:36.482829+00:00",
+    "polaris.knowledge.inmemory.states_per_system{system_id=swim}": "2026-02-10T05:11:36.482831+00:00",
+    "polaris.knowledge.state_stored{system_id=swim}": "2026-02-10T05:11:36.482833+00:00",
+    "polaris.world_model.statistical.updates{system_id=swim}": "2026-02-10T05:11:36.482835+00:00",
+    "polaris.world_model.statistical.values_recorded": "2026-02-10T05:11:36.482839+00:00",
+    "polaris.world_model.updated{system_id=swim}": "2026-02-10T05:11:36.482848+00:00",
+    "polaris.event_bus.events_published{event_type=TelemetryEvent}": "2026-02-10T05:11:36.482852+00:00",
+    "polaris.event_bus.handler_count{event_type=TelemetryEvent}": "2026-02-10T05:11:36.482853+00:00",
+    "polaris.event_bus.handler_duration_seconds{event_type=TelemetryEvent}": "2026-02-10T05:11:36.482944+00:00",
+    "polaris.events.telemetry_published{system_id=swim}": "2026-02-10T05:11:36.482947+00:00",
+    "polaris.world_model.statistical.insights_requested": "2026-02-10T05:11:36.482952+00:00",
+    "polaris.world_model.statistical.systems_with_insights": "2026-02-10T05:11:36.483465+00:00",
+    "polaris.strategy.threshold.assessments{system_id=swim}": "2026-02-10T05:11:36.483555+00:00",
+    "polaris.strategy.threshold.no_action_needed{system_id=swim}": "2026-02-10T05:11:36.483808+00:00",
+    "polaris.strategy.assessments{system_id=swim}": "2026-02-10T05:11:36.483813+00:00",
+    "polaris.monitoring.loop_duration_seconds": "2026-02-10T05:11:36.483820+00:00",
+    "polaris.monitoring.systems_processed": "2026-02-10T05:11:36.483821+00:00",
+    "polaris.monitoring.adaptations_executed": "2026-02-10T05:11:36.483822+00:00",
+    "polaris.monitoring.last_iteration_timestamp": "2026-02-10T05:11:36.483825+00:00"
+  }
+}

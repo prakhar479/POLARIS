@@ -185,6 +185,77 @@ class OpenAIClient(LLMClient):
             raise RuntimeError(f"OpenAI API error: {e}") from e
 
 
+class GroqClient(LLMClient):
+    """Groq LLM client."""
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-oss-120b"):
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self.model = model
+
+        if not self.api_key:
+            raise ValueError(
+                "Groq API key not provided. Set GROQ_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
+
+        try:
+            from groq import Groq
+            self.client = Groq(api_key=self.api_key)
+        except ImportError:
+            raise ImportError(
+                "groq package not installed. "
+                "Install with: pip install groq"
+            )
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024
+    ) -> LLMResponse:
+        """Generate response using Groq with error handling."""
+
+        try:
+            # Convert to Groq format (same as OpenAI)
+            groq_messages = [
+                {"role": msg.role, "content": msg.content}
+                for msg in messages
+            ]
+
+            # Run sync client in thread pool to make it async
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=groq_messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_tokens,
+                    top_p=1,
+                    stream=False,  # Use non-streaming for simplicity
+                    stop=None
+                )
+            )
+
+            if not response.choices or not response.choices[0].message.content:
+                raise ValueError("Empty response from Groq API")
+
+            return LLMResponse(
+                content=response.choices[0].message.content,
+                model=self.model,
+                tokens_used=response.usage.total_tokens if response.usage else None,
+                finish_reason=response.choices[0].finish_reason
+            )
+            
+        except ImportError:
+            raise ImportError(
+                "groq package not installed. "
+                "Install with: pip install groq"
+            )
+        except Exception as e:
+            # Wrap API errors with more context
+            raise RuntimeError(f"Groq API error: {e}") from e
+
 class ResilientLLMClient(LLMClient):
     """Resilience wrapper adding retries, rate limiting, and API key rotation."""
 
@@ -225,6 +296,8 @@ class ResilientLLMClient(LLMClient):
                 keys = [k.strip() for k in os.getenv("OPENAI_API_KEYS", "").split(",") if k.strip()]
             if self.provider in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
+            if self.provider == "groq" and os.getenv("GROQ_API_KEYS"):
+                keys = [k.strip() for k in os.getenv("GROQ_API_KEYS", "").split(",") if k.strip()]
 
         if not keys:
             # Single client fallback using default env
@@ -252,6 +325,8 @@ class ResilientLLMClient(LLMClient):
     def _create_provider_client(self, api_key: Optional[str] = None) -> LLMClient:
         if self.provider == "openai":
             return OpenAIClient(api_key=api_key, model=self.model or self.inner_kwargs.get("model", "gpt-4"))
+        elif self.provider == "groq":
+            return GroqClient(api_key=api_key, model=self.model or self.inner_kwargs.get("model", "openai/gpt-oss-120b"))
         # default to google
         return GoogleGeminiClient(api_key=api_key, model=self.model or self.inner_kwargs.get("model", "gemini-2.5-flash"))
 
@@ -390,7 +465,8 @@ def create_llm_client(provider: str = "google", **kwargs) -> LLMClient:
     enabled_env = os.getenv("LLM_RESILIENCE_ENABLED", "0").lower() in ("1", "true", "yes")
     has_multi_keys = (
         (provider.lower() == "openai" and os.getenv("OPENAI_API_KEYS")) or
-        (provider.lower() in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"))
+        (provider.lower() in ("google", "gemini") and os.getenv("GEMINI_API_KEYS")) or 
+        (provider.lower() == "groq" and os.getenv("GROQ_API_KEYS"))
     )
 
     if resilience or enabled_env or has_multi_keys:
@@ -400,5 +476,7 @@ def create_llm_client(provider: str = "google", **kwargs) -> LLMClient:
         return GoogleGeminiClient(**kwargs)
     elif provider.lower() == "openai":
         return OpenAIClient(**kwargs)
+    elif provider.lower() == "groq":
+        return GroqClient(**kwargs)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")
