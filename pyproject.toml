@@ -36,6 +36,8 @@ dev = [
     "pytest-benchmark",
     "pre-commit",
     "types-PyYAML",
+    "build>=0.10.0",
+    "twine>=4.0.0",
 ]
 
 [tool.pytest.ini_options]
