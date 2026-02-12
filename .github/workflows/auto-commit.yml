@@ -34,13 +34,13 @@ jobs:
       run: |
         # Check Black formatting
         black_needed=false
-        if ! black --check --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
+        if ! black --check --diff --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
           black_needed=true
         fi
 
         # Check isort formatting
         isort_needed=false
-        if ! isort --check-only --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
+        if ! isort --check-only --diff --profile=black --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
           isort_needed=true
         fi
 
@@ -68,7 +68,7 @@ jobs:
         # Run isort
         if [ "${{ steps.check-format.outputs.isort_needed }}" = "true" ]; then
           echo "Running isort..."
-          isort --line-length=100 polaris/ tests/ examples/
+          isort --profile=black --line-length=100 polaris/ tests/ examples/
         fi
 
     - name: Commit and push formatting changes

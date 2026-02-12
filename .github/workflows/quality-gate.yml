@@ -28,16 +28,16 @@ jobs:
     - name: Code Quality Analysis
       run: |
         echo "=== Running Black Formatting Check ==="
-        black --check --diff polaris/ tests/ examples/ || exit 1
+        black --check --diff --line-length=100 polaris/ tests/ examples/ || exit 1
 
         echo "=== Running isort Import Sorting Check ==="
-        isort --check-only --diff polaris/ tests/ examples/ || exit 1
+        isort --check-only --diff --profile=black --line-length=100 polaris/ tests/ examples/ || exit 1
 
         echo "=== Running mypy Type Checking ==="
         mypy polaris/ --ignore-missing-imports || exit 1
 
         echo "=== Running flake8 Linting ==="
-        flake8 polaris/ examples/ --max-line-length=120 --extend-ignore=E203,W503,E221,E225,E231,E272,E501,E201,E202 || exit 1
+        flake8 polaris/ examples/ --max-line-length=100 --extend-ignore=E203,W503,E221,E225,E231,E272,E501,E201,E202 --exclude=tests/ || exit 1
 
     - name: Test Suite
       run: |

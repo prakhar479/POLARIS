@@ -50,7 +50,7 @@ jobs:
 
     - name: Run isort import sorting
       run: |
-        isort --check-only --diff --line-length=100 polaris/ tests/ examples/
+        isort --check-only --diff --profile=black --line-length=100 polaris/ tests/ examples/
       continue-on-error: false
 
     - name: Run mypy type checking
@@ -74,13 +74,13 @@ jobs:
       id: check-format
       run: |
         # Check if any files need formatting
-        if ! black --check --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
+        if ! black --check --diff --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
           echo "needs_formatting=true" >> $GITHUB_OUTPUT
         else
           echo "needs_formatting=false" >> $GITHUB_OUTPUT
         fi
 
-        if ! isort --check-only --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
+        if ! isort --check-only --diff --profile=black --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
           echo "needs_import_sorting=true" >> $GITHUB_OUTPUT
         else
           echo "needs_import_sorting=false" >> $GITHUB_OUTPUT
@@ -91,7 +91,7 @@ jobs:
       run: |
         # Format the code
         black --line-length=100 polaris/ tests/ examples/
-        isort --line-length=100 polaris/ tests/ examples/
+        isort --profile=black --line-length=100 polaris/ tests/ examples/
 
         # Configure git
         git config --local user.email "action@github.com"
