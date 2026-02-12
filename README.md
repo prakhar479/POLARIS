@@ -2,7 +2,7 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
-**Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of ![POLARIS](./SEAMS_2025_AgenticFramework.pdf)). It provides a simple default experience while allowing full customization of every component.
+**Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of ![POLARIS](./POLARIS_Framework.pdf)). It provides a simple default experience while allowing full customization of every component.
 
 ## Quick Start
 
@@ -286,28 +286,7 @@ make lint
 
 # Type checking
 make type-check
-
-# Security scan
-make security
 ```
-
-### Automated CI/CD Pipeline
-
-The project includes automated GitHub Actions workflows that run on:
-
-- **Push**: Full pipeline with auto-formatting and commit
-- **Pull Request**: Quality gates and validation
-- **Merge**: Complete validation and documentation build
-
-#### Features
-
-- ✅ **Automated Testing**: Multi-Python version testing with coverage
-- ✅ **Code Formatting**: Auto-format with Black/isort and commit changes
-- ✅ **Quality Gates**: Linting, type checking, security scanning
-- ✅ **Coverage Reporting**: Minimum 80% coverage requirement
-- ✅ **Documentation**: Auto-build on main branch
-- ✅ **Security**: Dependency vulnerability scanning
-- ✅ **Performance**: Benchmark regression detection
 
 #### Workflow Files
 
