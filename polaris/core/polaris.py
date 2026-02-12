@@ -627,9 +627,9 @@ class Polaris:
                 context = AdaptationContext(
                     system_id=state.system_id,
                     historical_states=[],
-                    world_model_insights=await self.world_model.get_insights()
-                    if self.world_model
-                    else None,
+                    world_model_insights=(
+                        await self.world_model.get_insights() if self.world_model else None
+                    ),
                 )
 
                 action = await self.strategy.assess(state, context)

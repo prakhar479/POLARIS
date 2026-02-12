@@ -165,9 +165,9 @@ class StatisticalMetaLearner(MetaLearner):
             optimizer = self._get_or_create_optimizer(analysis.system_id, tunable_params)
 
             # Collect historical configuration-performance data
-            historical_data: List[
-                ParameterConfiguration
-            ] = await self._collect_historical_configurations(analysis.system_id, tunable_params)
+            historical_data: List[ParameterConfiguration] = (
+                await self._collect_historical_configurations(analysis.system_id, tunable_params)
+            )
 
             # Train optimizer on historical data
             if not optimizer.fit(historical_data):

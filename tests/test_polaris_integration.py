@@ -316,9 +316,11 @@ class TestPolarisIntegration:
         """Test export_metrics when not supported by metrics collector."""
         # Mock metrics collector without export_to_file method
         polaris.metrics = Mock()
-        delattr(polaris.metrics, "export_to_file") if hasattr(
-            polaris.metrics, "export_to_file"
-        ) else None
+        (
+            delattr(polaris.metrics, "export_to_file")
+            if hasattr(polaris.metrics, "export_to_file")
+            else None
+        )
 
         with pytest.raises(NotImplementedError):
             polaris.export_metrics("test.json")

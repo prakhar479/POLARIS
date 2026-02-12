@@ -560,9 +560,11 @@ Propose specific parameter changes to improve system performance.
             return {
                 "analysis": data.get("analysis", ""),
                 "issues": data.get("issues", []) if isinstance(data.get("issues"), list) else [],
-                "recommendations": data.get("recommendations", [])
-                if isinstance(data.get("recommendations"), list)
-                else [],
+                "recommendations": (
+                    data.get("recommendations", [])
+                    if isinstance(data.get("recommendations"), list)
+                    else []
+                ),
             }
 
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError):

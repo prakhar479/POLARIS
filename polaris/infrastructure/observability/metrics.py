@@ -108,11 +108,11 @@ class SimpleMetricsCollector(MetricsInterface):
                     "metric_name": metric,
                     "metric_type": "counter",
                     "value": value,
-                    "last_updated": self._last_updated.get(
-                        metric, datetime.now(timezone.utc)
-                    ).isoformat()
-                    if self._last_updated.get(metric)
-                    else datetime.now(timezone.utc).isoformat(),
+                    "last_updated": (
+                        self._last_updated.get(metric, datetime.now(timezone.utc)).isoformat()
+                        if self._last_updated.get(metric)
+                        else datetime.now(timezone.utc).isoformat()
+                    ),
                 }
             )
 
@@ -123,11 +123,11 @@ class SimpleMetricsCollector(MetricsInterface):
                     "metric_name": metric,
                     "metric_type": "gauge",
                     "value": value,
-                    "last_updated": self._last_updated.get(
-                        metric, datetime.now(timezone.utc)
-                    ).isoformat()
-                    if self._last_updated.get(metric)
-                    else datetime.now(timezone.utc).isoformat(),
+                    "last_updated": (
+                        self._last_updated.get(metric, datetime.now(timezone.utc)).isoformat()
+                        if self._last_updated.get(metric)
+                        else datetime.now(timezone.utc).isoformat()
+                    ),
                 }
             )
 
@@ -139,11 +139,11 @@ class SimpleMetricsCollector(MetricsInterface):
                         "metric_name": f"{metric}_count",
                         "metric_type": "histogram",
                         "value": len(values),
-                        "last_updated": self._last_updated.get(
-                            metric, datetime.now(timezone.utc)
-                        ).isoformat()
-                        if self._last_updated.get(metric)
-                        else datetime.now(timezone.utc).isoformat(),
+                        "last_updated": (
+                            self._last_updated.get(metric, datetime.now(timezone.utc)).isoformat()
+                            if self._last_updated.get(metric)
+                            else datetime.now(timezone.utc).isoformat()
+                        ),
                     }
                 )
                 rows.append(
@@ -151,11 +151,11 @@ class SimpleMetricsCollector(MetricsInterface):
                         "metric_name": f"{metric}_avg",
                         "metric_type": "histogram",
                         "value": sum(values) / len(values),
-                        "last_updated": self._last_updated.get(
-                            metric, datetime.now(timezone.utc)
-                        ).isoformat()
-                        if self._last_updated.get(metric)
-                        else datetime.now(timezone.utc).isoformat(),
+                        "last_updated": (
+                            self._last_updated.get(metric, datetime.now(timezone.utc)).isoformat()
+                            if self._last_updated.get(metric)
+                            else datetime.now(timezone.utc).isoformat()
+                        ),
                     }
                 )
                 rows.append(
@@ -163,11 +163,11 @@ class SimpleMetricsCollector(MetricsInterface):
                         "metric_name": f"{metric}_min",
                         "metric_type": "histogram",
                         "value": min(values),
-                        "last_updated": self._last_updated.get(
-                            metric, datetime.now(timezone.utc)
-                        ).isoformat()
-                        if self._last_updated.get(metric)
-                        else datetime.now(timezone.utc).isoformat(),
+                        "last_updated": (
+                            self._last_updated.get(metric, datetime.now(timezone.utc)).isoformat()
+                            if self._last_updated.get(metric)
+                            else datetime.now(timezone.utc).isoformat()
+                        ),
                     }
                 )
                 rows.append(
@@ -175,11 +175,11 @@ class SimpleMetricsCollector(MetricsInterface):
                         "metric_name": f"{metric}_max",
                         "metric_type": "histogram",
                         "value": max(values),
-                        "last_updated": self._last_updated.get(
-                            metric, datetime.now(timezone.utc)
-                        ).isoformat()
-                        if self._last_updated.get(metric)
-                        else datetime.now(timezone.utc).isoformat(),
+                        "last_updated": (
+                            self._last_updated.get(metric, datetime.now(timezone.utc)).isoformat()
+                            if self._last_updated.get(metric)
+                            else datetime.now(timezone.utc).isoformat()
+                        ),
                     }
                 )
 
