@@ -1,21 +1,19 @@
-"""
-LLM-based meta-learner using AI for intelligent parameter tuning.
-"""
+"""LLM-based meta-learner using AI for intelligent parameter tuning."""
 
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
-import uuid
 import json
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
+from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.meta_learner import (
     MetaLearner,
     ParameterProposal,
     PerformanceAnalysis,
-    ProposalStatus
+    ProposalStatus,
 )
-from polaris.abstractions.strategy import AdaptationStrategy
-from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
+from polaris.abstractions.strategy import AdaptationStrategy, ParameterSpec
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 
 
@@ -60,34 +58,50 @@ class LLMMetaLearner(MetaLearner):
         self._per_system_prompts = per_system_prompts or {}
 
     async def analyze_performance(
-        self,
-        system_id: str,
-        time_window_hours: float = 24.0
+        self, system_id: str, time_window_hours: float = 24.0
     ) -> PerformanceAnalysis:
         """Analyze system performance using LLM."""
-
         if self.metrics:
             self.metrics.increment(
                 "polaris.meta_learning.llm.analysis_requests",
                 tags={"system_id": system_id},
             )
 
+        # Handle null knowledge store gracefully
+        if not self.knowledge_store:
+            self.logger.warning(
+                "Knowledge store not available for system %s, using fallback analysis",
+                system_id=system_id,
+            )
+            if self.metrics:
+                self.metrics.increment(
+                    "polaris.meta_learning.llm.analysis_knowledge_store_unavailable",
+                    tags={"system_id": system_id},
+                )
+            return PerformanceAnalysis(
+                system_id=system_id,
+                time_window_hours=time_window_hours,
+                success_rate=1.0,  # Assume success without data
+                insights={
+                    "error": "knowledge_store_unavailable",
+                    "message": "Knowledge store not configured",
+                },
+                recommendations=["Configure knowledge store for better analysis"],
+            )
+
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=time_window_hours)
 
         # Query historical data
-        states = await self.knowledge_store.query_states(
-            system_id, start_time, end_time
-        )
-        actions = await self.knowledge_store.query_actions(
-            system_id, start_time, end_time
-        )
+        states = await self.knowledge_store.query_states(system_id, start_time, end_time)
+        actions = await self.knowledge_store.query_actions(system_id, start_time, end_time)
 
         # Calculate basic statistics
         if actions:
             successful = sum(
-                1 for _, result in actions
-                if hasattr(result, 'status') and result.status.value == 'success'
+                1
+                for _, result in actions
+                if hasattr(result, "status") and result.status.value == "success"
             )
             success_rate = successful / len(actions)
         else:
@@ -95,25 +109,19 @@ class LLMMetaLearner(MetaLearner):
 
         # Prepare data for LLM analysis
         analysis_prompt = self._build_analysis_prompt(
-            system_id,
-            states,
-            actions,
-            success_rate,
-            time_window_hours
+            system_id, states, actions, success_rate, time_window_hours
         )
 
         try:
             # Call LLM for analysis
             messages = [
                 LLMMessage(role="system", content=self._get_system_prompt(system_id)),
-                LLMMessage(role="user", content=analysis_prompt)
+                LLMMessage(role="user", content=analysis_prompt),
             ]
 
             llm_start = datetime.now(timezone.utc)
             response = await self.llm.generate(
-                messages,
-                temperature=self.temperature,
-                max_tokens=1024
+                messages, temperature=self.temperature, max_tokens=1024
             )
 
             if self.metrics:
@@ -128,11 +136,11 @@ class LLMMetaLearner(MetaLearner):
             analysis_data = self._parse_analysis_response(response.content)
 
             insights = {
-                'total_states': len(states),
-                'total_adaptations': len(actions),
-                'success_rate': success_rate,
-                'llm_analysis': analysis_data.get('analysis', ''),
-                'identified_issues': analysis_data.get('issues', [])
+                "total_states": len(states),
+                "total_adaptations": len(actions),
+                "success_rate": success_rate,
+                "llm_analysis": analysis_data.get("analysis", ""),
+                "identified_issues": analysis_data.get("issues", []),
             }
 
             if self.metrics:
@@ -146,7 +154,7 @@ class LLMMetaLearner(MetaLearner):
                 time_window_hours=time_window_hours,
                 success_rate=success_rate,
                 insights=insights,
-                recommendations=analysis_data.get('recommendations', [])
+                recommendations=analysis_data.get("recommendations", []),
             )
 
         except Exception as e:
@@ -161,17 +169,14 @@ class LLMMetaLearner(MetaLearner):
                 system_id=system_id,
                 time_window_hours=time_window_hours,
                 success_rate=success_rate,
-                insights={'total_adaptations': len(actions)},
-                recommendations=[]
+                insights={"total_adaptations": len(actions)},
+                recommendations=[],
             )
 
     async def propose_strategy_updates(
-        self,
-        strategy: AdaptationStrategy,
-        analysis: PerformanceAnalysis
+        self, strategy: AdaptationStrategy, analysis: PerformanceAnalysis
     ) -> List[ParameterProposal]:
         """Use LLM to propose parameter updates."""
-
         if self.metrics:
             self.metrics.increment(
                 "polaris.meta_learning.llm.proposals_requests",
@@ -190,22 +195,18 @@ class LLMMetaLearner(MetaLearner):
             return []
 
         # Build prompt for parameter optimization
-        prompt = self._build_optimization_prompt(
-            analysis,
-            tunable_params
-        )
+        prompt = self._build_optimization_prompt(analysis, tunable_params)
 
         try:
             messages = [
-                LLMMessage(role="system",
-                           content=self._get_optimization_system_prompt(analysis.system_id)),
-                LLMMessage(role="user", content=prompt)
+                LLMMessage(
+                    role="system", content=self._get_optimization_system_prompt(analysis.system_id)
+                ),
+                LLMMessage(role="user", content=prompt),
             ]
 
             response = await self.llm.generate(
-                messages,
-                temperature=self.temperature,
-                max_tokens=1024
+                messages, temperature=self.temperature, max_tokens=1024
             )
 
             # Parse proposals
@@ -213,28 +214,30 @@ class LLMMetaLearner(MetaLearner):
 
             proposals = []
             for prop_data in proposals_data:
-                param_path = prop_data.get('parameter')
+                param_path = prop_data.get("parameter")
                 if param_path not in tunable_params:
                     continue
 
                 spec = tunable_params[param_path]
-                proposed_value = prop_data.get('proposed_value')
+                proposed_value = prop_data.get("proposed_value")
 
                 # Validate proposed value
                 if not self._validate_proposal(spec, proposed_value):
                     continue
 
-                proposals.append(ParameterProposal(
-                    proposal_id=str(uuid.uuid4()),
-                    parameter_path=param_path,
-                    current_value=spec.current_value,
-                    proposed_value=proposed_value,
-                    rationale=prop_data.get('rationale', ''),
-                    confidence=prop_data.get('confidence', 0.7),
-                    expected_impact=prop_data.get('expected_impact', ''),
-                    status=ProposalStatus.PENDING,
-                    created_at=datetime.now(timezone.utc)
-                ))
+                proposals.append(
+                    ParameterProposal(
+                        proposal_id=str(uuid.uuid4()),
+                        parameter_path=param_path,
+                        current_value=spec.current_value,
+                        proposed_value=proposed_value,
+                        rationale=prop_data.get("rationale", ""),
+                        confidence=prop_data.get("confidence", 0.7),
+                        expected_impact=prop_data.get("expected_impact", ""),
+                        status=ProposalStatus.PENDING,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
 
             if self.metrics:
                 self.metrics.gauge(
@@ -255,17 +258,24 @@ class LLMMetaLearner(MetaLearner):
             return []
 
     async def validate_proposals(
-        self,
-        proposals: List[ParameterProposal]
+        self, proposals: List[ParameterProposal], system_state: Optional[Dict[str, Any]] = None
     ) -> List[ParameterProposal]:
-        """Validate proposals (approve high-confidence ones)."""
-
+        """Enhanced validation with multi-factor scoring."""
+        validated = []
         approved = 0
         rejected = 0
 
-        validated = []
         for proposal in proposals:
-            if proposal.confidence >= 0.7:
+            # Calculate comprehensive validation score
+            validation_score = self._calculate_validation_score(proposal, system_state)
+
+            # Update proposal confidence with validation score
+            proposal.confidence = validation_score
+
+            # Apply configurable threshold
+            approval_threshold = 0.7  # Could be configurable
+
+            if validation_score >= approval_threshold:
                 proposal.status = ProposalStatus.APPROVED
                 validated.append(proposal)
                 approved += 1
@@ -282,16 +292,26 @@ class LLMMetaLearner(MetaLearner):
                 "polaris.meta_learning.llm.proposals_rejected",
                 rejected,
             )
+            self.metrics.gauge(
+                "polaris.meta_learning.llm.validation_avg_score",
+                sum(p.confidence for p in proposals) / len(proposals) if proposals else 0,
+            )
+
+        self.logger.info(
+            "Proposal validation completed: %d approved, %d rejected, avg_score: %.3f",
+            approved=approved,
+            rejected=rejected,
+            avg_score=sum(p.confidence for p in proposals) / len(proposals) if proposals else 0,
+        )
 
         return validated
 
     def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
         """System prompt for performance analysis, with optional system-specific overrides."""
-
         # Per-system override if provided
         if system_id and self._per_system_prompts:
             per_system = self._per_system_prompts.get(system_id, {})
-            override = per_system.get('analysis_system_prompt')
+            override = per_system.get("analysis_system_prompt")
             if override:
                 return override
 
@@ -310,22 +330,28 @@ Analyze the historical performance data and identify:
 3. Opportunities for optimization
 4. Specific recommendations for improvement
 
+Focus on:
+- Response time patterns and anomalies
+- Resource utilization trends
+- Error rates and reliability issues
+- Adaptation effectiveness
+- System stability indicators
+
 Respond in JSON format:
 {
-    "analysis": "detailed analysis of system behavior",
-    "issues": ["identified issue 1", "issue 2", ...],
-    "recommendations": ["recommendation 1", "recommendation 2", ...]
+    "analysis": "detailed analysis of system behavior with specific metrics",
+    "issues": ["identified issue 1 with impact assessment", "issue 2", ...],
+    "recommendations": ["specific recommendation 1 with expected benefit", "recommendation 2", ...]
 }
 
-Be thorough and data-driven in your analysis."""
+Be thorough, data-driven, and provide actionable insights. Quantify improvements where possible."""
 
     def _get_optimization_system_prompt(self, system_id: Optional[str] = None) -> str:
         """System prompt for parameter optimization, with optional system-specific overrides."""
-
         # Per-system override if provided
         if system_id and self._per_system_prompts:
             per_system = self._per_system_prompts.get(system_id, {})
-            override = per_system.get('optimization_system_prompt')
+            override = per_system.get("optimization_system_prompt")
             if override:
                 return override
 
@@ -340,12 +366,19 @@ Be thorough and data-driven in your analysis."""
 
 Given performance analysis and tunable parameters, propose specific parameter changes to improve system performance.
 
+Consider:
+- Current system performance and bottlenecks
+- Parameter sensitivity and interaction effects
+- Risk vs reward for each change
+- Gradual improvement approach
+- System stability and safety
+
 For each parameter change, provide:
-- parameter: the parameter path
-- proposed_value: new value to set
-- rationale: why this change will help
-- confidence: 0.0-1.0 confidence score
-- expected_impact: expected improvement
+- parameter: the parameter path (e.g., "strategy.threshold")
+- proposed_value: new value to set (must be within bounds)
+- rationale: detailed explanation of why this change will help
+- confidence: 0.0-1.0 confidence score (higher for safer, well-justified changes)
+- expected_impact: expected improvement with metrics if possible
 
 Respond in JSON format:
 {
@@ -353,31 +386,26 @@ Respond in JSON format:
         {
             "parameter": "param.path",
             "proposed_value": value,
-            "rationale": "explanation",
+            "rationale": "detailed explanation with expected benefits",
             "confidence": 0.8,
-            "expected_impact": "description"
+            "expected_impact": "expected improvement description with metrics"
         }
     ]
 }
 
-Be conservative - only propose changes you're confident will improve performance."""
+Be conservative - prioritize system stability. Only propose changes you're confident will improve performance.
+Start with small adjustments."""
 
     def _build_analysis_prompt(
-        self,
-        system_id: str,
-        states: list,
-        actions: list,
-        success_rate: float,
-        time_window: float
+        self, system_id: str, states: list, actions: list, success_rate: float, time_window: float
     ) -> str:
         """Build prompt for performance analysis."""
-
         return f"""Analyze the performance of system '{system_id}' over the last {time_window} hours.
 
 **Statistics:**
 - Total state observations: {len(states)}
 - Total adaptation actions: {len(actions)}
-- Adaptation success rate: {success_rate:.1%}
+- Adaptation success rate: {success_rate: .1%}
 
 **Recent Adaptations:**
 {self._format_recent_actions(actions[-10:])}
@@ -389,20 +417,19 @@ Provide a comprehensive analysis and recommendations for optimization.
 """
 
     def _build_optimization_prompt(
-        self,
-        analysis: PerformanceAnalysis,
-        tunable_params: Dict
+        self, analysis: PerformanceAnalysis, tunable_params: Dict
     ) -> str:
         """Build prompt for parameter optimization."""
-
-        params_desc = "\n".join([
-            f"- {path}: current={spec.current_value}, min={spec.min_value}, max={spec.max_value}"
-            for path, spec in tunable_params.items()
-        ])
+        params_desc = "\n".join(
+            [
+                f"- {path}: current={spec.current_value}, min={spec.min_value}, max={spec.max_value}"
+                for path, spec in tunable_params.items()
+            ]
+        )
 
         return f"""Based on this performance analysis:
 
-**Success Rate:** {analysis.success_rate:.1%}
+**Success Rate:** {analysis.success_rate: .1%}
 **Recommendations:** {', '.join(analysis.recommendations)}
 **Insights:** {analysis.insights.get('llm_analysis', 'No analysis available')}
 
@@ -419,19 +446,84 @@ Propose specific parameter changes to improve system performance.
 
         lines = []
         for action, result in actions[-5:]:
-            status = result.status.value if hasattr(
-                result, 'status') else 'unknown'
+            status = result.status.value if hasattr(result, "status") else "unknown"
             lines.append(f"  - {action.action_type}: {status}")
 
         return "\n".join(lines)
 
     def _analyze_metric_trends(self, states: list) -> str:
-        """Analyze metric trends from states."""
+        """Analyze metric trends from states with actual statistical analysis."""
         if len(states) < 2:
-            return "Insufficient data for trend analysis"
+            return "Insufficient data for trend analysis (need at least 2 data points)"
 
-        # Simple trend analysis
-        return f"Analyzed {len(states)} state snapshots"
+        try:
+            # Extract common metrics from states
+            metric_trends = {}
+
+            # Get all metric keys from the first state
+            if not states[0]:
+                return "No valid state data available for trend analysis"
+
+            first_state = states[0]
+            if hasattr(first_state, "metrics"):
+                metrics_dict = first_state.metrics
+            elif isinstance(first_state, dict):
+                metrics_dict = first_state
+            else:
+                return "Unable to extract metrics from state data"
+
+            # Analyze each metric trend
+            for metric_key in metrics_dict.keys():
+                values = []
+                for state in states:
+                    try:
+                        if hasattr(state, "metrics") and metric_key in state.metrics:
+                            val = state.metrics[metric_key]
+                            if isinstance(val, (int, float)):
+                                values.append(val)
+                        elif isinstance(state, dict) and metric_key in state:
+                            val = state[metric_key]
+                            if isinstance(val, (int, float)):
+                                values.append(val)
+                    except (AttributeError, TypeError, KeyError):
+                        continue
+
+                if len(values) >= 2:
+                    trend = self._calculate_trend_direction(values)
+                    change_pct = self._calculate_percentage_change(values)
+                    metric_trends[metric_key] = {
+                        "direction": trend,
+                        "change_pct": change_pct,
+                        "latest": values[-1],
+                        "average": sum(values) / len(values),
+                    }
+
+            if not metric_trends:
+                return "No numeric metrics found for trend analysis"
+
+            # Format trend analysis for LLM
+            trend_summary = []
+            for metric, data in metric_trends.items():
+                if data["direction"] == "up":
+                    trend_summary.append(
+                        f"{metric}: INCREASING (+{data['change_pct']: .1f}% from "
+                        f"{data['average']: .2f} to {data['latest']: .2f})"
+                    )
+                elif data["direction"] == "down":
+                    trend_summary.append(
+                        f"{metric}: DECREASING ({data['change_pct']: .1f}% from "
+                        f"{data['average']: .2f} to {data['latest']: .2f})"
+                    )
+                else:
+                    trend_summary.append(
+                        f"{metric}: STABLE (avg: {data['average']: .2f}, current: {data['latest']: .2f})"
+                    )
+
+            return "\n".join(trend_summary)
+
+        except Exception as e:
+            self.logger.warning(f"Error in metric trend analysis: {e}")
+            return f"Trend analysis failed: {str(e)}"
 
     def _parse_analysis_response(self, response: str) -> Dict:
         """Parse LLM analysis response with improved robustness."""
@@ -439,10 +531,10 @@ Propose specific parameter changes to improve system performance.
             # Extract JSON with better error handling
             response = response.strip()
             if not response:
-                return {'analysis': '', 'issues': [], 'recommendations': []}
-            
+                return {"analysis": "", "issues": [], "recommendations": []}
+
             json_content = response
-            
+
             # Handle ```json blocks
             if "```json" in response:
                 parts = response.split("```json")
@@ -450,7 +542,7 @@ Propose specific parameter changes to improve system performance.
                     json_part = parts[1].split("```")[0].strip()
                     if json_part:
                         json_content = json_part
-            
+
             # Handle generic ``` blocks
             elif "```" in response:
                 parts = response.split("```")
@@ -460,19 +552,21 @@ Propose specific parameter changes to improve system performance.
                         json_content = json_part
 
             data = json.loads(json_content)
-            
+
             # Validate structure and provide defaults
             if not isinstance(data, dict):
-                return {'analysis': response, 'issues': [], 'recommendations': []}
-            
+                return {"analysis": response, "issues": [], "recommendations": []}
+
             return {
-                'analysis': data.get('analysis', ''),
-                'issues': data.get('issues', []) if isinstance(data.get('issues'), list) else [],
-                'recommendations': data.get('recommendations', []) if isinstance(data.get('recommendations'), list) else []
+                "analysis": data.get("analysis", ""),
+                "issues": data.get("issues", []) if isinstance(data.get("issues"), list) else [],
+                "recommendations": data.get("recommendations", [])
+                if isinstance(data.get("recommendations"), list)
+                else [],
             }
-            
+
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-            return {'analysis': response, 'issues': [], 'recommendations': []}
+            return {"analysis": response, "issues": [], "recommendations": []}
 
     def _parse_proposals_response(self, response: str) -> List[Dict]:
         """Parse LLM proposals response with improved robustness."""
@@ -480,9 +574,9 @@ Propose specific parameter changes to improve system performance.
             response = response.strip()
             if not response:
                 return []
-            
+
             json_content = response
-            
+
             # Handle ```json blocks
             if "```json" in response:
                 parts = response.split("```json")
@@ -490,7 +584,7 @@ Propose specific parameter changes to improve system performance.
                     json_part = parts[1].split("```")[0].strip()
                     if json_part:
                         json_content = json_part
-            
+
             # Handle generic ``` blocks
             elif "```" in response:
                 parts = response.split("```")
@@ -500,21 +594,21 @@ Propose specific parameter changes to improve system performance.
                         json_content = json_part
 
             data = json.loads(json_content)
-            
+
             # Validate structure
             if not isinstance(data, dict):
                 return []
-            
-            proposals = data.get('proposals', [])
+
+            proposals = data.get("proposals", [])
             if not isinstance(proposals, list):
                 return []
-            
+
             return proposals
-            
+
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
             return []
 
-    def _validate_proposal(self, spec, proposed_value) -> bool:
+    def _validate_proposal(self, spec: ParameterSpec, proposed_value: Any) -> bool:
         """Validate proposed value against parameter spec."""
         try:
             # Check type
@@ -534,5 +628,107 @@ Propose specific parameter changes to improve system performance.
                 return False
 
             return True
-        except:
+        except Exception:
             return False
+
+    def _calculate_trend_direction(self, values: List[float]) -> str:
+        """Calculate trend direction from a series of values."""
+        if len(values) < 2:
+            return "unknown"
+
+        # Simple linear regression to determine trend
+        n = len(values)
+        x = list(range(n))
+
+        # Calculate slope
+        x_mean = sum(x) / n
+        y_mean = sum(values) / n
+
+        numerator = sum((x[i] - x_mean) * (values[i] - y_mean) for i in range(n))
+        denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
+
+        if denominator == 0:
+            return "stable"
+
+        slope = numerator / denominator
+
+        # Determine direction based on slope relative to average value
+        avg_value = y_mean
+        if avg_value == 0:
+            return "stable" if abs(slope) < 0.01 else ("up" if slope > 0 else "down")
+
+        relative_change = abs(slope) / avg_value
+
+        if relative_change < 0.05:  # Less than 5% change per time unit
+            return "stable"
+        elif slope > 0:
+            return "up"
+        else:
+            return "down"
+
+    def _calculate_percentage_change(self, values: List[float]) -> float:
+        """Calculate percentage change from first to last value."""
+        if len(values) < 2:
+            return 0.0
+
+        first_val = values[0]
+        last_val = values[-1]
+
+        if first_val == 0:
+            return 0.0 if last_val == 0 else 100.0
+
+        return ((last_val - first_val) / first_val) * 100
+
+    def _calculate_validation_score(
+        self, proposal: ParameterProposal, system_state: Optional[Dict[str, Any]] = None
+    ) -> float:
+        """Calculate comprehensive validation score for a proposal."""
+        score = proposal.confidence  # Start with LLM confidence
+
+        # Factor 1: Parameter sensitivity (conservative for critical params)
+        critical_params = ["threshold", "timeout", "max_retries", "rate_limit"]
+        if any(critical in proposal.parameter_path.lower() for critical in critical_params):
+            score *= 0.8  # Reduce score for critical parameters
+
+        # Factor 2: Change magnitude (smaller changes are safer)
+        try:
+            current_val = (
+                float(proposal.current_value)
+                if isinstance(proposal.current_value, (int, float, str))
+                else 0
+            )
+            proposed_val = (
+                float(proposal.proposed_value)
+                if isinstance(proposal.proposed_value, (int, float, str))
+                else 0
+            )
+
+            if current_val != 0:
+                change_pct = abs((proposed_val - current_val) / current_val)
+                if change_pct > 0.5:  # More than 50% change
+                    score *= 0.7
+                elif change_pct > 0.2:  # More than 20% change
+                    score *= 0.85
+        except (ValueError, TypeError):
+            pass  # Skip if values aren't numeric
+
+        # Factor 3: System stability (reduce score if system is unstable)
+        if system_state:
+            try:
+                # Look for stability indicators
+                error_rate = system_state.get("error_rate", 0)
+                cpu_usage = system_state.get("cpu_usage", 0)
+
+                if error_rate > 0.1:  # High error rate
+                    score *= 0.8
+                if cpu_usage > 0.9:  # High CPU usage
+                    score *= 0.85
+            except (AttributeError, TypeError):
+                pass
+
+        # Factor 4: Rationale quality (longer, more detailed rationales are better)
+        if len(proposal.rationale) < 20:
+            score *= 0.9  # Penalize short rationales
+
+        # Ensure score stays within bounds
+        return max(0.0, min(1.0, score))

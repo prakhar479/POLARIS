@@ -1,5 +1,5 @@
 """Infrastructure package."""
 
-from polaris.infrastructure.observability import StructuredLogger, SimpleMetricsCollector
+from polaris.infrastructure.observability import SimpleMetricsCollector, StructuredLogger
 
-__all__ = ['StructuredLogger', 'SimpleMetricsCollector']
+__all__ = ["StructuredLogger", "SimpleMetricsCollector"]

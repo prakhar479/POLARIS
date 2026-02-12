@@ -5,12 +5,12 @@ Shows how to use Polaris with a YAML configuration file.
 """
 
 import asyncio
+
 from polaris import Polaris
 
 
 async def main():
     """Run Polaris with configuration file."""
-
     # Create Polaris from config file
     # This will:
     # - Load systems from config

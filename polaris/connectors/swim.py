@@ -6,19 +6,29 @@ Connects Polaris to the SWIM exemplar system for self-adaptation.
 
 import asyncio
 import time
-from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, List, Optional
 
 from polaris.abstractions.connector import Connector
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
-    SystemState,
     AdaptationAction,
     ExecutionResult,
-    MetricValue,
-    HealthStatus,
     ExecutionStatus,
+    HealthStatus,
+    MetricValue,
+    SystemState,
 )
+
+if TYPE_CHECKING:
+    pass
+
+
+# Use string-based import to avoid circular imports
+def _get_connector_class() -> type:
+    from polaris.abstractions.connector import Connector
+
+    return Connector
 
 
 class SWIMConnector(Connector):
@@ -36,7 +46,8 @@ class SWIMConnector(Connector):
         timeout: float = 30.0,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
-    ):
+    ) -> None:
+        """Initialize SWIM connector with connection parameters."""
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -196,14 +207,13 @@ class SWIMConnector(Connector):
                 and "basic_throughput" in metrics
                 and "optional_throughput" in metrics
             ):
-                total_throughput = (
-                    metrics["basic_throughput"].value + metrics["optional_throughput"].value
-                )
+                basic_throughput_val = float(metrics["basic_throughput"].value)
+                optional_throughput_val = float(metrics["optional_throughput"].value)
+                total_throughput = basic_throughput_val + optional_throughput_val
                 if total_throughput > 0:
                     avg_rt = (
-                        metrics["basic_response_time"].value * metrics["basic_throughput"].value
-                        + metrics["optional_response_time"].value
-                        * metrics["optional_throughput"].value
+                        float(metrics["basic_response_time"].value) * basic_throughput_val
+                        + float(metrics["optional_response_time"].value) * optional_throughput_val
                     ) / total_throughput
                     metrics["average_response_time"] = MetricValue(
                         name="average_response_time",
@@ -308,7 +318,7 @@ class SWIMConnector(Connector):
                 command = "remove_server"
 
             elif action.action_type.upper() in ["SET_DIMMER", "ADJUST_QOS"]:
-                dimmer_value = action.parameters.get("value", 1.0)
+                dimmer_value = (action.parameters or {}).get("value", 1.0)
                 if not 0.0 <= dimmer_value <= 1.0:
                     if self._metrics:
                         self._metrics.increment("polaris.connector.swim.actions_validation_failed")
@@ -342,7 +352,10 @@ class SWIMConnector(Connector):
                 )
                 self._metrics.increment(
                     "polaris.connector.swim.actions_executed",
-                    tags={"action_type": action.action_type, "status": ExecutionStatus.SUCCESS.value},
+                    tags={
+                        "action_type": action.action_type,
+                        "status": ExecutionStatus.SUCCESS.value,
+                    },
                 )
             if self._logger:
                 self._logger.info(
@@ -371,7 +384,10 @@ class SWIMConnector(Connector):
                 )
                 self._metrics.increment(
                     "polaris.connector.swim.actions_executed",
-                    tags={"action_type": action.action_type, "status": ExecutionStatus.FAILED.value},
+                    tags={
+                        "action_type": action.action_type,
+                        "status": ExecutionStatus.FAILED.value,
+                    },
                 )
             if self._logger:
                 self._logger.error(

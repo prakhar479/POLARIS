@@ -184,6 +184,7 @@ Polaris follows a modular, interface-driven design:
 - **`strategies/`** - Adaptation logic (default: threshold-based)
 - **`world_model/`** - System behavior modeling
 - **`knowledge/`** - Historical data storage
+- **`meta_learner/`** - Intelligent parameter optimization
 - **`infrastructure/`** - Logging, metrics, configuration
 
 ## Extension Points
@@ -199,7 +200,7 @@ class MyConnector(Connector):
     async def collect_telemetry(self) -> SystemState:
         # Collect your system's metrics
         return SystemState(...)
-    
+
     async def execute_action(self, action):
         # Execute adaptation on your system
         pass
@@ -218,7 +219,7 @@ class MyStrategy(AdaptationStrategy):
         if should_adapt():
             return AdaptationAction(...)
         return None
-    
+
     def get_tunable_parameters(self):
         # Declare what can be optimized
         return {...}
@@ -235,7 +236,104 @@ polaris = Polaris(
 )
 ```
 
+## Testing and CI/CD
+
+### Local Development
+
+The project includes a comprehensive CI/CD pipeline with automated testing, formatting, and quality checks.
+
+```bash
+# Setup development environment
+./scripts/setup-ci.sh
+
+# Install pre-commit hooks
+make install-hooks
+
+# Run full CI pipeline locally
+make ci
+
+# Quick pre-commit check
+make pre-commit
+
+# Available commands
+make help
+```
+
+### Running Tests
+
+```bash
+# Run test suite
+make test
+
+# Run with coverage
+make test-all
+
+# Verbose output
+make test-verbose
+```
+
+### Code Quality
+
+```bash
+# Format code
+make format
+
+# Check formatting
+make format-check
+
+# Run linting
+make lint
+
+# Type checking
+make type-check
+
+# Security scan
+make security
+```
+
+### Automated CI/CD Pipeline
+
+The project includes automated GitHub Actions workflows that run on:
+
+- **Push**: Full pipeline with auto-formatting and commit
+- **Pull Request**: Quality gates and validation
+- **Merge**: Complete validation and documentation build
+
+#### Features
+
+- ✅ **Automated Testing**: Multi-Python version testing with coverage
+- ✅ **Code Formatting**: Auto-format with Black/isort and commit changes
+- ✅ **Quality Gates**: Linting, type checking, security scanning
+- ✅ **Coverage Reporting**: Minimum 80% coverage requirement
+- ✅ **Documentation**: Auto-build on main branch
+- ✅ **Security**: Dependency vulnerability scanning
+- ✅ **Performance**: Benchmark regression detection
+
+#### Workflow Files
+
+- `.github/workflows/ci-cd.yml` - Main CI/CD pipeline
+- `.github/workflows/quality-gate.yml` - PR quality validation
+- `.github/workflows/auto-commit.yml` - Auto-format and commit
+- `.github/workflows/merge-check.yml` - Merge validation
+
+#### Pre-commit Hooks
+
+Local development includes pre-commit hooks for:
+
+- Black formatting
+- isort import sorting
+- flake8 linting
+- mypy type checking
+- pytest validation
+- Security scanning
+
+Setup with:
+```bash
+make install-hooks
+```
+
 ## Testing
+
 Run tests with:
 
 ```bash
@@ -246,4 +344,10 @@ or use the provided script:
 
 ```bash
 python run_tests.py
+```
+
+For comprehensive testing and quality checks:
+
+```bash
+make ci
 ```

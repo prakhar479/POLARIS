@@ -2,53 +2,51 @@
 
 __version__ = "2.0.0"
 
-# Core exports
-from polaris.core import (
-    Polaris,
-    SystemState,
-    AdaptationAction,
-    ExecutionResult,
-    MetricValue,
-    HealthStatus,
-    ExecutionStatus
-)
-
 # Abstractions
 from polaris.abstractions import (
-    Connector,
     AdaptationStrategy,
-    WorldModel,
+    Connector,
     KnowledgeStore,
-    MetaLearner
+    MetaLearner,
+    WorldModel,
 )
+
+# Core exports
+from polaris.core import (
+    AdaptationAction,
+    ExecutionResult,
+    ExecutionStatus,
+    HealthStatus,
+    MetricValue,
+    Polaris,
+    SystemState,
+)
+from polaris.knowledge import InMemoryKnowledgeStore
+from polaris.meta_learner import LLMMetaLearner, StatisticalMetaLearner
 
 # Default implementations
 from polaris.strategies import ThresholdReactiveStrategy
 from polaris.world_model import StatisticalWorldModel
-from polaris.knowledge import InMemoryKnowledgeStore
-from polaris.meta_learner import StatisticalMetaLearner, LLMMetaLearner
 
 __all__ = [
     # Core
-    'Polaris',
-    'SystemState',
-    'AdaptationAction',
-    'ExecutionResult',
-    'MetricValue',
-    'HealthStatus',
-    'ExecutionStatus',
-
+    "Polaris",
+    "SystemState",
+    "AdaptationAction",
+    "ExecutionResult",
+    "MetricValue",
+    "HealthStatus",
+    "ExecutionStatus",
     # Abstractions
-    'Connector',
-    'AdaptationStrategy',
-    'WorldModel',
-    'KnowledgeStore',
-    'MetaLearner',
-
+    "Connector",
+    "AdaptationStrategy",
+    "WorldModel",
+    "KnowledgeStore",
+    "MetaLearner",
     # Default implementations
-    'ThresholdReactiveStrategy',
-    'StatisticalWorldModel',
-    'InMemoryKnowledgeStore',
-    'StatisticalMetaLearner',
-    'LLMMetaLearner'
+    "ThresholdReactiveStrategy",
+    "StatisticalWorldModel",
+    "InMemoryKnowledgeStore",
+    "StatisticalMetaLearner",
+    "LLMMetaLearner",
 ]

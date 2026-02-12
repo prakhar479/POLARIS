@@ -1,7 +1,7 @@
 """Tests for monitoring interval configuration and CLI semantics (F7)."""
 
-from polaris.infrastructure.config import PolarisConfig
 from polaris.core.polaris import Polaris
+from polaris.infrastructure.config import PolarisConfig
 
 
 def test_monitoring_interval_from_config(mock_logger, mock_metrics):

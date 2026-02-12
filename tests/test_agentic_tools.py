@@ -1,14 +1,20 @@
-import asyncio
 import types
-import pytest
 from datetime import datetime, timezone
 
-from polaris.strategies.agentic_llm import AgenticLLMStrategy
-from polaris.infrastructure.llm import LLMMessage
-from polaris.knowledge import InMemoryKnowledgeStore
-from polaris.world_model import StatisticalWorldModel
-from polaris.core.models import SystemState, MetricValue, HealthStatus, AdaptationAction, ExecutionResult, ExecutionStatus
+import pytest
+
 from polaris.abstractions.strategy import AdaptationContext
+from polaris.core.models import (
+    AdaptationAction,
+    ExecutionResult,
+    ExecutionStatus,
+    HealthStatus,
+    MetricValue,
+    SystemState,
+)
+from polaris.knowledge import InMemoryKnowledgeStore
+from polaris.strategies.agentic_llm import AgenticLLMStrategy
+from polaris.world_model import StatisticalWorldModel
 
 
 class DummyLLM:
@@ -30,7 +36,12 @@ async def test_list_supported_actions_uses_connector():
     # Prepare
     ks = InMemoryKnowledgeStore()
     wm = StatisticalWorldModel(ks)
-    connector = DummyConnector(actions=[types.SimpleNamespace(action_type="scale_up"), types.SimpleNamespace(action_type="scale_down")])
+    connector = DummyConnector(
+        actions=[
+            types.SimpleNamespace(action_type="scale_up"),
+            types.SimpleNamespace(action_type="scale_down"),
+        ]
+    )
 
     strategy = AgenticLLMStrategy(
         llm_client=DummyLLM(),
@@ -69,7 +80,9 @@ async def test_list_supported_actions_falls_back_to_history():
         health_status=HealthStatus.HEALTHY,
     )
 
-    action = AdaptationAction(action_id="a1", action_type="adjust_qos", target_system="sys", parameters={"level": "high"})
+    action = AdaptationAction(
+        action_id="a1", action_type="adjust_qos", target_system="sys", parameters={"level": "high"}
+    )
     result = ExecutionResult(action_id="a1", status=ExecutionStatus.SUCCESS, result_data={})
     await ks.store_action(action, result)
 

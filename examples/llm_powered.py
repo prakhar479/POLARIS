@@ -6,17 +6,17 @@ Shows advanced AI-powered adaptation using Google Gemini or OpenAI.
 
 import asyncio
 import os
+
 from polaris import Polaris
 from polaris.connectors import SWIMConnector
-from polaris.strategies import LLMReasoningStrategy
-from polaris.meta_learner import LLMMetaLearner
 from polaris.infrastructure.llm import create_llm_client
 from polaris.infrastructure.observability import StructuredLogger
+from polaris.meta_learner import LLMMetaLearner
+from polaris.strategies import LLMReasoningStrategy
 
 
 async def main():
     """Run Polaris with LLM-powered intelligence."""
-
     # Check for API key
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -25,15 +25,14 @@ async def main():
         return
 
     # Create LLM client
-    llm_client = create_llm_client(
-        "google", api_key=api_key, model="gemini-2.5-flash")
+    llm_client = create_llm_client("google", api_key=api_key, model="gemini-2.5-flash")
 
     # Create LLM-powered strategy
     strategy = LLMReasoningStrategy(
         llm_client=llm_client,
         system_description="SWIM web application server pool",
         adaptation_goals="Maintain performance with minimal resource usage",
-        temperature=0.1
+        temperature=0.1,
     )
 
     # Create LLM meta-learner for autonomous optimization
@@ -44,7 +43,7 @@ async def main():
         knowledge_store=None,  # Will use default
         logger=logger,
         auto_apply=False,  # Require approval for safety
-        temperature=0.1
+        temperature=0.1,
     )
 
     # Create SWIM connector
@@ -52,10 +51,7 @@ async def main():
 
     # Create Polaris with AI components
     polaris = Polaris(
-        connectors=[swim],
-        strategy=strategy,
-        meta_learner=meta_learner,
-        logger=logger
+        connectors=[swim], strategy=strategy, meta_learner=meta_learner, logger=logger
     )
 
     print("Starting Polaris with AI-Powered Adaptation...")

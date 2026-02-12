@@ -1,11 +1,9 @@
-"""
-Connector interface for integrating managed systems with Polaris.
-"""
+"""Connector interface for integrating managed systems with Polaris."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import List
 
-from polaris.core.models import SystemState, AdaptationAction, ExecutionResult, MetricValue
+from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 class Connector(ABC):

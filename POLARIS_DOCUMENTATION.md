@@ -133,23 +133,23 @@ class MyConnector(Connector):
     async def connect(self) -> bool:
         """Establish connection to managed system."""
         pass
-    
+
     async def disconnect(self) -> bool:
         """Disconnect from managed system."""
         pass
-    
+
     async def get_system_id(self) -> str:
         """Return unique system identifier."""
         pass
-    
+
     async def collect_telemetry(self) -> SystemState:
         """Collect current system state and metrics."""
         pass
-    
+
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
         """Execute adaptation action on system."""
         pass
-    
+
     async def validate_action(self, action: AdaptationAction) -> bool:
         """Validate if action can be executed."""
         pass
@@ -164,11 +164,11 @@ class MyStrategy(AdaptationStrategy):
     async def assess(self, state: SystemState, context: AdaptationContext) -> Optional[AdaptationAction]:
         """Decide if adaptation is needed based on current state."""
         pass
-    
+
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
         """Return parameters that can be tuned by meta-learner."""
         pass
-    
+
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
         """Update a tunable parameter."""
         pass
@@ -183,11 +183,11 @@ class MyWorldModel(WorldModel):
     async def update(self, state: SystemState) -> None:
         """Update model with new system observation."""
         pass
-    
+
     async def predict(self, action: AdaptationAction, current_state: SystemState) -> PredictionResult:
         """Predict outcome of executing an action."""
         pass
-    
+
     async def get_insights(self) -> Dict[str, Any]:
         """Return insights about system behavior."""
         pass
@@ -202,11 +202,11 @@ class MyKnowledgeStore(KnowledgeStore):
     async def store_state(self, state: SystemState) -> None:
         """Store system state."""
         pass
-    
+
     async def store_action(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """Store adaptation action and result."""
         pass
-    
+
     async def query_states(self, system_id: str, start_time: datetime, end_time: datetime) -> List[SystemState]:
         """Query historical states for time range."""
         pass
@@ -221,11 +221,11 @@ class MyMetaLearner(MetaLearner):
     async def analyze_performance(self, system_id: str, time_window_hours: float) -> PerformanceAnalysis:
         """Analyze recent system performance."""
         pass
-    
+
     async def propose_strategy_updates(self, strategy: AdaptationStrategy, analysis: PerformanceAnalysis) -> List[ParameterProposal]:
         """Propose parameter updates for strategy."""
         pass
-    
+
     async def validate_proposals(self, proposals: List[ParameterProposal]) -> List[ParameterProposal]:
         """Validate and rank proposals by safety and impact."""
         pass
@@ -300,7 +300,7 @@ polaris = Polaris(
 - **SWIMConnector**: Connects to SWIM exemplar system
 - **StatisticalWorldModel**: Uses mean/std for simple predictions and, when enabled via configuration, adds lightweight Kalman-style smoothing and simple regime tracking ("low", "normal", "high") with uncertainty-aware reasoning.
 - **InMemoryKnowledgeStore**: Non-persistent storage for testing
-- **StatisticalMetaLearner**: Rule-based parameter optimization that can optionally consume world model insights (e.g., metric variability and regimes) to adjust proposal confidence.
+- **StatisticalMetaLearner**: Intelligent parameter optimization using Bayesian optimization with Gaussian Processes. Learns from historical data to suggest optimal parameter configurations, with fallback to rule-based heuristics when insufficient data is available. Integrates world model insights for uncertainty-aware confidence adjustment.
 - **LLMMetaLearner**: LLM-powered optimization
 
 ### Extension Points Summary

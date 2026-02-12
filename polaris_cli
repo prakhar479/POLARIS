@@ -2,8 +2,10 @@
 """Polaris CLI entry point."""
 
 import sys
-from polaris.cli import main
+
 from dotenv import load_dotenv
+
+from polaris.cli import main
 
 load_dotenv()
 

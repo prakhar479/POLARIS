@@ -1,14 +1,12 @@
-"""
-In-memory knowledge store implementation.
-"""
+"""In-memory knowledge store implementation."""
 
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 from collections import defaultdict
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
-from polaris.core.models import SystemState, AdaptationAction, ExecutionResult
 from polaris.abstractions.observability import Logger, MetricsCollector
+from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 class InMemoryKnowledgeStore(KnowledgeStore):
@@ -24,9 +22,10 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
+        """Initialize in-memory knowledge store with capacity limits."""
         self.max_states = max_states_per_system
         self._states: Dict[str, List[SystemState]] = defaultdict(list)
-        self._actions: Dict[str, List[tuple[AdaptationAction, ExecutionResult]]] = defaultdict(list)
+        self._actions: Dict[str, List[Tuple[AdaptationAction, ExecutionResult]]] = defaultdict(list)
         self._logger = logger
         self._metrics = metrics
 
@@ -50,7 +49,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
                     max_states=self.max_states,
                     previous_count=len(states),
                 )
-            self._states[state.system_id] = states[-self.max_states:]
+            self._states[state.system_id] = states[-self.max_states :]
 
         if self._metrics:
             self._metrics.gauge(
@@ -59,11 +58,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
                 tags={"system_id": state.system_id},
             )
 
-    async def store_action(
-        self,
-        action: AdaptationAction,
-        result: ExecutionResult
-    ) -> None:
+    async def store_action(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """Store adaptation action and result."""
         system_id = action.target_system
         self._actions[system_id].append((action, result))
@@ -88,7 +83,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
                     max_actions=self.max_states,
                     previous_count=len(self._actions[system_id]),
                 )
-            self._actions[system_id] = self._actions[system_id][-self.max_states:]
+            self._actions[system_id] = self._actions[system_id][-self.max_states :]
 
         if self._metrics:
             self._metrics.gauge(
@@ -98,10 +93,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
             )
 
     async def query_states(
-        self,
-        system_id: str,
-        start_time: datetime,
-        end_time: datetime
+        self, system_id: str, start_time: datetime, end_time: datetime
     ) -> List[SystemState]:
         """Query states in time range."""
         if self._metrics:
@@ -111,10 +103,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
             )
 
         states = self._states.get(system_id, [])
-        results = [
-            s for s in states
-            if start_time <= s.timestamp <= end_time
-        ]
+        results = [s for s in states if start_time <= s.timestamp <= end_time]
 
         if self._metrics:
             self._metrics.gauge(
@@ -126,11 +115,8 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         return results
 
     async def query_actions(
-        self,
-        system_id: str,
-        start_time: datetime,
-        end_time: datetime
-    ) -> List[tuple]:
+        self, system_id: str, start_time: Optional[datetime], end_time: Optional[datetime]
+    ) -> List[Tuple[AdaptationAction, ExecutionResult]]:
         """Query adaptation history."""
         if self._metrics:
             self._metrics.increment(
@@ -140,8 +126,16 @@ class InMemoryKnowledgeStore(KnowledgeStore):
 
         actions = self._actions.get(system_id, [])
         results = [
-            (action, result) for action, result in actions
-            if start_time <= action.created_at <= end_time
+            (action, result)
+            for action, result in actions
+            if (
+                start_time is None
+                or action.created_at is not None
+                and start_time <= action.created_at
+            )
+            and (
+                end_time is None or action.created_at is not None and action.created_at <= end_time
+            )
         ]
 
         if self._metrics:

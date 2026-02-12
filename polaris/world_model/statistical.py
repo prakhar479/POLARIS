@@ -1,15 +1,13 @@
-"""
-Statistical world model implementation.
-"""
+"""Statistical world model implementation."""
 
-from typing import Dict, Any, Optional, List
-from collections import defaultdict
 import statistics
+from collections import defaultdict
+from typing import Any, Dict, List, Optional
 
-from polaris.abstractions.world_model import WorldModel, PredictionResult
 from polaris.abstractions.knowledge_store import KnowledgeStore
-from polaris.core.models import SystemState, AdaptationAction
 from polaris.abstractions.observability import Logger, MetricsCollector
+from polaris.abstractions.world_model import PredictionResult, WorldModel
+from polaris.core.models import AdaptationAction, SystemState
 
 
 class _ScalarKalmanFilter:
@@ -51,9 +49,17 @@ class StatisticalWorldModel(WorldModel):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
+        """
+        Initialize the statistical world model.
+
+        Args:
+            knowledge_store: Knowledge store for retrieving historical data
+            use_kalman: Whether to use Kalman filtering for predictions
+            logger: Logger for logging events
+            metrics: Metrics collector for tracking performance
+        """
         self.knowledge_store = knowledge_store
-        self._metric_history: Dict[str, Dict[str, list]
-                                   ] = defaultdict(lambda: defaultdict(list))
+        self._metric_history: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
         self._use_kalman = use_kalman
         self._kalman_filters: Dict[str, Dict[str, _ScalarKalmanFilter]] = defaultdict(dict)
         # Simple HMM-style regime tracking per system
@@ -83,13 +89,13 @@ class StatisticalWorldModel(WorldModel):
         for metric_name, metric in state.metrics.items():
             try:
                 value = float(metric.value)
-                self._metric_history[state.system_id][metric_name].append(
-                    value)
+                self._metric_history[state.system_id][metric_name].append(value)
 
                 # Keep only last 100 values
                 if len(self._metric_history[state.system_id][metric_name]) > 100:
-                    self._metric_history[state.system_id][metric_name] = \
-                        self._metric_history[state.system_id][metric_name][-100:]
+                    self._metric_history[state.system_id][metric_name] = self._metric_history[
+                        state.system_id
+                    ][metric_name][-100:]
 
                 values_recorded += 1
 
@@ -147,7 +153,7 @@ class StatisticalWorldModel(WorldModel):
             resp_val = None
 
         # Simple emission preferences based on CPU / response time levels
-        emission: Dict[str, float] = {name: 1.0 for name in self._regimes}
+        emission: Dict[str, float] = dict.fromkeys(self._regimes, 1.0)
         if cpu_val is not None:
             if cpu_val < 40.0:
                 emission["low"] *= 2.0
@@ -182,9 +188,7 @@ class StatisticalWorldModel(WorldModel):
             self._regime_probs[system_id] = new_probs
 
     async def predict(
-        self,
-        action: AdaptationAction,
-        current_state: SystemState
+        self, action: AdaptationAction, current_state: SystemState
     ) -> PredictionResult:
         """
         Predict outcome of action.
@@ -242,9 +246,7 @@ class StatisticalWorldModel(WorldModel):
         regime_info = self._regime_probs.get(system_id)
         if regime_info:
             most_likely = max(regime_info.items(), key=lambda x: x[1])
-            reasoning_parts.append(
-                f"Estimated regime: {most_likely[0]} (p={most_likely[1]:.2f})"
-            )
+            reasoning_parts.append(f"Estimated regime: {most_likely[0]} (p={most_likely[1]: .2f})")
 
         reasoning = "; ".join(reasoning_parts)
 
@@ -267,17 +269,17 @@ class StatisticalWorldModel(WorldModel):
         if self._metrics:
             self._metrics.increment("polaris.world_model.statistical.insights_requested")
 
-        insights = {}
+        insights: Dict[str, Dict[str, Any]] = {}
         for system_id, metrics in self._metric_history.items():
             insights[system_id] = {}
             has_metric_insights = False
             for metric_name, values in metrics.items():
                 if len(values) >= 2:
                     insights[system_id][metric_name] = {
-                        'mean': statistics.mean(values),
-                        'std': statistics.stdev(values) if len(values) > 1 else 0,
-                        'min': min(values),
-                        'max': max(values)
+                        "mean": statistics.mean(values),
+                        "std": statistics.stdev(values) if len(values) > 1 else 0,
+                        "min": min(values),
+                        "max": max(values),
                     }
                     has_metric_insights = True
 

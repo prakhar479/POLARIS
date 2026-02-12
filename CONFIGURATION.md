@@ -104,7 +104,7 @@ systems:
 # Adaptation strategy
 strategy:
   type: "threshold"  # Must match a registered strategy factory (built-ins: threshold, llm_reasoning, hybrid, agentic_llm)
-  
+
   # Threshold strategy configuration
   threshold:
     thresholds:
@@ -116,7 +116,7 @@ strategy:
         low: 25.0
     cooldown_seconds: 60
     enabled: true
-  
+
   # LLM reasoning strategy configuration
   llm_reasoning:
     system_description: "Web application server pool"
@@ -171,8 +171,11 @@ meta_learner:
   # world_model.get_insights(). The meta-learner aggregates basic
   # uncertainty information (e.g., average metric std and regime
   # estimates) into analysis.insights["world_model_uncertainty"], and
-  # uses this to slightly adjust proposal confidence (more cautious
-  # when variability is high).
+  # uses this to adjust Bayesian optimization confidence (more cautious
+  # when variability is high). The StatisticalMetaLearner uses
+  # Gaussian Process-based Bayesian optimization for intelligent
+  # parameter tuning, with automatic fallback to rule-based heuristics
+  # when insufficient historical data is available.
 
 # Example: LLM-based meta-learner configuration
 # meta_learner:
@@ -222,11 +225,11 @@ observability:
     file: true
     file_path: "./logs/polaris.log"
     use_colors: true
-  
+
   metrics:
     enabled: true
     collector_type: "simple"  # Options: simple, prometheus, datadog
-    
+
     export:
       enabled: false
       formats: ["json", "csv"]
@@ -234,10 +237,10 @@ observability:
       auto_export_interval_minutes: 60
       experiment_name: null
       include_timestamp: true
-    
+
     simple:
       histogram_max_values: 1000
-    
+
     components:
       core_framework: true
       monitoring_loop: true
@@ -535,7 +538,7 @@ strategy:
     #     deciding which wildfire_* actions to trigger.
 ```
 
-**Requirements**: 
+**Requirements**:
 - Set `GOOGLE_API_KEY` or `OPENAI_API_KEY` environment variable
 - Install LLM client libraries: `pip install google-generativeai` or `pip install openai`
 
@@ -612,7 +615,7 @@ observability:
   metrics:
     enabled: true
     collector_type: "simple"  # Only "simple" fully implemented
-    
+
     # Auto-export settings
     export:
       enabled: true
@@ -621,7 +624,7 @@ observability:
       auto_export_interval_minutes: 60
       experiment_name: "my-experiment"
       include_timestamp: true
-    
+
     # Component-specific metrics (can disable individually)
     components:
       core_framework: true
@@ -1112,7 +1115,7 @@ Configure the managed systems to monitor and adapt.
 **Example errors**:
 ```yaml
 # ❌ Wrong: trailing colon
-strategy: 
+strategy:
   type: "threshold":
 
 # ✓ Correct

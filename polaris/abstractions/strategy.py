@@ -1,17 +1,16 @@
-"""
-Adaptation strategy interface for decision-making.
-"""
+"""Adaptation strategy interface for decision-making."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-from polaris.core.models import SystemState, AdaptationAction
+from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 @dataclass
 class AdaptationContext:
     """Context information for adaptation decisions."""
+
     system_id: str
     historical_states: list
     world_model_insights: Optional[Dict[str, Any]] = None
@@ -21,6 +20,7 @@ class AdaptationContext:
 @dataclass
 class ParameterSpec:
     """Specification for a tunable parameter."""
+
     current_value: Any
     type: type
     min_value: Optional[Any] = None
@@ -39,9 +39,7 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     async def assess(
-        self,
-        state: SystemState,
-        context: AdaptationContext
+        self, state: SystemState, context: AdaptationContext
     ) -> Optional[AdaptationAction]:
         """
         Assess system state and decide on adaptation.
@@ -55,12 +53,9 @@ class AdaptationStrategy(ABC):
         """
         pass
 
-    async def on_action_executed(
-        self,
-        action: AdaptationAction,
-        result
-    ) -> None:
-        """Hook called after action execution (optional)."""
+    @abstractmethod
+    async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
+        """Call after action execution (optional)."""
         pass
 
     # Tuning interface for Meta-Learner
@@ -76,11 +71,7 @@ class AdaptationStrategy(ABC):
         pass
 
     @abstractmethod
-    async def update_parameter(
-        self,
-        parameter_path: str,
-        new_value: Any
-    ) -> bool:
+    async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
         """
         Update a tunable parameter.
 
@@ -94,12 +85,12 @@ class AdaptationStrategy(ABC):
         pass
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
-        """Optional hook to apply configuration updates for hot-reload."""
+        """Apply configuration updates for hot-reload."""
         return
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """
-        Optional: Return strategy-specific performance metrics.
+        Return strategy-specific performance metrics.
 
         Used by Meta-Learner to assess effectiveness.
         """

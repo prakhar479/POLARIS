@@ -3,6 +3,7 @@
 *.log
 .vscode
 .kiro
+.windsurf
 .coverage
 node_modules/
 data/
@@ -23,5 +24,9 @@ polaris.egg-info/
 logs/
 *.pyc
 .env
+metrics/
 
 wildfire/
+.mypy
+.mypy_cache
+.benchmarks

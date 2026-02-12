@@ -1,0 +1,156 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Code Quality Analysis
+      run: |
+        echo "=== Running Black Formatting Check ==="
+        black --check --diff polaris/ tests/ examples/ || exit 1
+
+        echo "=== Running isort Import Sorting Check ==="
+        isort --check-only --diff polaris/ tests/ examples/ || exit 1
+
+        echo "=== Running mypy Type Checking ==="
+        mypy polaris/ --ignore-missing-imports || exit 1
+
+        echo "=== Running flake8 Linting ==="
+        flake8 polaris/ examples/ --max-line-length=120 --extend-ignore=E203,W503,E221,E225,E231,E272,E501,E201,E202 || exit 1
+
+    - name: Test Suite
+      run: |
+        echo "=== Running Test Suite ==="
+        pytest tests/ -v --cov=polaris --cov-report=xml --cov-fail-under=40
+
+    - name: Coverage Report
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: pr-checks
+        name: pr-coverage
+        fail_ci_if_error: false
+
+    - name: Complexity Analysis
+      run: |
+        pip install radon
+        echo "=== Cyclomatic Complexity ==="
+        radon cc polaris/ --min B
+
+        echo "=== Maintainability Index ==="
+        radon mi polaris/ --min B
+
+    - name: Documentation Coverage
+      run: |
+        python -c "
+        import ast
+        import os
+        from pathlib import Path
+
+        def analyze_docstrings(directory):
+            total = 0
+            documented = 0
+            missing_docs = []
+
+            for py_file in Path(directory).rglob('*.py'):
+                if 'test_' in py_file.name or '__pycache__' in str(py_file):
+                    continue
+                try:
+                    with open(py_file, 'r') as f:
+                        tree = ast.parse(f.read())
+                    for node in ast.walk(tree):
+                        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                            total += 1
+                            if ast.get_docstring(node):
+                                documented += 1
+                            else:
+                                missing_docs.append(f'{py_file}:{node.name}')
+                except Exception as e:
+                    print(f'Error processing {py_file}: {e}')
+
+            coverage = (documented / total * 100) if total > 0 else 0
+            print(f'Docstring Coverage: {coverage:.1f}% ({documented}/{total})')
+
+            if coverage < 80:
+                print('Missing docstrings (first 10):')
+                for item in missing_docs[:10]:
+                    print(f'  {item}')
+                return False
+            return True
+
+        success = analyze_docstrings('polaris')
+        exit(0 if success else 1)
+        "
+
+    - name: Performance Baseline
+      run: |
+        if [ -f "benchmarks/run_benchmarks.py" ]; then
+          pip install pytest-benchmark
+          echo "=== Running Performance Benchmarks ==="
+          pytest benchmarks/ --benchmark-only --benchmark-json=benchmark.json
+
+          # Check for performance regression
+          python -c "
+          import json
+          import sys
+          try:
+              with open('benchmark.json', 'r') as f:
+                  data = json.load(f)
+
+              # Simple regression check - fail if any benchmark is too slow
+              for bench_name, results in data.get('benchmarks', {}).items():
+                  stats = results.get('stats', {})
+                  mean_time = stats.get('mean', 0)
+                  if mean_time > 5.0:  # 5 second threshold
+                      print(f'Performance warning: {bench_name} took {mean_time:.2f}s')
+
+              print('Performance baseline check completed')
+          except Exception as e:
+              print(f'Benchmark analysis failed: {e}')
+          "
+        else
+          echo "No benchmarks found - skipping performance check"
+        fi
+
+    - name: Dependency Health
+      run: |
+        echo "=== Checking Dependency Health ==="
+        pip check
+
+        echo "=== Checking for Outdated Dependencies ==="
+        pip list --outdated --format=json || true
+
+    - name: Quality Gate Summary
+      run: |
+        echo "=== Quality Gate Summary ==="
+        echo "✓ Code formatting (Black)"
+        echo "✓ Import sorting (isort)"
+        echo "✓ Type checking (mypy)"
+        echo "✓ Linting (flake8)"
+        echo "✓ Test suite with coverage"
+        echo "✓ Documentation coverage"
+        echo "✓ Complexity analysis"
+        echo "✓ Dependency health"
+        echo ""
+        echo "PR is ready for merge!"

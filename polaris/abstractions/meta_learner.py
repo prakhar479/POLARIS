@@ -1,18 +1,17 @@
-"""
-Meta-Learner interface for autonomous parameter tuning.
-"""
+"""Meta-Learner interface for autonomous parameter tuning."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from polaris.abstractions.strategy import AdaptationStrategy
 
 
 class ProposalStatus(str, Enum):
     """Status of a parameter update proposal."""
+
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -23,6 +22,7 @@ class ProposalStatus(str, Enum):
 @dataclass
 class ParameterProposal:
     """Proposal for a parameter update."""
+
     proposal_id: str
     parameter_path: str
     current_value: Any
@@ -31,13 +31,14 @@ class ParameterProposal:
     confidence: float
     expected_impact: str
     status: ProposalStatus = ProposalStatus.PENDING
-    created_at: datetime = None
-    applied_at: datetime = None
+    created_at: Optional[datetime] = None
+    applied_at: Optional[datetime] = None
 
 
 @dataclass
 class PerformanceAnalysis:
     """Analysis of system performance."""
+
     system_id: str
     time_window_hours: float
     success_rate: float
@@ -48,9 +49,10 @@ class PerformanceAnalysis:
 @dataclass
 class AppliedUpdate:
     """Record of an applied parameter update."""
+
     proposal_id: str
     success: bool
-    error_message: str = None
+    error_message: Optional[str] = None
 
 
 class MetaLearner(ABC):
@@ -63,9 +65,7 @@ class MetaLearner(ABC):
 
     @abstractmethod
     async def analyze_performance(
-        self,
-        system_id: str,
-        time_window_hours: float = 24.0
+        self, system_id: str, time_window_hours: float = 24.0
     ) -> PerformanceAnalysis:
         """
         Analyze recent system performance.
@@ -81,9 +81,7 @@ class MetaLearner(ABC):
 
     @abstractmethod
     async def propose_strategy_updates(
-        self,
-        strategy: AdaptationStrategy,
-        analysis: PerformanceAnalysis
+        self, strategy: AdaptationStrategy, analysis: PerformanceAnalysis
     ) -> List[ParameterProposal]:
         """
         Propose parameter updates for a strategy.
@@ -99,8 +97,7 @@ class MetaLearner(ABC):
 
     @abstractmethod
     async def validate_proposals(
-        self,
-        proposals: List[ParameterProposal]
+        self, proposals: List[ParameterProposal]
     ) -> List[ParameterProposal]:
         """
         Validate and rank proposals by safety and impact.
@@ -114,9 +111,7 @@ class MetaLearner(ABC):
         pass
 
     async def apply_proposals(
-        self,
-        strategy: AdaptationStrategy,
-        proposals: List[ParameterProposal]
+        self, strategy: AdaptationStrategy, proposals: List[ParameterProposal]
     ) -> List[AppliedUpdate]:
         """
         Apply approved parameter updates to strategy.
@@ -127,11 +122,7 @@ class MetaLearner(ABC):
         for proposal in proposals:
             if proposal.status == ProposalStatus.APPROVED:
                 success = await strategy.update_parameter(
-                    proposal.parameter_path,
-                    proposal.proposed_value
+                    proposal.parameter_path, proposal.proposed_value
                 )
-                results.append(AppliedUpdate(
-                    proposal_id=proposal.proposal_id,
-                    success=success
-                ))
+                results.append(AppliedUpdate(proposal_id=proposal.proposal_id, success=success))
         return results

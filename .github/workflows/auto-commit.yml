@@ -1,0 +1,104 @@
+name: Auto-commit Formatting
+
+on:
+  push:
+    branches: [ main, develop, '**' ]
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-format:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.POLARIS_PAT || github.token }}
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+
+    - name: Install formatting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install black isort
+
+    - name: Check if formatting is needed
+      id: check-format
+      run: |
+        # Check Black formatting
+        black_needed=false
+        if ! black --check --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
+          black_needed=true
+        fi
+
+        # Check isort formatting
+        isort_needed=false
+        if ! isort --check-only --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
+          isort_needed=true
+        fi
+
+        # Set outputs
+        echo "black_needed=$black_needed" >> $GITHUB_OUTPUT
+        echo "isort_needed=$isort_needed" >> $GITHUB_OUTPUT
+
+        if [ "$black_needed" = "true" ] || [ "$isort_needed" = "true" ]; then
+          echo "formatting_needed=true" >> $GITHUB_OUTPUT
+        else
+          echo "formatting_needed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Format code
+      if: steps.check-format.outputs.formatting_needed == 'true'
+      run: |
+        echo "Formatting code..."
+
+        # Run Black formatting
+        if [ "${{ steps.check-format.outputs.black_needed }}" = "true" ]; then
+          echo "Running Black formatter..."
+          black --line-length=100 polaris/ tests/ examples/
+        fi
+
+        # Run isort
+        if [ "${{ steps.check-format.outputs.isort_needed }}" = "true" ]; then
+          echo "Running isort..."
+          isort --line-length=100 polaris/ tests/ examples/
+        fi
+
+    - name: Commit and push formatting changes
+      if: steps.check-format.outputs.formatting_needed == 'true'
+      run: |
+        # Configure git
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+
+        # Check if there are any changes to commit
+        if ! git diff --staged --quiet; then
+          echo "Committing formatting changes..."
+          git add polaris/ tests/ examples/
+          git commit -m "auto: format code [skip ci]"
+
+          echo "Pushing changes..."
+          git push
+        else
+          echo "No formatting changes to commit"
+        fi
+
+    - name: Summary
+      run: |
+        echo "=== Auto-format Summary ==="
+        echo "Black formatting needed: ${{ steps.check-format.outputs.black_needed }}"
+        echo "isort formatting needed: ${{ steps.check-format.outputs.isort_needed }}"
+        echo "Overall formatting needed: ${{ steps.check-format.outputs.formatting_needed }}"
+
+        if [ "${{ steps.check-format.outputs.formatting_needed }}" = "true" ]; then
+          echo "✓ Code was automatically formatted and committed"
+        else
+          echo "✓ Code was already properly formatted"
+        fi

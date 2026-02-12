@@ -249,12 +249,12 @@ world_model:
   statistical:
     # Number of recent samples to keep per metric in memory
     window_size: 100            # DEFAULT: 100
-    
+
     # Enable lightweight Kalman-style filtering
     # - true: Smoother predictions with variance estimates (recommended)
     # - false: Simple historical mean (lighter weight)
     use_kalman: true            # DEFAULT: false
-    
+
     # Note: Regime tracking (HMM-style) is always enabled
     # Infers "low", "normal", "high" regimes from metrics
     # Exposed via world_model.get_insights()
@@ -290,32 +290,36 @@ knowledge:
 
 meta_learner:
   enabled: false                # Set to true to enable (default: false)
-  
+
   # Type of meta-learner
   type: "llm"                   # "statistical" or "llm" (default: statistical)
-  
+
   # Interval between meta-learning analysis runs (hours)
   analysis_interval_hours: 1.0  # DEFAULT: 1.0
 
   # For Statistical Meta-Learner
-  # statistical:
-  #   conservative_mode: true   # Conservative param changes (default: true)
-  #   # When a StatisticalWorldModel is provided, the meta-learner
-  #   # automatically consumes insights and adjusts confidence accordingly
-  #   # More cautious when metric variability is high
+  statistical:
+    conservative_mode: true   # Conservative param changes (default: true)
+    enable_bayesian_optimization: true  # Use Bayesian optimization (default: true)
+    min_samples_for_optimization: 10    # Minimum samples before Bayesian optimization activates
+    acquisition_function: "expected_improvement"  # "expected_improvement", "upper_confidence_bound", "probability_improvement"
+    exploration_weight: 0.1    # Weight for exploration in UCB acquisition
+    # When a StatisticalWorldModel is provided, the meta-learner
+    # automatically consumes insights and adjusts confidence accordingly
+    # More cautious when metric variability is high
 
   # For LLM-Based Meta-Learner
   llm:
     provider: google            # "google" or "openai" (default: google)
     temperature: 0.1            # Model creativity (default: 0.1)
     auto_apply: false           # Auto-apply approved proposals (default: false)
-    
+
     # Optional: Custom analysis/optimization prompts
     # analysis_system_prompt: |
     #   You are an expert system analyst for self-adaptive systems...
     # optimization_system_prompt: |
     #   You are an expert parameter optimizer for self-adaptive systems...
-    
+
     # Per-system prompt overrides (keyed by systems[].id)
     # per_system_prompts:
     #   swim:
@@ -328,7 +332,7 @@ meta_learner:
     #       Analyze Wildfire metrics (fire_cells_burning_ratio, mr1_avg, safety)...
     #     optimization_system_prompt: |
     #       Propose parameter changes for optimal fire containment...
-    
+
     resilience:                 # Resilience settings for LLM calls
       rps: 2
       burst: 4
@@ -365,7 +369,7 @@ observability:
   metrics:
     enabled: true               # Enable metrics collection (default: true)
     collector_type: "simple"    # "simple", "prometheus", "datadog" (default: simple)
-    
+
     ######## Export Settings ########
     export:
       enabled: true             # Enable metrics export (default: false)

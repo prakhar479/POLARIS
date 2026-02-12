@@ -1,0 +1,140 @@
+name: Merge Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  pre-merge-checks:
+    runs-on: ubuntu-latest
+    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Run full test suite
+      run: |
+        pytest tests/ -v --cov=polaris --cov-report=xml --cov-fail-under=40
+
+    - name: Check merge conflicts
+      run: |
+        # Check for merge conflict markers
+        if git grep -l "<<<<<<< \|======= \|>>>>>>>" .; then
+          echo "ERROR: Merge conflict markers found in files"
+          exit 1
+        else
+          echo "✓ No merge conflict markers found"
+        fi
+
+    - name: Validate branch naming
+      run: |
+        branch_name="${{ github.head_ref }}"
+
+        # Check if branch follows naming conventions
+        if [[ "$branch_name" =~ ^(feature|fix|hotfix|docs|refactor|test|chore)/[a-zA-Z0-9_-]+$ ]]; then
+          echo "✓ Branch name follows convention: $branch_name"
+        else
+          echo "WARNING: Branch name doesn't follow convention (feature/fix/docs/refactor/test/chore/name): $branch_name"
+          echo "Consider renaming for better organization"
+        fi
+
+    - name: Check commit messages
+      run: |
+        # Get commits since main branch
+        commits=$(git rev-list --count HEAD ^origin/main 2>/dev/null || git rev-list --count HEAD ^main)
+
+        if [ "$commits" -gt 0 ]; then
+          echo "Checking last $commits commit(s)..."
+
+          git log --format="%s" HEAD~$commits..HEAD | while read commit_msg; do
+            # Check commit message format
+            if [[ "$commit_msg" =~ ^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .{1,72}$ ]]; then
+              echo "✓ Commit message: $commit_msg"
+            elif [[ "$commit_msg" == *"auto: format code"* ]]; then
+              echo "✓ Auto-format commit: $commit_msg"
+            elif [[ "$commit_msg" == *"Merge"* ]]; then
+              echo "✓ Merge commit: $commit_msg"
+            else
+              echo "WARNING: Commit message doesn't follow conventional format: $commit_msg"
+              echo "Expected format: type(scope): description"
+            fi
+          done
+        else
+          echo "No new commits to check"
+        fi
+
+    - name: Validate file additions
+      run: |
+        # Check for large files
+        large_files=$(git diff --name-only --diff-filter=A HEAD~1..HEAD | xargs -I {} find {} -size +1M 2>/dev/null || true)
+        if [ -n "$large_files" ]; then
+          echo "WARNING: Large files added:"
+          echo "$large_files"
+        fi
+
+        # Check for binary files that shouldn't be in repo
+        binary_extensions=('\.exe$' '\.dll$' '\.so$' '\.dylib$' '\.bin$' '\.img$' '\.iso$')
+        for ext in "${binary_extensions[@]}"; do
+          binary_files=$(git diff --name-only --diff-filter=A HEAD~1..HEAD | grep -E "$ext" || true)
+          if [ -n "$binary_files" ]; then
+            echo "WARNING: Binary files added that might not belong in repo:"
+            echo "$binary_files"
+          fi
+        done
+
+    - name: Check for TODO/FIXME in new code
+      run: |
+        # Check for TODO/FIXME in added/modified files
+        todo_files=$(git diff --name-only HEAD~1..HEAD -- '*.py' | xargs grep -l "TODO\|FIXME" 2>/dev/null || true)
+        if [ -n "$todo_files" ]; then
+          echo "WARNING: TODO/FIXME comments found in:"
+          echo "$todo_files"
+          echo "Please address these or add to backlog"
+        else
+          echo "✓ No TODO/FIXME comments found in changes"
+        fi
+
+    - name: Validate dependencies
+      run: |
+        # Check if pyproject.toml is valid
+        python -c "
+        try:
+            import toml
+            with open('pyproject.toml', 'r') as f:
+                config = toml.load(f)
+            print('✓ pyproject.toml is valid')
+        except Exception as e:
+            print(f'ERROR: Invalid pyproject.toml: {e}')
+            exit(1)
+        "
+
+        # Check dependency versions
+        pip check
+
+    - name: Merge readiness summary
+      run: |
+        echo "=== Merge Readiness Summary ==="
+        echo "✓ All tests passed with required coverage"
+        echo "✓ No merge conflicts detected"
+        echo "✓ Dependencies validated"
+        echo "✓ Code quality checks completed"
+        echo ""
+        if [ "${{ github.event.action }}" = "closed" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+          echo "🎉 PR successfully merged!"
+        else
+          echo "📋 PR is ready for review and merge"
+        fi

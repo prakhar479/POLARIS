@@ -1,14 +1,13 @@
 """Tests for StatisticalMetaLearner world model integration."""
 
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from unittest.mock import AsyncMock
 
 import pytest
 
-from polaris.meta_learner.statistical import StatisticalMetaLearner
-from polaris.abstractions.strategy import AdaptationStrategy
 from polaris.abstractions.meta_learner import PerformanceAnalysis
+from polaris.abstractions.strategy import AdaptationStrategy
+from polaris.meta_learner.statistical import StatisticalMetaLearner
 
 
 class DummyStrategy(AdaptationStrategy):
@@ -22,7 +21,9 @@ class DummyStrategy(AdaptationStrategy):
 
         return {"threshold.high": Spec(100.0)}
 
-    async def apply_parameters(self, parameters: Dict[str, Any]) -> None:  # pragma: no cover - not used here
+    async def apply_parameters(
+        self, parameters: Dict[str, Any]
+    ) -> None:  # pragma: no cover - not used here
         pass
 
     async def assess(self, state, context):  # type: ignore[override]
@@ -33,10 +34,13 @@ class DummyStrategy(AdaptationStrategy):
         """Minimal implementation that always reports success; used indirectly by meta-learner tuning."""
         return True
 
+    async def on_action_executed(self, action, result) -> None:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_analyze_performance_includes_world_model_uncertainty():
-    """StatisticalMetaLearner should include world_model_uncertainty when a world model is provided."""
+    """Should include world_model_uncertainty when a world model is provided."""
 
     # Mock knowledge store with no historical states/actions
     knowledge_store = AsyncMock()
@@ -92,7 +96,9 @@ async def test_proposal_confidence_adjusted_by_world_model_uncertainty():
 
     knowledge_store = AsyncMock()
     logger = AsyncMock()
-    meta = StatisticalMetaLearner(knowledge_store=knowledge_store, logger=logger, conservative_mode=True)
+    meta = StatisticalMetaLearner(
+        knowledge_store=knowledge_store, logger=logger, conservative_mode=True
+    )
 
     strategy = DummyStrategy()
     proposals = await meta.propose_strategy_updates(strategy, analysis)

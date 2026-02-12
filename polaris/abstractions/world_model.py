@@ -1,17 +1,16 @@
-"""
-World Model interface for system behavior modeling.
-"""
+"""World Model interface for system behavior modeling."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
 from dataclasses import dataclass
+from typing import Any, Dict
 
-from polaris.core.models import SystemState, AdaptationAction
+from polaris.core.models import AdaptationAction, SystemState
 
 
 @dataclass
 class PredictionResult:
     """Result of a world model prediction."""
+
     predicted_metrics: Dict[str, float]
     confidence: float
     reasoning: str = ""
@@ -36,9 +35,7 @@ class WorldModel(ABC):
 
     @abstractmethod
     async def predict(
-        self,
-        action: AdaptationAction,
-        current_state: SystemState
+        self, action: AdaptationAction, current_state: SystemState
     ) -> PredictionResult:
         """
         Predict outcome of executing an action.

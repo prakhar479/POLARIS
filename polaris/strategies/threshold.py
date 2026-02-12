@@ -1,14 +1,12 @@
-"""
-Threshold reactive strategy implementation.
-"""
+"""Threshold reactive strategy implementation."""
 
-from typing import Dict, Any, Optional
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-from polaris.abstractions.strategy import AdaptationStrategy, AdaptationContext, ParameterSpec
 from polaris.abstractions.observability import Logger, MetricsCollector
-from polaris.core.models import SystemState, AdaptationAction, MetricValue, ExecutionResult
+from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
+from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 class ThresholdReactiveStrategy(AdaptationStrategy):
@@ -18,11 +16,13 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
     Triggers adaptations when metric values cross defined thresholds.
     """
 
-    def __init__(self,
-                 thresholds: Optional[Dict[str, Dict[str, float]]] = None,
-                 cooldown_seconds: int = 60,
-                 logger: Optional[Logger] = None,
-                 metrics: Optional[MetricsCollector] = None):
+    def __init__(
+        self,
+        thresholds: Optional[Dict[str, Dict[str, float]]] = None,
+        cooldown_seconds: int = 60,
+        logger: Optional[Logger] = None,
+        metrics: Optional[MetricsCollector] = None,
+    ):
         """
         Initialize threshold strategy.
 
@@ -33,8 +33,8 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
             metrics: Metrics collector for tracking strategy performance
         """
         self.thresholds = thresholds or {
-            'cpu_usage': {'high': 80.0, 'low': 20.0},
-            'memory_usage': {'high': 85.0, 'low': 25.0}
+            "cpu_usage": {"high": 80.0, "low": 20.0},
+            "memory_usage": {"high": 85.0, "low": 25.0},
         }
         self.cooldown_seconds = cooldown_seconds
         self.logger = logger
@@ -44,29 +44,31 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         self._success_count = 0
 
         if self.logger:
-            self.logger.info("Threshold strategy initialized", 
-                           thresholds=self.thresholds,
-                           cooldown_seconds=cooldown_seconds)
-        
+            self.logger.info(
+                "Threshold strategy initialized",
+                thresholds=self.thresholds,
+                cooldown_seconds=cooldown_seconds,
+            )
+
         if self.metrics:
             self.metrics.increment("polaris.strategy.threshold.initialized")
             self.metrics.gauge("polaris.strategy.threshold.cooldown_seconds", cooldown_seconds)
 
     async def assess(
-        self,
-        state: SystemState,
-        context: AdaptationContext
+        self, state: SystemState, context: AdaptationContext
     ) -> Optional[AdaptationAction]:
         """Check if any thresholds are crossed."""
-        
         if self.logger:
-            self.logger.debug("Assessing thresholds for system", 
-                            system_id=state.system_id,
-                            metric_count=len(state.metrics))
+            self.logger.debug(
+                "Assessing thresholds for system",
+                system_id=state.system_id,
+                metric_count=len(state.metrics),
+            )
 
         if self.metrics:
-            self.metrics.increment("polaris.strategy.threshold.assessments",
-                                 tags={"system_id": state.system_id})
+            self.metrics.increment(
+                "polaris.strategy.threshold.assessments", tags={"system_id": state.system_id}
+            )
 
         # Check cooldown
         now = datetime.now(timezone.utc)
@@ -74,21 +76,27 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         if last and (now - last).total_seconds() < self.cooldown_seconds:
             remaining_cooldown = self.cooldown_seconds - (now - last).total_seconds()
             if self.logger:
-                self.logger.debug("System in cooldown period", 
-                                system_id=state.system_id,
-                                remaining_seconds=remaining_cooldown)
+                self.logger.debug(
+                    "System in cooldown period",
+                    system_id=state.system_id,
+                    remaining_seconds=remaining_cooldown,
+                )
             if self.metrics:
-                self.metrics.increment("polaris.strategy.threshold.cooldown_blocked",
-                                     tags={"system_id": state.system_id})
+                self.metrics.increment(
+                    "polaris.strategy.threshold.cooldown_blocked",
+                    tags={"system_id": state.system_id},
+                )
             return None  # Still in cooldown
 
         # Check each metric against thresholds
         for metric_name, metric in state.metrics.items():
             if metric_name not in self.thresholds:
                 if self.logger:
-                    self.logger.debug("No threshold configured for metric", 
-                                    metric=metric_name, 
-                                    system_id=state.system_id)
+                    self.logger.debug(
+                        "No threshold configured for metric",
+                        metric=metric_name,
+                        system_id=state.system_id,
+                    )
                 continue
 
             try:
@@ -96,87 +104,92 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                 thresholds = self.thresholds[metric_name]
 
                 if self.logger:
-                    self.logger.debug("Evaluating metric against thresholds", 
-                                    metric=metric_name,
-                                    value=value,
-                                    thresholds=thresholds,
-                                    system_id=state.system_id)
+                    self.logger.debug(
+                        "Evaluating metric against thresholds",
+                        metric=metric_name,
+                        value=value,
+                        thresholds=thresholds,
+                        system_id=state.system_id,
+                    )
 
                 if self.metrics:
-                    self.metrics.histogram("polaris.strategy.threshold.metric_values",
-                                         value, tags={"metric": metric_name, "system_id": state.system_id})
+                    self.metrics.histogram(
+                        "polaris.strategy.threshold.metric_values",
+                        value,
+                        tags={"metric": metric_name, "system_id": state.system_id},
+                    )
 
                 # Check if threshold crossed
-                if 'high' in thresholds and value > thresholds['high']:
+                if "high" in thresholds and value > thresholds["high"]:
                     if self.logger:
-                        self.logger.info("High threshold exceeded, creating scale action", 
-                                       metric=metric_name,
-                                       value=value,
-                                       threshold=thresholds['high'],
-                                       system_id=state.system_id)
-                    
+                        self.logger.info(
+                            "High threshold exceeded, creating scale action",
+                            metric=metric_name,
+                            value=value,
+                            threshold=thresholds["high"],
+                            system_id=state.system_id,
+                        )
+
                     if self.metrics:
-                        self.metrics.increment("polaris.strategy.threshold.high_threshold_exceeded",
-                                             tags={"metric": metric_name, "system_id": state.system_id})
-                    
+                        self.metrics.increment(
+                            "polaris.strategy.threshold.high_threshold_exceeded",
+                            tags={"metric": metric_name, "system_id": state.system_id},
+                        )
+
                     action = self._create_scale_action(
-                        state.system_id,
-                        metric_name,
-                        value,
-                        'high',
-                        thresholds['high']
+                        state.system_id, metric_name, value, "high", thresholds["high"]
                     )
                     self._last_adaptation[state.system_id] = now
                     return action
 
-                elif 'low' in thresholds and value < thresholds['low']:
+                elif "low" in thresholds and value < thresholds["low"]:
                     if self.logger:
-                        self.logger.info("Low threshold breached, creating scale action", 
-                                       metric=metric_name,
-                                       value=value,
-                                       threshold=thresholds['low'],
-                                       system_id=state.system_id)
-                    
+                        self.logger.info(
+                            "Low threshold breached, creating scale action",
+                            metric=metric_name,
+                            value=value,
+                            threshold=thresholds["low"],
+                            system_id=state.system_id,
+                        )
+
                     if self.metrics:
-                        self.metrics.increment("polaris.strategy.threshold.low_threshold_breached",
-                                             tags={"metric": metric_name, "system_id": state.system_id})
-                    
+                        self.metrics.increment(
+                            "polaris.strategy.threshold.low_threshold_breached",
+                            tags={"metric": metric_name, "system_id": state.system_id},
+                        )
+
                     action = self._create_scale_action(
-                        state.system_id,
-                        metric_name,
-                        value,
-                        'low',
-                        thresholds['low']
+                        state.system_id, metric_name, value, "low", thresholds["low"]
                     )
                     self._last_adaptation[state.system_id] = now
                     return action
 
             except (ValueError, TypeError) as e:
                 if self.logger:
-                    self.logger.warning("Failed to parse metric value", 
-                                      metric=metric_name,
-                                      value=metric.value,
-                                      error=str(e),
-                                      system_id=state.system_id)
+                    self.logger.warning(
+                        "Failed to parse metric value",
+                        metric=metric_name,
+                        value=metric.value,
+                        error=str(e),
+                        system_id=state.system_id,
+                    )
                 if self.metrics:
-                    self.metrics.increment("polaris.strategy.threshold.metric_parse_errors",
-                                         tags={"metric": metric_name, "system_id": state.system_id})
+                    self.metrics.increment(
+                        "polaris.strategy.threshold.metric_parse_errors",
+                        tags={"metric": metric_name, "system_id": state.system_id},
+                    )
                 continue
 
         if self.logger:
             self.logger.debug("No thresholds exceeded", system_id=state.system_id)
         if self.metrics:
-            self.metrics.increment("polaris.strategy.threshold.no_action_needed",
-                                 tags={"system_id": state.system_id})
+            self.metrics.increment(
+                "polaris.strategy.threshold.no_action_needed", tags={"system_id": state.system_id}
+            )
         return None
 
     def _create_scale_action(
-        self,
-        system_id: str,
-        metric: str,
-        value: float,
-        threshold_type: str,
-        threshold_value: float
+        self, system_id: str, metric: str, value: float, threshold_type: str, threshold_value: float
     ) -> AdaptationAction:
         """Create a scale action based on threshold crossing."""
         # For server_count, the logic is inverted:
@@ -195,26 +208,32 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
             action_type=action_type,
             target_system=system_id,
             parameters={
-                'metric': metric,
-                'current_value': value,
-                'threshold': threshold_value,
-                'instances': 1
-            }
+                "metric": metric,
+                "current_value": value,
+                "threshold": threshold_value,
+                "instances": 1,
+            },
         )
 
     async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """Track adaptation success."""
         self._adaptation_count += 1
-        if hasattr(result, 'status') and result.status.value == 'success':
+        if hasattr(result, "status") and result.status.value == "success":
             self._success_count += 1
-        
+
         if self.metrics:
-            self.metrics.increment("polaris.strategy.threshold.actions_executed",
-                                 tags={"action_type": action.action_type,
-                                       "system_id": action.target_system,
-                                       "status": result.status.value if hasattr(result, 'status') else 'unknown'})
-            self.metrics.gauge("polaris.strategy.threshold.success_rate",
-                             self._success_count / self._adaptation_count if self._adaptation_count > 0 else 0)
+            self.metrics.increment(
+                "polaris.strategy.threshold.actions_executed",
+                tags={
+                    "action_type": action.action_type,
+                    "system_id": action.target_system,
+                    "status": result.status.value if hasattr(result, "status") else "unknown",
+                },
+            )
+            self.metrics.gauge(
+                "polaris.strategy.threshold.success_rate",
+                self._success_count / self._adaptation_count if self._adaptation_count > 0 else 0,
+            )
 
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
         """Return tunable parameters."""
@@ -222,18 +241,18 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
 
         # Threshold values
         for metric, thresholds in self.thresholds.items():
-            if 'high' in thresholds:
+            if "high" in thresholds:
                 params[f"thresholds.{metric}.high"] = ParameterSpec(
-                    current_value=thresholds['high'],
+                    current_value=thresholds["high"],
                     type=float,
                     min_value=50.0,
                     max_value=95.0,
                     description=f"High threshold for {metric}",
                     kind="threshold_high",
                 )
-            if 'low' in thresholds:
+            if "low" in thresholds:
                 params[f"thresholds.{metric}.low"] = ParameterSpec(
-                    current_value=thresholds['low'],
+                    current_value=thresholds["low"],
                     type=float,
                     min_value=5.0,
                     max_value=50.0,
@@ -270,28 +289,26 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
-        if not isinstance(config, dict):
-            return
-
-        cooldown = config.get('cooldown_seconds')
+        """Apply configuration updates to the threshold strategy."""
+        cooldown = config.get("cooldown_seconds")
         if cooldown is not None:
             await self.update_parameter("cooldown_seconds", cooldown)
 
-        thresholds = config.get('thresholds', {}) or {}
+        thresholds = config.get("thresholds", {}) or {}
         for metric, vals in thresholds.items():
             if not isinstance(vals, dict):
                 continue
-            if 'high' in vals:
-                await self.update_parameter(f"thresholds.{metric}.high", vals['high'])
-            if 'low' in vals:
-                await self.update_parameter(f"thresholds.{metric}.low", vals['low'])
+            if "high" in vals:
+                await self.update_parameter(f"thresholds.{metric}.high", vals["high"])
+            if "low" in vals:
+                await self.update_parameter(f"thresholds.{metric}.low", vals["low"])
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""
         if self._adaptation_count == 0:
-            return {'success_rate': 0.0}
+            return {"success_rate": 0.0}
 
         return {
-            'success_rate': self._success_count / self._adaptation_count,
-            'total_adaptations': float(self._adaptation_count)
+            "success_rate": self._success_count / self._adaptation_count,
+            "total_adaptations": float(self._adaptation_count),
         }

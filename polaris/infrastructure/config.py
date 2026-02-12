@@ -1,13 +1,12 @@
-"""
-Configuration loader for Polaris.
-"""
+"""Configuration loader for Polaris."""
 
 import os
 import re
-import yaml
-from pathlib import Path
-from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
 
 from polaris.core.factories import registered_connector_types, registered_strategy_types
 
@@ -15,24 +14,25 @@ from polaris.core.factories import registered_connector_types, registered_strate
 @dataclass
 class SystemConfig:
     """Configuration for a managed system."""
+
     id: str
     connector_type: str
     enabled: bool = True
     connection: Dict[str, Any] = field(default_factory=dict)
     monitoring: Dict[str, Any] = field(default_factory=dict)
-    
-    def __post_init__(self):
+
+    def __post_init__(self) -> None:
         """Validate system configuration after initialization."""
         if not self.id or not self.id.strip():
             raise ValueError("System ID cannot be empty")
-        
+
         # Validate connector type against registered factories
         supported_connectors = registered_connector_types()
         if self.connector_type not in supported_connectors:
             raise ValueError(
                 f"Unsupported connector type '{self.connector_type}'. Supported: {supported_connectors}"
             )
-        
+
         # Validate connection parameters for SWIM
         if self.connector_type == "swim" and self.connection:
             if "port" in self.connection and not isinstance(self.connection["port"], int):
@@ -53,18 +53,21 @@ class SystemConfig:
 @dataclass
 class StrategyConfig:
     """Configuration for adaptation strategy."""
+
     type: str = "threshold"
     threshold: Optional[Dict[str, Any]] = None
     llm: Optional[Dict[str, Any]] = None
     hybrid: Optional[Dict[str, Any]] = None
     agentic: Optional[Dict[str, Any]] = None
-    
-    def __post_init__(self):
+
+    def __post_init__(self) -> None:
         """Validate strategy configuration after initialization."""
         supported_strategies = registered_strategy_types()
         if self.type not in supported_strategies:
-            raise ValueError(f"Unsupported strategy type '{self.type}'. Supported: {supported_strategies}")
-        
+            raise ValueError(
+                f"Unsupported strategy type '{self.type}'. Supported: {supported_strategies}"
+            )
+
         # Validate threshold strategy parameters
         if self.type == "threshold" and self.threshold:
             thresholds = self.threshold.get("thresholds", {})
@@ -73,8 +76,10 @@ class StrategyConfig:
                     raise ValueError(f"Threshold values for '{metric}' must be a dictionary")
                 if "high" in values and "low" in values:
                     if values["high"] <= values["low"]:
-                        raise ValueError(f"High threshold must be greater than low threshold for '{metric}'")
-            
+                        raise ValueError(
+                            f"High threshold must be greater than low threshold for '{metric}'"
+                        )
+
             cooldown = self.threshold.get("cooldown_seconds", 60)
             if not isinstance(cooldown, (int, float)) or cooldown < 0:
                 raise ValueError("cooldown_seconds must be a non-negative number")
@@ -86,7 +91,9 @@ class StrategyConfig:
             # selection_mode
             sel = self.hybrid.get("selection_mode", "confidence")
             if sel not in ["first", "priority", "confidence"]:
-                raise ValueError("Hybrid.selection_mode must be one of: first, priority, confidence")
+                raise ValueError(
+                    "Hybrid.selection_mode must be one of: first, priority, confidence"
+                )
             # min_confidence
             if "min_confidence" in self.hybrid:
                 try:
@@ -109,17 +116,22 @@ class StrategyConfig:
                     try:
                         float(s["priority"])
                     except Exception:
-                        raise ValueError(f"Hybrid.strategies[{idx}].priority must be a number if provided")
+                        raise ValueError(
+                            f"Hybrid.strategies[{idx}].priority must be a number if provided"
+                        )
 
         # Validate agentic strategy parameters
         if self.type == "agentic_llm":
             if self.agentic is not None and not isinstance(self.agentic, dict):
-                raise ValueError("Agentic LLM strategy requires 'agentic_llm' configuration block to be a dict if provided")
+                raise ValueError(
+                    "Agentic LLM strategy requires 'agentic_llm' configuration block to be a dict if provided"
+                )
 
 
 @dataclass
 class PolarisConfig:
     """Main Polaris configuration."""
+
     systems: list = field(default_factory=list)
     strategy: Optional[StrategyConfig] = None
     world_model: Optional[Dict[str, Any]] = None
@@ -129,13 +141,13 @@ class PolarisConfig:
     monitoring: Optional[Dict[str, Any]] = None  # Add monitoring configuration
 
     @classmethod
-    def from_file(cls, path: str) -> 'PolarisConfig':
+    def from_file(cls, path: str) -> "PolarisConfig":
         """Load configuration from YAML file."""
         config_path = Path(path)
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
 
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             content = f.read()
 
         # Substitute environment variables
@@ -147,51 +159,54 @@ class PolarisConfig:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'PolarisConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> "PolarisConfig":
         """Create config from dictionary."""
         # Parse systems
         systems = [
             SystemConfig(
-                id=s['id'],
-                connector_type=s.get('connector_type', 'unknown'),
-                enabled=s.get('enabled', True),
-                connection=s.get('connection', {}),
-                monitoring=s.get('monitoring', {})
+                id=s["id"],
+                connector_type=s.get("connector_type", "unknown"),
+                enabled=s.get("enabled", True),
+                connection=s.get("connection", {}),
+                monitoring=s.get("monitoring", {}),
             )
-            for s in data.get('systems', [])
+            for s in data.get("systems", [])
         ]
 
         # Parse strategy
-        strategy_data = data.get('strategy', {})
+        strategy_data = data.get("strategy", {})
         strategy = StrategyConfig(
-            type=strategy_data.get('type', 'threshold'),
-            threshold=strategy_data.get('threshold'),
-            llm=strategy_data.get('llm_reasoning'),
-            hybrid=strategy_data.get('hybrid'),
-            agentic=strategy_data.get('agentic_llm')
+            type=strategy_data.get("type", "threshold"),
+            threshold=strategy_data.get("threshold"),
+            llm=strategy_data.get("llm_reasoning"),
+            hybrid=strategy_data.get("hybrid"),
+            agentic=strategy_data.get("agentic_llm"),
         )
 
         return cls(
             systems=systems,
             strategy=strategy,
-            world_model=data.get('world_model'),
-            knowledge=data.get('knowledge'),
-            meta_learner=data.get('meta_learner'),
-            observability=data.get('observability'),
-            monitoring=data.get('monitoring')
+            world_model=data.get("world_model"),
+            knowledge=data.get("knowledge"),
+            meta_learner=data.get("meta_learner"),
+            observability=data.get("observability"),
+            monitoring=data.get("monitoring"),
         )
 
     @staticmethod
     def _substitute_env_vars(content: str) -> str:
         """Substitute ${VAR} with environment variable values."""
-        def replace(match):
+
+        def replace(match: Any) -> str:
             var_name = match.group(1)
             value = os.getenv(var_name)
             if value is None:
-                raise ValueError(f"Environment variable '{var_name}' not found. Please set it or remove ${{{var_name}}} from config.")
+                raise ValueError(
+                    f"Environment variable '{var_name}' not found. Please set it or remove ${{{var_name}}} from config."
+                )
             return value
 
-        return re.sub(r'\$\{(\w+)\}', replace, content)
+        return re.sub(r"\$\{(\w+)\}", replace, content)
 
 
 def load_config(path: str) -> PolarisConfig:

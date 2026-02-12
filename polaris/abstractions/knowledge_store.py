@@ -1,12 +1,10 @@
-"""
-Knowledge Store interface for historical data storage.
-"""
+"""Knowledge Store interface for historical data storage."""
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Tuple
 
-from polaris.core.models import SystemState, AdaptationAction, ExecutionResult
+from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 class KnowledgeStore(ABC):
@@ -27,11 +25,7 @@ class KnowledgeStore(ABC):
         pass
 
     @abstractmethod
-    async def store_action(
-        self,
-        action: AdaptationAction,
-        result: ExecutionResult
-    ) -> None:
+    async def store_action(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """
         Store adaptation action and its result.
 
@@ -43,10 +37,7 @@ class KnowledgeStore(ABC):
 
     @abstractmethod
     async def query_states(
-        self,
-        system_id: str,
-        start_time: datetime,
-        end_time: datetime
+        self, system_id: str, start_time: datetime, end_time: datetime
     ) -> List[SystemState]:
         """
         Query historical states for a time range.
@@ -62,11 +53,8 @@ class KnowledgeStore(ABC):
         pass
 
     async def query_actions(
-        self,
-        system_id: str,
-        start_time: datetime,
-        end_time: datetime
-    ) -> List[tuple]:
+        self, system_id: str, start_time: datetime, end_time: datetime
+    ) -> List[Tuple[AdaptationAction, ExecutionResult]]:
         """
         Query adaptation history.
 

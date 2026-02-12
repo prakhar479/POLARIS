@@ -1,30 +1,80 @@
-from typing import Optional, Dict, Any, List, Tuple, Callable
-import json
-from datetime import datetime, timezone, timedelta
-import uuid
+"""Agentic LLM-based adaptation strategy for POLARIS.
 
-from polaris.abstractions.strategy import AdaptationStrategy, AdaptationContext, ParameterSpec
-from polaris.abstractions.observability import Logger, MetricsCollector
-from polaris.core.models import SystemState, AdaptationAction
+This module implements an adaptation strategy that uses a Large Language Model (LLM)
+as an agentic reasoning engine to make adaptation decisions. The strategy employs
+a tool-using approach where the LLM can query system state, analyze metrics,
+predict outcomes, and ultimately decide whether adaptation is needed.
+
+The strategy follows a step-by-step reasoning process:
+1. Analyzes current system state and context
+2. Uses available tools to gather additional information
+3. Makes a final decision on adaptation needs
+4. Proposes specific adaptation actions if needed
+"""
+
+import json
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
+
+if TYPE_CHECKING:
+    from polaris.abstractions.connector import Connector
+
 from polaris.abstractions.knowledge_store import KnowledgeStore
+from polaris.abstractions.observability import Logger, MetricsCollector
+from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.abstractions.world_model import WorldModel
+from polaris.core.models import AdaptationAction, MetricValue, SystemState
 from polaris.infrastructure.llm import LLMClient, LLMMessage
-from polaris.abstractions.connector import Connector
+
+
+def _get_connector_class() -> Type["Connector"]:
+    from polaris.abstractions.connector import Connector
+
+    return Connector
 
 
 class AgenticLLMStrategy(AdaptationStrategy):
+    """An adaptation strategy that uses LLM as an agentic reasoning engine.
+
+    This strategy leverages a Large Language Model to make intelligent adaptation
+    decisions by using a tool-based approach. The LLM can query system state,
+    analyze historical data, predict outcomes, and propose adaptation actions.
+
+    Attributes:
+        llm: The LLM client for generating responses
+        knowledge_store: Store for querying historical system data
+        world_model: World model for predicting action outcomes
+        steps_limit: Maximum number of reasoning steps allowed
+        temperature: LLM temperature parameter for response randomness
+        allowed_tools: List of tools the LLM can use
+    """
+
     def __init__(
         self,
         llm_client: LLMClient,
         knowledge_store: KnowledgeStore,
         world_model: WorldModel,
-        connector_getter: Optional[Callable[[str], Optional[Connector]]] = None,
+        connector_getter: Optional[Callable[[str], Optional["Connector"]]] = None,
         steps_limit: int = 3,
         temperature: float = 0.1,
         allowed_tools: Optional[List[str]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
+        """Initialize the AgenticLLMStrategy.
+
+        Args:
+            llm_client: LLM client for generating responses
+            knowledge_store: Store for querying historical system data
+            world_model: World model for predicting action outcomes
+            connector_getter: Optional function to get system connectors
+            steps_limit: Maximum number of reasoning steps (default: 3)
+            temperature: LLM temperature for response randomness (default: 0.1)
+            allowed_tools: List of permitted tools for the LLM
+            logger: Optional logger for debugging
+            metrics: Optional metrics collector for monitoring
+        """
         self.llm = llm_client
         self.knowledge_store = knowledge_store
         self.world_model = world_model
@@ -45,14 +95,28 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self._success_count = 0
 
     async def assess(
-        self,
-        state: SystemState,
-        context: AdaptationContext
+        self, state: SystemState, context: AdaptationContext
     ) -> Optional[AdaptationAction]:
+        """Assess system state and determine if adaptation is needed.
+
+        Uses the LLM to analyze the current system state and context through
+        a tool-using reasoning process. The LLM can query historical data,
+        analyze trends, and predict outcomes before making a final decision.
+
+        Args:
+            state: Current system state with metrics and health information
+            context: Adaptation context containing world model insights
+
+        Returns:
+            Optional[AdaptationAction]: Proposed adaptation action if needed,
+                None if no adaptation is required
+        """
         if self.logger:
             self.logger.debug("Agentic assessment started", system_id=state.system_id)
         if self.metrics:
-            self.metrics.increment("polaris.strategy.agentic.assessments", tags={"system_id": state.system_id})
+            self.metrics.increment(
+                "polaris.strategy.agentic.assessments", tags={"system_id": state.system_id}
+            )
         start = datetime.now(timezone.utc)
         messages: List[LLMMessage] = [
             LLMMessage(role="system", content=self._system_prompt()),
@@ -61,9 +125,15 @@ class AgenticLLMStrategy(AdaptationStrategy):
         try:
             for step in range(self.steps_limit):
                 if self.metrics:
-                    self.metrics.gauge("polaris.strategy.agentic.step", step + 1, tags={"system_id": state.system_id})
+                    self.metrics.gauge(
+                        "polaris.strategy.agentic.step",
+                        step + 1,
+                        tags={"system_id": state.system_id},
+                    )
                 llm_start = datetime.now(timezone.utc)
-                response = await self.llm.generate(messages, temperature=self.temperature, max_tokens=2048)
+                response = await self.llm.generate(
+                    messages, temperature=self.temperature, max_tokens=2048
+                )
                 if self.metrics:
                     self.metrics.histogram(
                         "polaris.strategy.agentic.llm_call_duration_seconds",
@@ -73,7 +143,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 parsed = self._parse_json(response.content)
                 if not isinstance(parsed, dict):
                     if self.logger:
-                        self.logger.debug("AgenticLLMStrategy received non-object JSON", content_preview=response.content[:300])
+                        self.logger.debug(
+                            "AgenticLLMStrategy received non-object JSON",
+                            content_preview=response.content[:300],
+                        )
                     break
                 if "final" in parsed:
                     final = parsed.get("final") or {}
@@ -82,9 +155,14 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     needs = bool(final.get("needs_adaptation", False))
                     if not needs:
                         if self.logger:
-                            self.logger.info("Agentic decision: no adaptation", system_id=state.system_id)
+                            self.logger.info(
+                                "Agentic decision: no adaptation", system_id=state.system_id
+                            )
                         if self.metrics:
-                            self.metrics.increment("polaris.strategy.agentic.no_action_needed", tags={"system_id": state.system_id})
+                            self.metrics.increment(
+                                "polaris.strategy.agentic.no_action_needed",
+                                tags={"system_id": state.system_id},
+                            )
                         return None
                     action_block = final.get("action") or {}
                     if not isinstance(action_block, dict):
@@ -101,9 +179,16 @@ class AgenticLLMStrategy(AdaptationStrategy):
                         parameters={**params, "llm_reasoning": reasoning},
                     )
                     if self.logger:
-                        self.logger.info("Agentic decision: propose action", system_id=state.system_id, action_type=action.action_type)
+                        self.logger.info(
+                            "Agentic decision: propose action",
+                            system_id=state.system_id,
+                            action_type=action.action_type,
+                        )
                     if self.metrics:
-                        self.metrics.increment("polaris.strategy.agentic.actions_proposed", tags={"system_id": state.system_id, "action_type": action.action_type})
+                        self.metrics.increment(
+                            "polaris.strategy.agentic.actions_proposed",
+                            tags={"system_id": state.system_id, "action_type": action.action_type},
+                        )
                     return action
                 tool = parsed.get("tool")
                 args = parsed.get("args") or {}
@@ -111,7 +196,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     break
                 if tool not in self.allowed_tools:
                     if self.metrics:
-                        self.metrics.increment("polaris.strategy.agentic.invalid_tool", tags={"tool": str(tool)})
+                        self.metrics.increment(
+                            "polaris.strategy.agentic.invalid_tool", tags={"tool": str(tool)}
+                        )
                     tool_result = {"error": f"tool_not_allowed: {tool}"}
                 else:
                     try:
@@ -119,34 +206,73 @@ class AgenticLLMStrategy(AdaptationStrategy):
                             self.logger.debug("Agentic tool requested", tool=tool, args=args)
                         tool_result = await self._execute_tool(tool, args, state, context)
                         if self.metrics:
-                            self.metrics.increment("polaris.strategy.agentic.tool_called", tags={"tool": tool, "system_id": state.system_id})
+                            self.metrics.increment(
+                                "polaris.strategy.agentic.tool_called",
+                                tags={"tool": tool, "system_id": state.system_id},
+                            )
                     except Exception as e:
                         if self.metrics:
-                            self.metrics.increment("polaris.strategy.agentic.tool_error", tags={"tool": tool, "system_id": state.system_id})
+                            self.metrics.increment(
+                                "polaris.strategy.agentic.tool_error",
+                                tags={"tool": tool, "system_id": state.system_id},
+                            )
                         if self.logger:
-                            self.logger.error("Agentic tool execution error", tool=tool, error=str(e))
+                            self.logger.error(
+                                "Agentic tool execution error", tool=tool, error=str(e)
+                            )
                         tool_result = {"error": f"tool_error: {type(e).__name__}: {str(e)}"}
                 tool_msg = json.dumps({"tool_result": {"tool": tool, "data": tool_result}})
                 messages.append(LLMMessage(role="user", content=tool_msg))
             if self.metrics:
-                self.metrics.increment("polaris.strategy.agentic.step_limit_reached", tags={"system_id": state.system_id})
+                self.metrics.increment(
+                    "polaris.strategy.agentic.step_limit_reached",
+                    tags={"system_id": state.system_id},
+                )
             if self.logger:
-                self.logger.debug("Agentic step limit reached with no final decision", system_id=state.system_id)
+                self.logger.debug(
+                    "Agentic step limit reached with no final decision", system_id=state.system_id
+                )
             return None
         finally:
             if self.metrics:
                 duration = (datetime.now(timezone.utc) - start).total_seconds()
-                self.metrics.histogram("polaris.strategy.agentic.assess_duration_seconds", duration, tags={"system_id": state.system_id})
+                self.metrics.histogram(
+                    "polaris.strategy.agentic.assess_duration_seconds",
+                    duration,
+                    tags={"system_id": state.system_id},
+                )
 
-    async def on_action_executed(self, action: AdaptationAction, result) -> None:
+    async def on_action_executed(self, action: AdaptationAction, result: Any) -> None:
+        """Handle callback when an adaptation action is executed.
+
+        Updates internal metrics tracking adaptation success rates and
+        publishes execution metrics for monitoring.
+
+        Args:
+            action: The adaptation action that was executed
+            result: The result of the action execution
+        """
         self._adaptation_count += 1
         ok = hasattr(result, "status") and getattr(result.status, "value", None) == "success"
         if ok:
             self._success_count += 1
         if self.metrics:
-            self.metrics.increment("polaris.strategy.agentic.actions_executed", tags={"action_type": action.action_type, "system_id": action.target_system, "status": getattr(getattr(result, "status", None), "value", "unknown")})
+            self.metrics.increment(
+                "polaris.strategy.agentic.actions_executed",
+                tags={
+                    "action_type": action.action_type,
+                    "system_id": action.target_system,
+                    "status": getattr(getattr(result, "status", None), "value", "unknown"),
+                },
+            )
 
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
+        """Get specification of tunable parameters for this strategy.
+
+        Returns:
+            Dict[str, ParameterSpec]: Mapping of parameter names to their specifications
+                including current values, types, bounds, and descriptions
+        """
         return {
             "temperature": ParameterSpec(
                 current_value=self.temperature,
@@ -167,6 +293,15 @@ class AgenticLLMStrategy(AdaptationStrategy):
         }
 
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
+        """Update a tunable parameter value.
+
+        Args:
+            parameter_path: Path to the parameter (e.g., 'temperature')
+            new_value: New value for the parameter
+
+        Returns:
+            bool: True if parameter was updated successfully, False otherwise
+        """
         if parameter_path == "temperature":
             self.temperature = float(new_value)
             return True
@@ -176,8 +311,16 @@ class AgenticLLMStrategy(AdaptationStrategy):
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        """Apply configuration updates to the strategy.
+
+        Updates parameters, tool availability, and resilience settings based
+        on the provided configuration dictionary.
+
+        Args:
+            config: Configuration dictionary with updates to apply
+        """
         if not isinstance(config, dict):
-            return
+            return  # type: ignore[unreachable]
 
         if "temperature" in config:
             await self.update_parameter("temperature", config["temperature"])
@@ -199,6 +342,12 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     self.logger.warning("AgenticLLMStrategy resilience update failed", error=str(e))
 
     async def get_performance_metrics(self) -> Dict[str, float]:
+        """Get performance metrics for the strategy.
+
+        Returns:
+            Dict[str, float]: Performance metrics including success rate
+                and total adaptations count
+        """
         if self._adaptation_count == 0:
             return {"success_rate": 0.0}
         return {
@@ -209,10 +358,12 @@ class AgenticLLMStrategy(AdaptationStrategy):
     def _system_prompt(self) -> str:
         tools = ", ".join(self.allowed_tools)
         return (
-            "You are an adaptation controller. Use a short tool-using loop to reason about the system and then decide.\n"
+            "You are an adaptation controller. Use a short tool-using loop "
+            "to reason about the system and then decide.\n"
             "Always reply as strict JSON. Two possible forms:\n"
-            "1) {\"tool\": \"name\", \"args\": {...}} to request a tool.\n"
-            "2) {\"final\": {\"needs_adaptation\": true|false, \"reasoning\": \"...\", \"action\": {\"type\": \"...\", \"parameters\": {...}}}} to finish.\n"
+            '1) {"tool": "name", "args": {...}} to request a tool.\n'
+            '2) {"final": {"needs_adaptation": true|false, "reasoning": "...", '
+            '"action": {"type": "...", "parameters": {...}}}} to finish.\n'
             f"Allowed tools: {tools}. Keep steps minimal."
         )
 
@@ -222,7 +373,13 @@ class AgenticLLMStrategy(AdaptationStrategy):
             try:
                 metrics.append({"name": k, "value": v.value, "unit": v.unit})
             except Exception:
-                metrics.append({"name": k, "value": str(getattr(v, "value", None)), "unit": getattr(v, "unit", None)})
+                metrics.append(
+                    {
+                        "name": k,
+                        "value": str(getattr(v, "value", None)),
+                        "unit": getattr(v, "unit", None),
+                    }
+                )
         data = {
             "system_id": state.system_id,
             "health": getattr(state.health_status, "value", "unknown"),
@@ -247,7 +404,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
         except json.JSONDecodeError:
             return {}
 
-    async def _execute_tool(self, tool: str, args: Dict[str, Any], state: SystemState, context: AdaptationContext) -> Dict[str, Any]:
+    async def _execute_tool(
+        self, tool: str, args: Dict[str, Any], state: SystemState, context: AdaptationContext
+    ) -> Dict[str, Any]:
         if tool == "get_recent_states":
             window_seconds = int(max(1, min(int(args.get("window_seconds", 600)), 3600)))
             limit = int(max(1, min(int(args.get("limit", 50)), 200)))
@@ -276,16 +435,21 @@ class AgenticLLMStrategy(AdaptationStrategy):
             states = await self.knowledge_store.query_states(state.system_id, start, end)
             vals: List[float] = []
             for s in states:
-                mv = s.metrics.get(metric)
-                if mv is None:
+                metric_value: Optional[MetricValue] = s.metrics.get(metric)
+                if metric_value is None or metric_value.value is None:
                     continue
                 try:
-                    vals.append(float(mv.value))
+                    vals.append(float(metric_value.value))
                 except Exception:
                     continue
             if not vals:
                 return {"count": 0}
-            return {"count": len(vals), "min": min(vals), "max": max(vals), "avg": sum(vals) / len(vals)}
+            return {
+                "count": len(vals),
+                "min": min(vals),
+                "max": max(vals),
+                "avg": sum(vals) / len(vals),
+            }
         if tool == "get_world_model_insights":
             insights = await self.world_model.get_insights()
             return {"insights": insights}
@@ -304,23 +468,32 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 parameters=params,
             )
             pred = await self.world_model.predict(candidate, state)
-            return {"predicted_metrics": pred.predicted_metrics, "confidence": pred.confidence, "reasoning": pred.reasoning}
+            return {
+                "predicted_metrics": pred.predicted_metrics,
+                "confidence": pred.confidence,
+                "reasoning": pred.reasoning,
+            }
         if tool == "get_action_history":
-            window_seconds = int(max(1, min(int(args.get("window_seconds", 86400)), 30 * 24 * 3600)))
+            window_seconds = int(
+                max(1, min(int(args.get("window_seconds", 86400)), 30 * 24 * 3600))
+            )
             limit = int(max(1, min(int(args.get("limit", 50)), 500)))
             end = datetime.now(timezone.utc)
             start = end - timedelta(seconds=window_seconds)
             history = await self.knowledge_store.query_actions(state.system_id, start, end)
             items = []
             for action, result in history[-limit:]:
-                items.append({
-                    "action_id": getattr(action, "action_id", None),
-                    "type": getattr(action, "action_type", None),
-                    "parameters": getattr(action, "parameters", {}),
-                    "status": getattr(getattr(result, "status", None), "value", None),
-                    "error": getattr(result, "error_message", None),
-                    "completed_at": getattr(result, "completed_at", None).isoformat() if getattr(result, "completed_at", None) else None,
-                })
+                completed_at = getattr(result, "completed_at", None)
+                items.append(
+                    {
+                        "action_id": getattr(action, "action_id", None),
+                        "type": getattr(action, "action_type", None),
+                        "parameters": getattr(action, "parameters", {}),
+                        "status": getattr(getattr(result, "status", None), "value", None),
+                        "error": getattr(result, "error_message", None),
+                        "completed_at": completed_at.isoformat() if completed_at else None,
+                    }
+                )
             return {"items": items}
         if tool == "list_supported_actions":
             # Prefer connector-reported supported actions if available
@@ -331,20 +504,44 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     connector = None
                 if connector is not None and hasattr(connector, "get_supported_actions"):
                     try:
-                        actions = await connector.get_supported_actions()  # type: ignore
-                        types = sorted({getattr(a, "action_type", None) for a in (actions or []) if getattr(a, "action_type", None)})
+                        actions = await connector.get_supported_actions()
+                        types = sorted(
+                            {
+                                action_type
+                                for a in (actions or [])
+                                if (action_type := getattr(a, "action_type", None))
+                            }
+                        )
                         if types:
                             return {"action_types": types, "source": "connector"}
                     except Exception as e:
                         if self.logger:
-                            self.logger.warning("Connector get_supported_actions failed, falling back to history", system_id=state.system_id, error=str(e))
+                            self.logger.warning(
+                                "Connector get_supported_actions failed, falling back to history",
+                                system_id=state.system_id,
+                                error=str(e),
+                            )
                         if self.metrics:
-                            self.metrics.increment("polaris.strategy.agentic.tool_fallback", tags={"tool": "list_supported_actions", "reason": "connector_failed"})
+                            self.metrics.increment(
+                                "polaris.strategy.agentic.tool_fallback",
+                                tags={
+                                    "tool": "list_supported_actions",
+                                    "reason": "connector_failed",
+                                },
+                            )
             # Fallback to historical inference
-            window_seconds = int(max(1, min(int(args.get("window_seconds", 30 * 24 * 3600)), 365 * 24 * 3600)))
+            window_seconds = int(
+                max(1, min(int(args.get("window_seconds", 30 * 24 * 3600)), 365 * 24 * 3600))
+            )
             end = datetime.now(timezone.utc)
             start = end - timedelta(seconds=window_seconds)
             history = await self.knowledge_store.query_actions(state.system_id, start, end)
-            types = sorted({getattr(a, "action_type", None) for a, _ in history if getattr(a, "action_type", None)})
+            types = sorted(
+                {
+                    action_type
+                    for a, _ in history
+                    if (action_type := getattr(a, "action_type", None))
+                }
+            )
             return {"action_types": types, "source": "historical"}
         return {"error": "unknown_tool"}

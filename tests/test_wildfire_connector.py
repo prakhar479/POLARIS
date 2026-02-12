@@ -1,15 +1,10 @@
-import pytest
-import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
+
 from polaris.connectors.wildfire import WildfireConnector
-from polaris.core.models import (
-    AdaptationAction,
-    ExecutionResult,
-    ExecutionStatus,
-    HealthStatus,
-    SystemState,
-)
+from polaris.core.models import AdaptationAction, ExecutionStatus, HealthStatus, SystemState
 
 
 @pytest.fixture
@@ -45,10 +40,14 @@ async def test_connect_success(connector, mock_metrics, mock_logger):
     mock_client = AsyncMock()
     # Auto-create session first
     mock_client.post.return_value = httpx.Response(
-        201, json={"session_id": "abc123", "num_agents": 2}, request=httpx.Request("POST", "/api/v1/sessions")
+        201,
+        json={"session_id": "abc123", "num_agents": 2},
+        request=httpx.Request("POST", "/api/v1/sessions"),
     )
     mock_client.get.return_value = httpx.Response(
-        200, json={"status": "healthy", "active_sessions": 1}, request=httpx.Request("GET", "/health")
+        200,
+        json={"status": "healthy", "active_sessions": 1},
+        request=httpx.Request("GET", "/health"),
     )
 
     with patch.object(connector, "_ensure_client", return_value=mock_client):
@@ -95,6 +94,7 @@ async def test_disconnect(connector, mock_metrics, mock_logger):
 async def test_get_system_id(connector):
     assert await connector.get_system_id() == "wildfire-test"
 
+
 @pytest.mark.asyncio
 async def test_collect_telemetry_success(connector, mock_metrics):
     connector._connected = True
@@ -134,6 +134,7 @@ async def test_collect_telemetry_success(connector, mock_metrics):
     assert "fire_cells_burning_ratio" in state.metrics
     assert state.metrics["fire_cells_burning_ratio"].value == pytest.approx(0.6)
     mock_metrics.histogram.assert_called()
+
 
 @pytest.mark.asyncio
 async def test_collect_telemetry_not_connected(connector, mock_metrics):
@@ -203,9 +204,7 @@ async def test_execute_action_wildfire_move(connector, mock_metrics, mock_logger
         action_id="move-456",
         action_type="wildfire_move",
         target_system="wildfire-test",
-        parameters={
-            "actions": [{"uav": 0, "move": "north"}, {"uav": 1, "move": "hold"}]
-        },
+        parameters={"actions": [{"uav": 0, "move": "north"}, {"uav": 1, "move": "hold"}]},
     )
 
     result = await connector.execute_action(action)
@@ -233,9 +232,7 @@ async def test_execute_action_unsupported_type(connector, mock_metrics):
 
     assert result.status == ExecutionStatus.FAILED
     assert "Unsupported action type" in result.error_message
-    mock_metrics.increment.assert_any_call(
-        "polaris.connector.wildfire.actions_unsupported"
-    )
+    mock_metrics.increment.assert_any_call("polaris.connector.wildfire.actions_unsupported")
 
 
 @pytest.mark.asyncio

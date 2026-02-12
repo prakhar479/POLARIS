@@ -1,6 +1,8 @@
+"""Wildfire system connector for POLARIS framework."""
+
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import httpx
 
@@ -15,8 +17,20 @@ from polaris.core.models import (
     SystemState,
 )
 
+if TYPE_CHECKING:
+    pass
+
+
+# Use string-based import to avoid circular imports
+def _get_connector_class() -> type:
+    from polaris.abstractions.connector import Connector
+
+    return Connector
+
 
 class WildfireConnector(Connector):
+    """Connector for Wildfire fire spread simulation system."""
+
     def __init__(
         self,
         base_url: str = "http://localhost:5000",
@@ -27,6 +41,7 @@ class WildfireConnector(Connector):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ) -> None:
+        """Initialize Wildfire connector with API endpoint and configuration."""
         self.base_url = base_url.rstrip("/")
         self.system_id = system_id
         self.timeout = timeout
@@ -38,11 +53,13 @@ class WildfireConnector(Connector):
         self._connected = False
 
     async def _ensure_client(self) -> httpx.AsyncClient:
+        """Ensure HTTP client is initialized."""
         if self._client is None:
             self._client = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout)
         return self._client
 
     async def connect(self) -> bool:
+        """Connect to Wildfire API and verify connectivity."""
         try:
             client = await self._ensure_client()
 
@@ -81,6 +98,7 @@ class WildfireConnector(Connector):
             return False
 
     async def disconnect(self) -> bool:
+        """Disconnect from Wildfire API and clean up resources."""
         self._connected = False
         if self._client is not None:
             await self._client.aclose()
@@ -92,9 +110,11 @@ class WildfireConnector(Connector):
         return True
 
     async def get_system_id(self) -> str:
+        """Return the system identifier for this connector."""
         return self.system_id
 
     async def collect_telemetry(self) -> SystemState:
+        """Collect current system state and metrics from Wildfire API."""
         if not self._connected:
             connected = await self.connect()
             if not connected:
@@ -211,6 +231,7 @@ class WildfireConnector(Connector):
             )
 
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
+        """Execute adaptation action on Wildfire system."""
         if not self._connected:
             return ExecutionResult(
                 action_id=action.action_id,
@@ -233,10 +254,10 @@ class WildfireConnector(Connector):
             elif action_type == "wildfire_step":
                 resp = await client.post("/api/v1/sim/step")
             elif action_type == "wildfire_move":
-                actions_payload = action.parameters.get("actions", [])
+                actions_payload = (action.parameters or {}).get("actions", [])
                 resp = await client.post("/api/v1/sim/action", json=actions_payload)
             elif action_type == "wildfire_batch_actions":
-                payload = {"actions": action.parameters.get("actions", [])}
+                payload = {"actions": (action.parameters or {}).get("actions", [])}
                 resp = await client.post("/api/v1/sim/batch-actions", json=payload)
             else:
                 if self._metrics:
@@ -256,7 +277,9 @@ class WildfireConnector(Connector):
                 response_data = {"raw_text": resp.text}
 
             exec_status = ExecutionStatus.SUCCESS if status_success else ExecutionStatus.FAILED
-            error_message = None if status_success else response_data.get("error") or f"HTTP {resp.status_code}"
+            error_message = (
+                None if status_success else response_data.get("error") or f"HTTP {resp.status_code}"
+            )
 
             duration_ms = int((time.monotonic() - start) * 1000)
             if self._metrics:
@@ -294,7 +317,10 @@ class WildfireConnector(Connector):
                 )
                 self._metrics.increment(
                     "polaris.connector.wildfire.actions_executed",
-                    tags={"action_type": action.action_type, "status": ExecutionStatus.FAILED.value},
+                    tags={
+                        "action_type": action.action_type,
+                        "status": ExecutionStatus.FAILED.value,
+                    },
                 )
             if self._logger:
                 self._logger.error(
@@ -311,6 +337,7 @@ class WildfireConnector(Connector):
             )
 
     async def validate_action(self, action: AdaptationAction) -> bool:
+        """Validate if action type is supported by Wildfire system."""
         allowed_types = {
             "wildfire_reset",
             "wildfire_pause",
@@ -324,6 +351,7 @@ class WildfireConnector(Connector):
         return action.action_type.lower() in allowed_types
 
     async def get_supported_actions(self) -> List[AdaptationAction]:
+        """Return list of supported adaptation actions for Wildfire system."""
         return [
             AdaptationAction(
                 action_id="",
