@@ -220,7 +220,7 @@ class GaussianProcessOptimizer:
         # Apply RBF kernel
         K = self.signal_variance * np.exp(-0.5 * distances)
 
-        return K.astype(float)
+        return np.asarray(K, dtype=np.float64)
 
     def fit(self, configurations: List[ParameterConfiguration]) -> bool:
         """
@@ -298,9 +298,14 @@ class GaussianProcessOptimizer:
             return np.zeros(n_samples), np.ones(n_samples)
 
         # Compute kernel matrices
-        K_train = self._rbf_kernel(self.X_train, self.X_train, self.kernel_length_scales)
-        K_test = self._rbf_kernel(X, self.X_train, self.kernel_length_scales)
-        K_test_test = self._rbf_kernel(X, X, self.kernel_length_scales)
+        length_scales = (
+            self.kernel_length_scales
+            if self.kernel_length_scales is not None
+            else np.ones(self.X_train.shape[1])
+        )
+        K_train = self._rbf_kernel(self.X_train, self.X_train, length_scales)
+        K_test = self._rbf_kernel(X, self.X_train, length_scales)
+        K_test_test = self._rbf_kernel(X, X, length_scales)
 
         # Add noise to diagonal for numerical stability
         K_train += np.eye(len(K_train)) * self.noise_level
@@ -341,7 +346,7 @@ class GaussianProcessOptimizer:
             ei = improvement * norm.cdf(Z) + std * norm.pdf(Z)
             ei[std == 0.0] = 0.0
 
-        return ei.astype(float)
+        return np.asarray(ei, dtype=np.float64)
 
     def _upper_confidence_bound(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
         """Upper Confidence Bound acquisition function."""
@@ -363,7 +368,7 @@ class GaussianProcessOptimizer:
             pi = norm.cdf(Z)
             pi[std == 0.0] = 0.0
 
-        return pi.astype(float)
+        return np.asarray(pi, dtype=np.float64)
 
     def _acquisition_function(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
         """Compute acquisition function values."""
@@ -440,7 +445,9 @@ class GaussianProcessOptimizer:
                         value = 0.0
                 elif param_space.param_type == ParameterType.DISCRETE:
                     if param_space.min_value is not None and param_space.max_value is not None:
-                        value = np.random.randint(param_space.min_value, param_space.max_value + 1)
+                        value = np.random.randint(
+                            int(param_space.min_value), int(param_space.max_value) + 1
+                        )
                     else:
                         value = 0
                 elif param_space.param_type == ParameterType.CATEGORICAL:
