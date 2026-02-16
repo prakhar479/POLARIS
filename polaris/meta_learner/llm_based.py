@@ -11,7 +11,8 @@ from polaris.abstractions.meta_learner import (
     MetaLearner,
     ParameterProposal,
     PerformanceAnalysis,
-    ProposalStatus
+    ProposalStatus,
+    AppliedUpdate
 )
 from polaris.abstractions.strategy import AdaptationStrategy
 from polaris.abstractions.knowledge_store import KnowledgeStore
@@ -220,8 +221,9 @@ class LLMMetaLearner(MetaLearner):
                 spec = tunable_params[param_path]
                 proposed_value = prop_data.get('proposed_value')
 
-                # Validate proposed value
-                if not self._validate_proposal(spec, proposed_value):
+                # Validate proposed value and coerce type
+                proposed_value = self._validate_proposal(spec, proposed_value)
+                if proposed_value is None:
                     continue
 
                 proposals.append(ParameterProposal(
@@ -285,6 +287,16 @@ class LLMMetaLearner(MetaLearner):
 
         return validated
 
+    async def apply_proposals(
+        self,
+        strategy: AdaptationStrategy,
+        proposals: List[ParameterProposal]
+    ) -> List[AppliedUpdate]:
+        """Apply approved proposals only when auto_apply is enabled."""
+        if not self.auto_apply:
+            return []
+        return await super().apply_proposals(strategy, proposals)
+
     def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
         """System prompt for performance analysis, with optional system-specific overrides."""
 
@@ -299,7 +311,8 @@ class LLMMetaLearner(MetaLearner):
         if self.analysis_system_prompt:
             try:
                 return self.analysis_system_prompt.format(system_id=system_id or "")
-            except Exception:
+            except Exception as e:
+                self.logger.warning(f"analysis_system_prompt formatting failed: {e}")
                 return self.analysis_system_prompt
 
         return """You are an expert system analyst for self-adaptive systems.
@@ -333,7 +346,8 @@ Be thorough and data-driven in your analysis."""
         if self.optimization_system_prompt:
             try:
                 return self.optimization_system_prompt.format(system_id=system_id or "")
-            except Exception:
+            except Exception as e:
+                self.logger.warning(f"optimization_system_prompt formatting failed: {e}")
                 return self.optimization_system_prompt
 
         return """You are an expert parameter optimizer for self-adaptive systems.
@@ -471,7 +485,8 @@ Propose specific parameter changes to improve system performance.
                 'recommendations': data.get('recommendations', []) if isinstance(data.get('recommendations'), list) else []
             }
             
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as e:
+            self.logger.warning(f"Failed to parse analysis response JSON: {e}")
             return {'analysis': response, 'issues': [], 'recommendations': []}
 
     def _parse_proposals_response(self, response: str) -> List[Dict]:
@@ -511,11 +526,12 @@ Propose specific parameter changes to improve system performance.
             
             return proposals
             
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as e:
+            self.logger.warning(f"Failed to parse proposals response JSON: {e}")
             return []
 
-    def _validate_proposal(self, spec, proposed_value) -> bool:
-        """Validate proposed value against parameter spec."""
+    def _validate_proposal(self, spec, proposed_value) -> Optional[Any]:
+        """Validate proposed value against parameter spec and return coerced value."""
         try:
             # Check type
             if spec.type == float:
@@ -531,8 +547,8 @@ Propose specific parameter changes to improve system performance.
 
             # Check allowed values
             if spec.allowed_values and proposed_value not in spec.allowed_values:
-                return False
+                return None
 
-            return True
-        except:
-            return False
+            return proposed_value
+        except Exception:
+            return None

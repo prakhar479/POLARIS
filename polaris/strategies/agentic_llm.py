@@ -19,6 +19,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
         knowledge_store: KnowledgeStore,
         world_model: WorldModel,
         connector_getter: Optional[Callable[[str], Optional[Connector]]] = None,
+        system_description: str = "Managed system",
+        adaptation_goals: str = "Maintain optimal performance with minimal resource usage",
+        system_prompt: Optional[str] = None,
+        per_system_prompts: Optional[Dict[str, str]] = None,
         steps_limit: int = 3,
         temperature: float = 0.1,
         allowed_tools: Optional[List[str]] = None,
@@ -29,6 +33,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self.knowledge_store = knowledge_store
         self.world_model = world_model
         self._get_connector = connector_getter
+        self.system_description = system_description
+        self.adaptation_goals = adaptation_goals
+        self._system_prompt_template = system_prompt
+        self._per_system_prompts = per_system_prompts or {}
         self.steps_limit = steps_limit
         self.temperature = temperature
         self.allowed_tools = allowed_tools or [
@@ -55,7 +63,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
             self.metrics.increment("polaris.strategy.agentic.assessments", tags={"system_id": state.system_id})
         start = datetime.now(timezone.utc)
         messages: List[LLMMessage] = [
-            LLMMessage(role="system", content=self._system_prompt()),
+            LLMMessage(role="system", content=self._system_prompt(state.system_id)),
             LLMMessage(role="user", content=self._initial_user_prompt(state, context)),
         ]
         try:
@@ -179,6 +187,15 @@ class AgenticLLMStrategy(AdaptationStrategy):
         if not isinstance(config, dict):
             return
 
+        if "system_description" in config:
+            self.system_description = str(config["system_description"])
+        if "adaptation_goals" in config:
+            self.adaptation_goals = str(config["adaptation_goals"])
+        if "system_prompt" in config:
+            self._system_prompt_template = config["system_prompt"]
+        if "per_system_prompts" in config and isinstance(config["per_system_prompts"], dict):
+            self._per_system_prompts = config["per_system_prompts"]
+
         if "temperature" in config:
             await self.update_parameter("temperature", config["temperature"])
         if "steps_limit" in config:
@@ -206,14 +223,47 @@ class AgenticLLMStrategy(AdaptationStrategy):
             "total_adaptations": float(self._adaptation_count),
         }
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, system_id: Optional[str] = None) -> str:
         tools = ", ".join(self.allowed_tools)
+
+        if system_id and self._per_system_prompts:
+            override = self._per_system_prompts.get(system_id)
+            if override:
+                return override
+
+        if self._system_prompt_template:
+            try:
+                return self._system_prompt_template.format(
+                    system_id=system_id or "",
+                    system_description=self.system_description,
+                    adaptation_goals=self.adaptation_goals,
+                    allowed_tools=tools,
+                )
+            except Exception:
+                return self._system_prompt_template
+
         return (
-            "You are an adaptation controller. Use a short tool-using loop to reason about the system and then decide.\n"
-            "Always reply as strict JSON. Two possible forms:\n"
+            "You are an intelligent adaptation controller for a self-adaptive system.\n"
+            f"System Description: {self.system_description}\n"
+            f"Adaptation Goals: {self.adaptation_goals}\n"
+            "Your task is to analyze the current system state, past metrics and trends and decide if an adaptation action is needed.\n"
+            "Use a short tool-using loop to reason about the system and then decide.\n"
+            "Always reply as strict JSON with NO extra keys or text.\n"
+            "Two possible forms ONLY:\n"
             "1) {\"tool\": \"name\", \"args\": {...}} to request a tool.\n"
             "2) {\"final\": {\"needs_adaptation\": true|false, \"reasoning\": \"...\", \"action\": {\"type\": \"...\", \"parameters\": {...}}}} to finish.\n"
-            f"Allowed tools: {tools}. Keep steps minimal."
+            "Do NOT return tool_call as an action type. If you need a tool, use form (1) only.\n"
+            "Avoid oscillations\n"
+            "Base decisions on trend, not a single sample. Use throughput/arrival and response time trends.\n"
+            f"Allowed tools: {tools}.\n"
+            "Tool schemas (use exactly):\n"
+            "- get_recent_states: args {window_seconds:int, limit:int}\n"
+            "- summarize_metric_trends: args {metric:string, window_seconds:int(optional)}\n"
+            "- get_world_model_insights: args {}\n"
+            "- predict_outcome: args {candidate_action:{type:string, parameters:object}}\n"
+            "- get_action_history: args {window_seconds:int, limit:int}\n"
+            "- list_supported_actions: args {window_seconds:int(optional)}\n"
+            "Keep steps minimal and ensure valid JSON."
         )
 
     def _initial_user_prompt(self, state: SystemState, context: AdaptationContext) -> str:
@@ -229,6 +279,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
             "timestamp": state.timestamp.isoformat(),
             "metrics": metrics,
             "world_model_insights": context.world_model_insights or {},
+            "hint": {
+                "response_time_unit": "ms",
+                "note": "If you need supported actions, call list_supported_actions tool."
+            },
         }
         return json.dumps({"current_state": data})
 

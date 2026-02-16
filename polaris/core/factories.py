@@ -173,6 +173,8 @@ def _register_default_strategy_factories() -> None:
         hybrid_conf = strategy_cfg.hybrid or {}
         selection_mode = hybrid_conf.get("selection_mode", "confidence")
         min_confidence = float(hybrid_conf.get("min_confidence", 0.7))
+        gate_metric = hybrid_conf.get("gate_metric", "average_response_time")
+        gate_threshold_seconds = float(hybrid_conf.get("gate_threshold_seconds", 0.75))
         sub_defs = hybrid_conf.get("strategies", [])
 
         sub_strategies: List[tuple[AdaptationStrategy, float]] = []
@@ -212,6 +214,35 @@ def _register_default_strategy_factories() -> None:
                 )
                 sub_strategies.append((sub, priority))
 
+            elif s_type == "agentic_llm":
+                agent_cfg = s.get("agentic_llm", {}) or {}
+                provider = agent_cfg.get("provider", "google")
+                llm_client = _llm.create_llm_client(provider, resilience=agent_cfg.get("resilience"))
+
+                steps_limit = int(agent_cfg.get("steps_limit", 3))
+                temperature = float(agent_cfg.get("temperature", 0.1))
+                allowed_tools = None
+                tools_cfg = agent_cfg.get("tools")
+                if isinstance(tools_cfg, dict):
+                    allowed_tools = tools_cfg.get("enabled")
+
+                sub = AgenticLLMStrategy(
+                    llm_client=llm_client,
+                    knowledge_store=knowledge_store,
+                    world_model=world_model,
+                    connector_getter=registry.get,
+                    system_description=agent_cfg.get("system_description", "Managed system"),
+                    adaptation_goals=agent_cfg.get("adaptation_goals", "Maintain optimal performance with minimal resource usage"),
+                    system_prompt=agent_cfg.get("system_prompt"),
+                    per_system_prompts=agent_cfg.get("per_system_prompts"),
+                    steps_limit=steps_limit,
+                    temperature=temperature,
+                    allowed_tools=allowed_tools,
+                    logger=logger,
+                    metrics=metrics,
+                )
+                sub_strategies.append((sub, priority))
+
             else:
                 # Fallback to threshold for unknown types
                 sub = ThresholdReactiveStrategy(logger=logger, metrics=metrics)
@@ -225,6 +256,8 @@ def _register_default_strategy_factories() -> None:
             strategies=sub_strategies,
             selection_mode=selection_mode,
             min_confidence=min_confidence,
+            gate_metric=gate_metric,
+            gate_threshold_seconds=gate_threshold_seconds,
             logger=logger,
             metrics=metrics,
         )
@@ -247,6 +280,11 @@ def _register_default_strategy_factories() -> None:
         if isinstance(tools_cfg, dict):
             allowed_tools = tools_cfg.get("enabled")
 
+        system_description = agent_conf.get("system_description", "Managed system")
+        adaptation_goals = agent_conf.get("adaptation_goals", "Maintain optimal performance with minimal resource usage")
+        system_prompt = agent_conf.get("system_prompt")
+        per_system_prompts = agent_conf.get("per_system_prompts")
+
         provider = agent_conf.get("provider", "google")
         llm_client = _llm.create_llm_client(provider, resilience=agent_conf.get("resilience"))
 
@@ -255,6 +293,10 @@ def _register_default_strategy_factories() -> None:
             knowledge_store=knowledge_store,
             world_model=world_model,
             connector_getter=registry.get,
+            system_description=system_description,
+            adaptation_goals=adaptation_goals,
+            system_prompt=system_prompt,
+            per_system_prompts=per_system_prompts,
             steps_limit=steps_limit,
             temperature=temperature,
             allowed_tools=allowed_tools,

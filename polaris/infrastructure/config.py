@@ -85,8 +85,8 @@ class StrategyConfig:
                 raise ValueError("Hybrid strategy requires 'hybrid' configuration block")
             # selection_mode
             sel = self.hybrid.get("selection_mode", "confidence")
-            if sel not in ["first", "priority", "confidence"]:
-                raise ValueError("Hybrid.selection_mode must be one of: first, priority, confidence")
+            if sel not in ["first", "priority", "confidence", "response_time_gate"]:
+                raise ValueError("Hybrid.selection_mode must be one of: first, priority, confidence, response_time_gate")
             # min_confidence
             if "min_confidence" in self.hybrid:
                 try:
@@ -95,6 +95,12 @@ class StrategyConfig:
                     raise ValueError("Hybrid.min_confidence must be a number")
                 if mc < 0.0 or mc > 1.0:
                     raise ValueError("Hybrid.min_confidence must be between 0.0 and 1.0")
+            # gate_threshold_seconds
+            if "gate_threshold_seconds" in self.hybrid:
+                try:
+                    float(self.hybrid["gate_threshold_seconds"])
+                except Exception:
+                    raise ValueError("Hybrid.gate_threshold_seconds must be a number")
             # strategies list
             strategies = self.hybrid.get("strategies", [])
             if not isinstance(strategies, list) or len(strategies) == 0:

@@ -25,6 +25,8 @@ class HybridStrategy(AdaptationStrategy):
         strategies: List[Tuple[AdaptationStrategy, float]],
         selection_mode: str = 'confidence',
         min_confidence: float = 0.7,
+        gate_metric: str = 'average_response_time',
+        gate_threshold_seconds: float = 0.75,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -42,6 +44,8 @@ class HybridStrategy(AdaptationStrategy):
         self.strategies = sorted(strategies, key=lambda x: x[1], reverse=True)
         self.selection_mode = selection_mode
         self.min_confidence = min_confidence
+        self.gate_metric = gate_metric
+        self.gate_threshold_seconds = float(gate_threshold_seconds)
         self._adaptation_count = 0
         self._success_count = 0
         self._strategy_usage = {i: 0 for i in range(len(strategies))}
@@ -54,6 +58,8 @@ class HybridStrategy(AdaptationStrategy):
                 strategy_count=len(self.strategies),
                 selection_mode=self.selection_mode,
                 min_confidence=self.min_confidence,
+                gate_metric=self.gate_metric,
+                gate_threshold_seconds=self.gate_threshold_seconds,
             )
 
         if self._metrics:
@@ -155,6 +161,28 @@ class HybridStrategy(AdaptationStrategy):
             if valid:
                 selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
 
+        elif self.selection_mode == 'response_time_gate':
+            # Gate selection based on response time threshold
+            response_seconds = self._get_metric_seconds(state, self.gate_metric)
+            desired_type = "ThresholdReactiveStrategy" if (
+                response_seconds is not None and response_seconds >= self.gate_threshold_seconds
+            ) else "AgenticLLMStrategy"
+
+            desired_idx = self._find_strategy_index(desired_type)
+            if desired_idx is not None:
+                for action, conf, _pri, idx in proposals:
+                    if idx == desired_idx and conf >= self.min_confidence:
+                        selected = action
+                        selected_idx = idx
+                        break
+
+            # Fallback to confidence-based selection if gate did not yield a selection
+            if selected is None:
+                valid = [(a, c, p, i)
+                         for a, c, p, i in proposals if c >= self.min_confidence]
+                if valid:
+                    selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
+
         # Track which strategy was used
         if selected and selected_idx is not None:
             self._strategy_usage[selected_idx] += 1
@@ -211,6 +239,31 @@ class HybridStrategy(AdaptationStrategy):
         except Exception:
             return base
 
+    def _find_strategy_index(self, class_name: str) -> Optional[int]:
+        for idx, (strategy, _priority) in enumerate(self.strategies):
+            if strategy.__class__.__name__ == class_name:
+                return idx
+        return None
+
+    def _get_metric_seconds(self, state: SystemState, metric_name: str) -> Optional[float]:
+        metric = state.metrics.get(metric_name)
+        if metric is None:
+            return None
+        try:
+            value = float(metric.value)
+        except Exception:
+            return None
+
+        unit = str(getattr(metric, "unit", "")).lower()
+        if unit in ("ms", "millisecond", "milliseconds"):
+            return value / 1000.0
+        if unit in ("s", "sec", "secs", "second", "seconds"):
+            return value
+        # Unknown unit: assume seconds if the metric name implies seconds, otherwise ms
+        if "response_time" in metric_name:
+            return value / 1000.0
+        return value
+
     async def on_action_executed(self, action: AdaptationAction, result) -> None:
         """Track adaptation success."""
         self._adaptation_count += 1
@@ -235,7 +288,7 @@ class HybridStrategy(AdaptationStrategy):
         params["selection_mode"] = ParameterSpec(
             current_value=self.selection_mode,
             type=str,
-            allowed_values=['first', 'priority', 'confidence'],
+            allowed_values=['first', 'priority', 'confidence', 'response_time_gate'],
             description="How to select between multiple strategy proposals",
             kind="selection_mode",
         )
@@ -246,6 +299,20 @@ class HybridStrategy(AdaptationStrategy):
             max_value=1.0,
             description="Minimum confidence threshold for action selection",
             kind="confidence_threshold",
+        )
+        params["gate_metric"] = ParameterSpec(
+            current_value=self.gate_metric,
+            type=str,
+            description="Metric name used for response time gating",
+            kind="gate_metric",
+        )
+        params["gate_threshold_seconds"] = ParameterSpec(
+            current_value=self.gate_threshold_seconds,
+            type=float,
+            min_value=0.0,
+            max_value=60.0,
+            description="Response time threshold in seconds for selecting agentic strategy",
+            kind="gate_threshold_seconds",
         )
 
         return params
@@ -263,12 +330,20 @@ class HybridStrategy(AdaptationStrategy):
                 return await self.strategies[strategy_idx][0].update_parameter(sub_path, new_value)
 
         elif parameter_path == "selection_mode":
-            if new_value in ['first', 'priority', 'confidence']:
+            if new_value in ['first', 'priority', 'confidence', 'response_time_gate']:
                 self.selection_mode = new_value
                 return True
 
         elif parameter_path == "min_confidence":
             self.min_confidence = float(new_value)
+            return True
+
+        elif parameter_path == "gate_metric":
+            self.gate_metric = str(new_value)
+            return True
+
+        elif parameter_path == "gate_threshold_seconds":
+            self.gate_threshold_seconds = float(new_value)
             return True
 
         return False
@@ -281,6 +356,10 @@ class HybridStrategy(AdaptationStrategy):
             await self.update_parameter("selection_mode", config['selection_mode'])
         if 'min_confidence' in config:
             await self.update_parameter("min_confidence", config['min_confidence'])
+        if 'gate_metric' in config:
+            await self.update_parameter("gate_metric", config['gate_metric'])
+        if 'gate_threshold_seconds' in config:
+            await self.update_parameter("gate_threshold_seconds", config['gate_threshold_seconds'])
 
         new_subs = config.get('strategies', [])
         if isinstance(new_subs, list) and len(new_subs) == len(self.strategies):
@@ -315,6 +394,48 @@ class HybridStrategy(AdaptationStrategy):
                             if self._logger:
                                 self._logger.warning(
                                     "Failed to hot-update sub-strategy LLM resilience",
+                                    error=str(e),
+                                )
+                elif s_type == 'agentic_llm':
+                    agent_cfg = sub_conf.get('agentic_llm', {}) or {}
+                    if 'system_description' in agent_cfg:
+                        try:
+                            await sub_strategy.apply_config_update({"system_description": agent_cfg['system_description']})
+                        except Exception:
+                            pass
+                    if 'adaptation_goals' in agent_cfg:
+                        try:
+                            await sub_strategy.apply_config_update({"adaptation_goals": agent_cfg['adaptation_goals']})
+                        except Exception:
+                            pass
+                    if 'system_prompt' in agent_cfg:
+                        try:
+                            await sub_strategy.apply_config_update({"system_prompt": agent_cfg['system_prompt']})
+                        except Exception:
+                            pass
+                    if 'per_system_prompts' in agent_cfg:
+                        try:
+                            await sub_strategy.apply_config_update({"per_system_prompts": agent_cfg['per_system_prompts']})
+                        except Exception:
+                            pass
+                    if 'temperature' in agent_cfg and hasattr(sub_strategy, 'update_parameter'):
+                        await sub_strategy.update_parameter("temperature", agent_cfg['temperature'])
+                    if 'steps_limit' in agent_cfg and hasattr(sub_strategy, 'update_parameter'):
+                        await sub_strategy.update_parameter("steps_limit", agent_cfg['steps_limit'])
+                    tools_cfg = agent_cfg.get('tools')
+                    if isinstance(tools_cfg, dict) and 'enabled' in tools_cfg:
+                        try:
+                            await sub_strategy.apply_config_update({"tools": tools_cfg})
+                        except Exception:
+                            pass
+                    resil = agent_cfg.get('resilience')
+                    if resil and hasattr(sub_strategy, 'llm') and hasattr(sub_strategy.llm, 'update_resilience'):
+                        try:
+                            sub_strategy.llm.update_resilience(resil)
+                        except Exception as e:
+                            if self._logger:
+                                self._logger.warning(
+                                    "Failed to hot-update agentic sub-strategy LLM resilience",
                                     error=str(e),
                                 )
 
