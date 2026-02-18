@@ -249,6 +249,33 @@ def _register_default_strategy_factories() -> None:
                 )
                 sub_strategies.append((sub_llm, priority))
 
+            elif s_type == "agentic_llm":
+                agent_cfg = s.get("agentic_llm", {}) or {}
+                steps_limit = int(agent_cfg.get("steps_limit", 3))
+                temperature = float(agent_cfg.get("temperature", 0.1))
+                allowed_tools = None
+                tools_cfg = agent_cfg.get("tools")
+                if isinstance(tools_cfg, dict):
+                    allowed_tools = tools_cfg.get("enabled")
+
+                provider = agent_cfg.get("provider", "google")
+                llm_client = _llm.create_llm_client(
+                    provider, resilience=agent_cfg.get("resilience")
+                )
+
+                sub_agent = AgenticLLMStrategy(
+                    llm_client=llm_client,
+                    knowledge_store=knowledge_store,
+                    world_model=world_model,
+                    connector_getter=registry.get,
+                    steps_limit=steps_limit,
+                    temperature=temperature,
+                    allowed_tools=allowed_tools,
+                    logger=logger,
+                    metrics=metrics,
+                )
+                sub_strategies.append((sub_agent, priority))
+
             else:
                 # Fallback to threshold for unknown types
                 sub = ThresholdReactiveStrategy(logger=logger, metrics=metrics)

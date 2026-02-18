@@ -31,13 +31,13 @@
 systems:
   # Example 1: SWIM System
   - id: "swim"
-    connector_type: "swim"          # Type of connector to use
-    enabled: true                   # Enable/disable this system (bool)
+    connector_type: "swim" # Type of connector to use
+    enabled: true # Enable/disable this system (bool)
     connection:
-      host: "localhost"             # SWIM host (default: localhost)
-      port: 4242                    # SWIM port (default: 4242)
+      host: "localhost" # SWIM host (default: localhost)
+      port: 4242 # SWIM port (default: 4242)
     monitoring:
-      collection_interval: 5        # Collection interval in seconds
+      collection_interval: 5 # Collection interval in seconds
 
   # Example 2: Wildfire System (commented out)
   # To enable, uncomment the following and configure your Wildfire endpoint:
@@ -54,7 +54,6 @@ systems:
   #     # host: "localhost"
   #     # port: 5000
 
-
 ################################################################################
 # 2. MONITORING CONFIGURATION
 ################################################################################
@@ -66,7 +65,6 @@ monitoring:
   # Monitoring loop interval in seconds (default: 30)
   # Controls how often Polaris collects telemetry and executes adaptations
   interval_seconds: 10
-
 
 ################################################################################
 # 3. ADAPTATION STRATEGY
@@ -82,12 +80,11 @@ monitoring:
 #
 
 strategy:
-  type: "agentic_llm"  # DEFAULT: "threshold"
+  type: "hybrid" # DEFAULT: "threshold"
 
-
-###############################################################################
+  ###############################################################################
   # STRATEGY A: Threshold-Based Adaptation
-###############################################################################
+  ###############################################################################
   #
   # Simple, deterministic adaptation based on metric thresholds.
   # Triggers adaptations when metrics cross high/low boundaries.
@@ -119,10 +116,9 @@ strategy:
   #   cooldown_seconds: 60  # Min seconds between successive adaptations (default: 60)
   #   enabled: true         # Enable/disable threshold strategy (default: true)
 
-
-###############################################################################
+  ###############################################################################
   # STRATEGY B: LLM Reasoning Strategy
-###############################################################################
+  ###############################################################################
   #
   # AI-driven adaptation decisions using a language model.
   # Provides reasoning about metrics, trends, and optimal actions.
@@ -161,77 +157,81 @@ strategy:
   #     max_backoff_ms: 4000        # Max backoff in ms (default: 4000)
   #     # keys_env_var: OPENAI_API_KEYS  # For key rotation (optional)
 
-
-###############################################################################
+  ###############################################################################
   # STRATEGY C: Hybrid Strategy
-###############################################################################
+  ###############################################################################
   #
   # Combines multiple strategies, selecting best decision based on confidence.
   # Allows fallback between strategies.
   #
   # Suited for: Critical systems requiring multiple decision pathways
   #
-  # hybrid:
-  #   selection_mode: confidence    # "first", "priority", "confidence" (default: confidence)
-  #   min_confidence: 0.7           # Min confidence to trust a decision (default: 0.7)
-  #
-  #   # Define sub-strategies to combine
-  #   strategies:
-  #     - type: threshold           # Sub-strategy 1
-  #       priority: 0.8             # Priority weight for selection
-  #       threshold:
-  #         thresholds:
-  #           cpu_usage: { high: 80.0, low: 20.0 }
-  #         cooldown_seconds: 45
-  #
-  #     - type: llm_reasoning       # Sub-strategy 2
-  #       priority: 0.6
-  #       llm_reasoning:
-  #         system_description: "SWIM web application server pool"
-  #         adaptation_goals: "Maintain performance with minimal resource usage"
-  #         temperature: 0.1
-  #         provider: google
-  #         # system_prompt: |
-  #         #   ...
-  #         # per_system_prompts: { ... }
-  #         resilience:
-  #           rps: 2
-  #           burst: 4
-  #           max_retries: 4
-  #           base_backoff_ms: 200
-  #           max_backoff_ms: 4000
+  hybrid:
+    # Use threshold if response_time > 0.75, otherwise agentic_llm
+    selection_mode: first # "first", "priority", "confidence" (default: confidence)
+    min_confidence: 0.7 # Min confidence to trust a decision (default: 0.7)
+
+    # Define sub-strategies to combine (higher priority evaluated first)
+    strategies:
+      - type: threshold # Sub-strategy 1 (response-time guard)
+        priority: 0.9
+        threshold:
+          thresholds:
+            response_time:
+              high: 750 # milliseconds
+          cooldown_seconds: 45
+
+      - type: agentic_llm # Sub-strategy 2
+        priority: 0.6
+        agentic_llm:
+          provider: gemini # "google" or "openai" (default: google)
+          steps_limit: 3 # Max reasoning steps (default: 3)
+          temperature: 0.1 # Model creativity (default: 0.1)
+          tools:
+            enabled: # List of available tools for the agent
+              - get_recent_states
+              - summarize_metric_trends
+              - get_world_model_insights
+              - predict_outcome
+              - get_action_history
+              - list_supported_actions
+          resilience: # Resilience settings (same as LLM strategy)
+            rps: 0.5
+            burst: 1
+            concurrency: 1
+            max_retries: 4
+            base_backoff_ms: 200
+            max_backoff_ms: 4000
   #           concurrency: 4
 
-
-###############################################################################
+  ###############################################################################
   # STRATEGY D: Agentic LLM Strategy (DEFAULT EXAMPLE)
-###############################################################################
+  ###############################################################################
   #
   # LLM agent with planning, tools, and multi-step reasoning.
   # Can use specialized tools (world model, metrics analysis, etc.) to make decisions.
   #
   # Suited for: Complex adaptation requiring multi-step planning, trade-off analysis
   #
-  agentic_llm:
-    provider: groq              # "google" or "openai" (default: google)
-    steps_limit: 3                # Max reasoning steps (default: 3)
-    temperature: 0.1              # Model creativity (default: 0.1)
-    tools:
-      enabled:                    # List of available tools for the agent
-        - get_recent_states       # Recent system states
-        - summarize_metric_trends # Metric trend analysis
-        - get_world_model_insights # World model predictions
-        - predict_outcome         # Outcome prediction
-        - get_action_history      # Past adaptation history
-        - list_supported_actions  # Available adaptations (connector-aware)
-    resilience:                   # Resilience settings (same as LLM strategy)
-      rps: 2
-      burst: 4
-      concurrency: 4
-      max_retries: 4
-      base_backoff_ms: 200
-      max_backoff_ms: 4000
-
+  # agentic_llm:
+  #   provider: gemini # "google" or "openai" (default: google)
+  #   steps_limit: 3 # Max reasoning steps (default: 3)
+  #   temperature: 0.1 # Model creativity (default: 0.1)
+  #   tools:
+  #     enabled: # List of available tools for the agent
+  #       - get_recent_states # Recent system states
+  #       - summarize_metric_trends # Metric trend analysis
+  #       - get_world_model_insights # World model predictions
+  #       - predict_outcome # Outcome prediction
+  #       - get_action_history # Past adaptation history
+  #       - list_supported_actions # Available adaptations (connector-aware)
+  #   resilience: # Resilience settings (same as LLM strategy)
+  #     rps: 2
+  #     burst: 4
+  #     concurrency: 4
+  #     max_retries: 4
+  #     base_backoff_ms: 200
+  #     max_backoff_ms: 4000
 
 ################################################################################
 # 4. WORLD MODEL (OPTIONAL)
@@ -245,20 +245,19 @@ strategy:
 #
 
 world_model:
-  type: "statistical"           # DEFAULT: statistical
+  type: "statistical" # DEFAULT: statistical
   statistical:
     # Number of recent samples to keep per metric in memory
-    window_size: 100            # DEFAULT: 100
+    window_size: 100 # DEFAULT: 100
 
     # Enable lightweight Kalman-style filtering
     # - true: Smoother predictions with variance estimates (recommended)
     # - false: Simple historical mean (lighter weight)
-    use_kalman: true            # DEFAULT: false
+    use_kalman: true # DEFAULT: false
 
     # Note: Regime tracking (HMM-style) is always enabled
     # Infers "low", "normal", "high" regimes from metrics
     # Exposed via world_model.get_insights()
-
 
 ################################################################################
 # 5. KNOWLEDGE STORE (OPTIONAL)
@@ -272,11 +271,10 @@ world_model:
 #
 
 knowledge:
-  type: "memory"                # DEFAULT: memory
+  type: "memory" # DEFAULT: memory
   memory:
     # Max states per system to keep in memory
-    max_states_per_system: 1000  # DEFAULT: 1000
-
+    max_states_per_system: 1000 # DEFAULT: 1000
 
 ################################################################################
 # 6. META-LEARNER (OPTIONAL, DISABLED BY DEFAULT)
@@ -289,58 +287,57 @@ knowledge:
 #
 
 meta_learner:
-  enabled: false                # Set to true to enable (default: false)
+  enabled: true # Set to true to enable (default: false)
 
   # Type of meta-learner
-  type: "llm"                   # "statistical" or "llm" (default: statistical)
+  type: "llm" # "statistical" or "llm" (default: statistical)
 
   # Interval between meta-learning analysis runs (hours)
-  analysis_interval_hours: 1.0  # DEFAULT: 1.0
+  analysis_interval_hours: 0.2 # DEFAULT: 1.0
 
   # For Statistical Meta-Learner
-  statistical:
-    conservative_mode: true   # Conservative param changes (default: true)
-    enable_bayesian_optimization: true  # Use Bayesian optimization (default: true)
-    min_samples_for_optimization: 10    # Minimum samples before Bayesian optimization activates
-    acquisition_function: "expected_improvement"  # "expected_improvement", "upper_confidence_bound", "probability_improvement"
-    exploration_weight: 0.1    # Weight for exploration in UCB acquisition
-    # When a StatisticalWorldModel is provided, the meta-learner
-    # automatically consumes insights and adjusts confidence accordingly
-    # More cautious when metric variability is high
+  # statistical:
+  #   conservative_mode: true # Conservative param changes (default: true)
+  #   enable_bayesian_optimization: true # Use Bayesian optimization (default: true)
+  #   min_samples_for_optimization: 10 # Minimum samples before Bayesian optimization activates
+  #   acquisition_function: "expected_improvement" # "expected_improvement", "upper_confidence_bound", "probability_improvement"
+  #   exploration_weight: 0.1 # Weight for exploration in UCB acquisition
+  # When a StatisticalWorldModel is provided, the meta-learner
+  # automatically consumes insights and adjusts confidence accordingly
+  # More cautious when metric variability is high
 
   # For LLM-Based Meta-Learner
   llm:
-    provider: google            # "google" or "openai" (default: google)
-    temperature: 0.1            # Model creativity (default: 0.1)
-    auto_apply: false           # Auto-apply approved proposals (default: false)
+    provider: google # "google" or "openai" (default: google)
+    temperature: 0.1 # Model creativity (default: 0.1)
+    auto_apply: true # Auto-apply approved proposals (default: false)
 
     # Optional: Custom analysis/optimization prompts
-    # analysis_system_prompt: |
-    #   You are an expert system analyst for self-adaptive systems...
-    # optimization_system_prompt: |
-    #   You are an expert parameter optimizer for self-adaptive systems...
+    analysis_system_prompt: |
+      You are an expert system analyst for self-adaptive systems...
+    optimization_system_prompt: |
+      You are an expert parameter optimizer for self-adaptive systems...
 
     # Per-system prompt overrides (keyed by systems[].id)
-    # per_system_prompts:
-    #   swim:
-    #     analysis_system_prompt: |
-    #       Analyze SWIM-specific metrics (response time, throughput, utilization)...
-    #     optimization_system_prompt: |
-    #       Propose threshold and cooldown changes for SWIM...
+    per_system_prompts:
+      swim:
+        analysis_system_prompt: |
+          Analyze SWIM-specific metrics (response time, throughput, utilization)...
+        optimization_system_prompt: |
+          Propose threshold and cooldown changes for SWIM...
     #   wildfire:
     #     analysis_system_prompt: |
     #       Analyze Wildfire metrics (fire_cells_burning_ratio, mr1_avg, safety)...
     #     optimization_system_prompt: |
     #       Propose parameter changes for optimal fire containment...
 
-    resilience:                 # Resilience settings for LLM calls
+    resilience: # Resilience settings for LLM calls
       rps: 2
       burst: 4
       concurrency: 4
       max_retries: 4
       base_backoff_ms: 200
       max_backoff_ms: 4000
-
 
 ################################################################################
 # 7. OBSERVABILITY & LOGGING
@@ -350,56 +347,56 @@ meta_learner:
 #
 
 observability:
-
   ###########################################################################
   # Logging Configuration
   ###########################################################################
   logging:
-    type: "human"               # "human" (readable) or "structured" (JSON)
-                                # DEFAULT: human
-    level: "DEBUG"              # DEBUG, INFO, WARNING, ERROR (default: INFO)
-    console: true               # Log to stdout (default: true)
-    file: true                  # Log to file (default: false)
-    file_path: "./logs/polaris.log"  # Log file location
-    use_colors: true            # Use colored output (human format only, default: true)
+    type:
+      "human" # "human" (readable) or "structured" (JSON)
+      # DEFAULT: human
+    level: "DEBUG" # DEBUG, INFO, WARNING, ERROR (default: INFO)
+    console: true # Log to stdout (default: true)
+    file: true # Log to file (default: false)
+    file_path: "./logs/polaris.log" # Log file location
+    use_colors: true # Use colored output (human format only, default: true)
 
   ###########################################################################
   # Metrics Collection
   ###########################################################################
   metrics:
-    enabled: true               # Enable metrics collection (default: true)
-    collector_type: "simple"    # "simple", "prometheus", "datadog" (default: simple)
+    enabled: true # Enable metrics collection (default: true)
+    collector_type: "simple" # "simple", "prometheus", "datadog" (default: simple)
 
     ######## Export Settings ########
     export:
-      enabled: true             # Enable metrics export (default: false)
+      enabled: true # Enable metrics export (default: false)
       formats:
-        - json                  # JSON format
-        - csv                   # CSV format
-      output_dir: "./metrics"   # Export directory (default: ./metrics)
+        - json # JSON format
+        - csv # CSV format
+      output_dir: "./metrics" # Export directory (default: ./metrics)
       # How often to auto-export metrics (minutes)
       # Set to 0 to disable auto-export
-      auto_export_interval_minutes: 5  # DEFAULT: 0
+      auto_export_interval_minutes: 5 # DEFAULT: 0
       # Optional: Name to include in exported filenames
-      experiment_name: null     # DEFAULT: null
+      experiment_name: null # DEFAULT: null
       # Include timestamp in export
-      include_timestamp: true   # DEFAULT: true
+      include_timestamp: true # DEFAULT: true
 
     ######## Simple Collector Settings ########
     simple:
       # Max number of values to keep per histogram/metric
-      histogram_max_values: 1000  # DEFAULT: 1000
+      histogram_max_values: 1000 # DEFAULT: 1000
 
     ######## Component Metrics ########
     # Control which components emit metrics
     # Setting to false reduces overhead but loses visibility
     components:
-      core_framework: true      # Main framework lifecycle metrics
-      monitoring_loop: true     # Monitoring loop performance
-      event_bus: true          # Event system metrics
-      registry: true           # Component registry metrics
-      strategy: true           # Strategy-specific metrics
-      connectors: true         # Connector operation metrics
-      world_model: true        # World model metrics
-      knowledge_store: true    # Knowledge store metrics
-      meta_learner: true       # Meta-learner metrics
+      core_framework: true # Main framework lifecycle metrics
+      monitoring_loop: true # Monitoring loop performance
+      event_bus: true # Event system metrics
+      registry: true # Component registry metrics
+      strategy: true # Strategy-specific metrics
+      connectors: true # Connector operation metrics
+      world_model: true # World model metrics
+      knowledge_store: true # Knowledge store metrics
+      meta_learner: true # Meta-learner metrics
