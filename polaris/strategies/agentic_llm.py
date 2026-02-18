@@ -402,6 +402,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
         try:
             return json.loads(s)
         except json.JSONDecodeError:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "LLM returned malformed JSON (truncated to 500 chars): %.500s", s
+            )
             return {}
 
     async def _execute_tool(

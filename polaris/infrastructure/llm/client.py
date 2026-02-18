@@ -75,8 +75,10 @@ class GoogleGeminiClient(LLMClient):
     ) -> LLMResponse:
         """Generate response using Google Gemini with error handling."""
         try:
+            # import GenerationConfig
+            from google.ai.generativelanguage_v1beta import GenerationConfig
+
             # Convert messages to Gemini format
-            # Gemini uses a simpler format - just concatenate user messages
             prompt_parts = []
             for msg in messages:
                 if msg.role == "system":
@@ -87,17 +89,21 @@ class GoogleGeminiClient(LLMClient):
                     prompt_parts.append(f"Assistant: {msg.content}\n")
 
             prompt = "\n".join(prompt_parts)
+            gen_config = {"temperature": temperature, "max_output_tokens": max_tokens}
 
-            # Generate response with timeout
-            response = self.client.generate_content(
-                prompt,
-                generation_config={"temperature": temperature, "max_output_tokens": max_tokens},
+            # generate_content() is synchronous — run in a thread-pool executor
+            # so we don't block the asyncio event loop (P0 fix).
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.generate_content(
+                    prompt, generation_config=GenerationConfig(**gen_config)
+                ),
             )
 
             if not response.text:
                 raise ValueError("Empty response from Gemini API")
 
-            # Log response details for debugging
             finish_reason = (
                 response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN"
             )
@@ -109,7 +115,6 @@ class GoogleGeminiClient(LLMClient):
                 "Install with: pip install google-generativeai"
             )
         except Exception as e:
-            # Wrap API errors with more context
             raise RuntimeError(f"Gemini API error: {e}") from e
 
 
@@ -196,7 +201,7 @@ class GroqClient(LLMClient):
             groq_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
             # Run sync client in thread pool to make it async
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self.client.chat.completions.create(
@@ -321,15 +326,20 @@ class ResilientLLMClient(LLMClient):
         self._client_idx = (self._client_idx + 1) % len(self._clients)
 
     async def _acquire_token(self) -> None:
+        """Acquire one token from the rate-limit bucket (thread-safe via asyncio.Lock)."""
+        if not hasattr(self, "_token_lock"):
+            # Lazily create the lock the first time (safe: single-threaded asyncio).
+            self._token_lock: asyncio.Lock = asyncio.Lock()
         while True:
-            now = time.monotonic()
-            elapsed = now - self._last_refill
-            if elapsed > 0:
-                self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_rate)
-                self._last_refill = now
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                return
+            async with self._token_lock:
+                now = time.monotonic()
+                elapsed = now - self._last_refill
+                if elapsed > 0:
+                    self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_rate)
+                    self._last_refill = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
             await asyncio.sleep(0.01)
 
     def _classify_retryable(self, err: Exception) -> Tuple[bool, bool, str]:

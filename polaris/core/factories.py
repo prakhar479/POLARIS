@@ -117,7 +117,7 @@ def _register_default_connector_factories() -> None:
         if not base_url:
             host = system_cfg.connection.get("host", "localhost")
             port = system_cfg.connection.get("port", 5000)
-            base_url = f"http: //{host}: {port}"
+            base_url = f"http://{host}:{port}"
 
         return WildfireConnector(
             base_url=base_url,

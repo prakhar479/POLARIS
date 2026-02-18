@@ -62,6 +62,11 @@ class MonitoringLoop:
         self._logger.info("Starting monitoring loop")
         self._emit("polaris.monitoring.started", component="core_framework")
 
+        # Concurrency cap: process at most this many connectors in parallel.
+        max_concurrent = getattr(self._config, "max_concurrent_connectors", 10)
+        semaphore = asyncio.Semaphore(max_concurrent)
+        error_backoff = 5.0  # initial backoff on loop-level errors
+
         while self._running:
             try:
                 new_config = await self._reloader.maybe_reload()
@@ -69,15 +74,26 @@ class MonitoringLoop:
                     self._config = new_config
 
                 loop_start = datetime.now(timezone.utc)
+
+                connectors = list(self._registry.all())
+
+                async def _bounded(connector: "Connector") -> Dict[str, int]:
+                    async with semaphore:
+                        return await self._process_system(connector)
+
+                results = await asyncio.gather(
+                    *[_bounded(c) for c in connectors], return_exceptions=True
+                )
+
                 systems_processed = 0
                 adaptations_executed = 0
-
-                for connector in self._registry.all():
-                    result = await self._process_system(connector)
-                    systems_processed += result["systems_processed"]
-                    adaptations_executed += result["adaptations_executed"]
+                for r in results:
+                    if isinstance(r, dict):
+                        systems_processed += r["systems_processed"]
+                        adaptations_executed += r["adaptations_executed"]
 
                 self._record_loop_metrics(loop_start, systems_processed, adaptations_executed)
+                error_backoff = 5.0  # reset on success
 
                 loop_duration = (datetime.now(timezone.utc) - loop_start).total_seconds()
                 sleep_for = max(0.0, float(self._interval) - loop_duration)
@@ -88,7 +104,9 @@ class MonitoringLoop:
             except Exception as e:
                 self._logger.error(f"Error in monitoring loop: {e}")
                 self._emit("polaris.monitoring.loop_errors", component="monitoring_loop")
-                await asyncio.sleep(float(self._interval))
+                # Exponential backoff capped at the monitoring interval.
+                await asyncio.sleep(error_backoff)
+                error_backoff = min(error_backoff * 2, float(self._interval))
 
         self._logger.info("Monitoring loop stopped")
         self._emit("polaris.monitoring.stopped", component="core_framework")

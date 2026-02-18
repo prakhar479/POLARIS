@@ -73,10 +73,26 @@ class AdaptationPipeline:
         from polaris.abstractions.strategy import AdaptationContext
         from polaris.core.events import AdaptationEvent
 
+        # Fetch recent history so strategies can reason about trends.
+        historical_states = []
+        if self._knowledge_store:
+            from datetime import timedelta
+
+            now = state.timestamp
+            start = now - timedelta(hours=1)
+            try:
+                historical_states = await self._knowledge_store.query_states(
+                    state.system_id, start, now
+                )
+                # Exclude the current state (it was just stored by the monitoring loop)
+                historical_states = [s for s in historical_states if s.timestamp < now][-10:]
+            except Exception:
+                historical_states = []
+
         # Build context
         context = AdaptationContext(
             system_id=state.system_id,
-            historical_states=[],
+            historical_states=historical_states,
             world_model_insights=(
                 await self._world_model.get_insights() if self._world_model else None
             ),

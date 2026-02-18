@@ -59,6 +59,10 @@ class MockConnector(Connector):
         )
 
     async def validate_action(self, action: AdaptationAction) -> bool:
+        # When supported_actions is empty, accept everything (no restriction).
+        # Tests that want to reject actions should populate supported_actions.
+        if not self.supported_actions:
+            return True
         return action.action_type in [a.action_type for a in self.supported_actions]
 
 
