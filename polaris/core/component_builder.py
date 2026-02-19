@@ -79,17 +79,24 @@ class ComponentBuilder:
     def build_metrics(
         config: "PolarisConfig",
         cli_overrides: Dict[str, Any],
-    ) -> Optional["MetricsCollector"]:
-        """Create a metrics collector from configuration with CLI overrides applied."""
+    ) -> "MetricsCollector":
+        """Create a metrics collector from configuration with CLI overrides applied.
+
+        Returns a :class:`NullMetricsCollector` when metrics are disabled so
+        components can call ``self.metrics.increment(...)`` unconditionally
+        without ``if self.metrics:`` guards.
+        """
+        from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+
         if cli_overrides.get("metrics_enabled", True) is False:
-            return None
+            return NullMetricsCollector()
 
         metrics_config: Dict[str, Any] = {}
         if hasattr(config, "observability") and config.observability:
             metrics_config = config.observability.get("metrics", {})
 
         if not metrics_config.get("enabled", True):
-            return None
+            return NullMetricsCollector()
 
         collector_type = metrics_config.get("collector_type", "simple")
 
@@ -127,12 +134,40 @@ class ComponentBuilder:
         logger: "Logger",
         metrics: Optional["MetricsCollector"],
     ) -> "KnowledgeStore":
-        """Create the default in-memory knowledge store."""
-        from polaris.knowledge import InMemoryKnowledgeStore
+        """Create the knowledge store from config.
 
+        If ``config.knowledge_store.db_path`` is set the SQLite-backed store is
+        used (data survives restarts).  Otherwise the default in-memory store is
+        used.
+        """
         ks_metrics = (
             metrics if ComponentBuilder.should_collect(config, "knowledge_store", metrics) else None
         )
+
+        db_path: Optional[str] = None
+        max_states: int = 5000
+        if hasattr(config, "knowledge_store") and config.knowledge_store:
+            ks_cfg = config.knowledge_store
+            if isinstance(ks_cfg, dict):
+                db_path = ks_cfg.get("db_path")
+                max_states = int(ks_cfg.get("max_states_per_system", max_states))
+            elif hasattr(ks_cfg, "db_path"):
+                db_path = ks_cfg.db_path
+                if hasattr(ks_cfg, "max_states_per_system"):
+                    max_states = int(ks_cfg.max_states_per_system)
+
+        if db_path:
+            from polaris.knowledge.sqlite_store import SQLiteKnowledgeStore
+
+            return SQLiteKnowledgeStore(
+                db_path=db_path,
+                max_states_per_system=max_states,
+                logger=logger,
+                metrics=ks_metrics,
+            )
+
+        from polaris.knowledge import InMemoryKnowledgeStore
+
         return InMemoryKnowledgeStore(logger=logger, metrics=ks_metrics)
 
     @staticmethod

@@ -7,12 +7,13 @@ Uses LLM to analyze system state and decide on adaptations.
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 from polaris.infrastructure.llm import LLMClient, LLMMessage
+from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
 class LLMReasoningStrategy(AdaptationStrategy):
@@ -52,19 +53,18 @@ class LLMReasoningStrategy(AdaptationStrategy):
         self._system_prompt_template = system_prompt
         self._per_system_prompts = per_system_prompts or {}
         self.logger = logger
-        self.metrics = metrics
+        self.metrics = metrics or NullMetricsCollector()
         self._adaptation_count = 0
         self._success_count = 0
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
-    ) -> Optional[AdaptationAction]:
+    ) -> List[AdaptationAction]:
         """Use LLM to assess if adaptation is needed."""
-        if self.metrics:
-            self.metrics.increment(
-                "polaris.strategy.llm.assessments",
-                tags={"system_id": state.system_id},
-            )
+        self.metrics.increment(
+            "polaris.strategy.llm.assessments",
+            tags={"system_id": state.system_id},
+        )
         if self.logger:
             self.logger.debug(f"[LLM Reasoner] Starting assessment for system: {state.system_id}")
             self.logger.debug(f"[LLM Reasoner] System health: {state.health_status.value}")
@@ -108,12 +108,11 @@ class LLMReasoningStrategy(AdaptationStrategy):
             )
             llm_duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
 
-            if self.metrics:
-                self.metrics.histogram(
-                    "polaris.strategy.llm.llm_call_duration_seconds",
-                    llm_duration,
-                    tags={"system_id": state.system_id},
-                )
+            self.metrics.histogram(
+                "polaris.strategy.llm.llm_call_duration_seconds",
+                llm_duration,
+                tags={"system_id": state.system_id},
+            )
 
             if self.logger:
                 self.logger.debug(
@@ -124,16 +123,19 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     self.logger.debug(f"[LLM Reasoner] {line}")
 
             # Parse LLM response
-            action = self._parse_response(response.content, state.system_id)
+            actions = self._parse_response(response.content, state.system_id)
 
-            if action:
+            if actions:
                 if self.logger:
-                    self.logger.info("[LLM Reasoner] Adaptation decision: YES")
-                    self.logger.info(f"[LLM Reasoner] Action type: {action.action_type}")
-                    self.logger.debug(
-                        f"[LLM Reasoner] Action parameters: {json.dumps(action.parameters, indent=2)}"
+                    self.logger.info(
+                        f"[LLM Reasoner] Adaptation decision: YES ({len(actions)} actions)"
                     )
-                if self.metrics:
+                    for action in actions:
+                        self.logger.info(f"[LLM Reasoner] Action type: {action.action_type}")
+                        self.logger.debug(
+                            f"[LLM Reasoner] Action parameters: {json.dumps(action.parameters, indent=2)}"
+                        )
+                for action in actions:
                     self.metrics.increment(
                         "polaris.strategy.llm.actions_proposed",
                         tags={"system_id": state.system_id, "action_type": action.action_type},
@@ -141,13 +143,12 @@ class LLMReasoningStrategy(AdaptationStrategy):
             else:
                 if self.logger:
                     self.logger.info("[LLM Reasoner] Adaptation decision: NO")
-                if self.metrics:
-                    self.metrics.increment(
-                        "polaris.strategy.llm.no_action_needed",
-                        tags={"system_id": state.system_id},
-                    )
+                self.metrics.increment(
+                    "polaris.strategy.llm.no_action_needed",
+                    tags={"system_id": state.system_id},
+                )
 
-            return action
+            return actions
 
         except Exception as e:
             # Fall back to no action on error
@@ -158,12 +159,11 @@ class LLMReasoningStrategy(AdaptationStrategy):
                 import traceback
 
                 self.logger.debug(f"[LLM Reasoner] Traceback: {traceback.format_exc()}")
-            if self.metrics:
-                self.metrics.increment(
-                    "polaris.strategy.llm.errors",
-                    tags={"system_id": state.system_id},
-                )
-            return None
+            self.metrics.increment(
+                "polaris.strategy.llm.assessment_errors",
+                tags={"system_id": state.system_id},
+            )
+            return []
 
     def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
         """Get system prompt for LLM, with optional system-specific overrides."""
@@ -193,13 +193,17 @@ Adaptation Goals: {self.adaptation_goals}
 
 Your task is to analyze the current system state and decide if an adaptation action is needed.
 
+IMPORTANT: You can propose MULTIPLE actions in the "actions" list if a compound adaptation is more effective.
+
 Respond in JSON format:{{
     "needs_adaptation": "true" or "false",
     "reasoning": "explanation of your decision",
-    "action":{{  # only if needs_adaptation is true
-        "type": "scale_up" or "scale_down" or "adjust_qos",
-        "parameters":{{"key": "value"}}
-    }}
+    "actions":[  # provide a list of actions; can contain multiple elements
+        {{
+            "type": "scale_up" or "scale_down" or "adjust_qos",
+            "parameters":{{"key": "value"}}
+        }},
+    ]
 }}
 
 Be conservative - only adapt when there's a clear need. Consider:
@@ -238,7 +242,7 @@ Metrics:
 Should this system be adapted right now? Analyze the state and provide your decision.
 """
 
-    def _parse_response(self, response: str, system_id: str) -> Optional[AdaptationAction]:
+    def _parse_response(self, response: str, system_id: str) -> List[AdaptationAction]:
         """Parse LLM response into adaptation action."""
         try:
             # Extract JSON from response with improved robustness
@@ -246,7 +250,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
             if not response:
                 if self.logger:
                     self.logger.warning("[LLM Reasoner] Empty response from LLM")
-                return None
+                return []
 
             json_content = response
             extraction_method = "direct"
@@ -274,7 +278,8 @@ Should this system be adapted right now? Analyze the state and provide your deci
                 self.logger.debug(
                     f"[LLM Reasoner] Extracted JSON content (length: {len(json_content)} chars): "
                 )
-                for line in json_content.split("\n")[:20]:  # Log first 20 lines
+                # Log first 20 lines
+                for line in json_content.split("\n")[:20]:
                     self.logger.debug(f"[LLM Reasoner] {line}")
 
             # Try to fix incomplete JSON by checking for unterminated strings
@@ -324,7 +329,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
             if not isinstance(data, dict):
                 if self.logger:
                     self.logger.warning("[LLM Reasoner] Response is not a JSON object")
-                return None
+                return []
 
             needs_adaptation = data.get("needs_adaptation", False)
             reasoning = data.get("reasoning", "")
@@ -336,58 +341,63 @@ Should this system be adapted right now? Analyze the state and provide your deci
             if not needs_adaptation:
                 if self.logger:
                     self.logger.debug("[LLM Reasoner] LLM determined no adaptation needed")
-                return None
+                return []
 
-            action_data = data.get("action", {})
-            if not isinstance(action_data, dict):
-                if self.logger:
-                    self.logger.warning("[LLM Reasoner] Action data is not a dictionary")
-                return None
+            # Support both 'actions' list and single 'action' for backward compatibility/robustness
+            raw_actions = []
+            if "actions" in data and isinstance(data["actions"], list):
+                raw_actions = data["actions"]
+            elif "action" in data and isinstance(data["action"], dict):
+                raw_actions = [data["action"]]
 
-            action_type = action_data.get("type")
-            parameters = action_data.get("parameters", {})
-
-            if self.logger:
-                self.logger.debug(f"[LLM Reasoner] Parsed action_type: {action_type}")
-                self.logger.debug(
-                    f"[LLM Reasoner] Parsed parameters: {json.dumps(parameters, indent=2)}"
-                )
-
-            if not action_type or not isinstance(parameters, dict):
+            if not raw_actions:
                 if self.logger:
                     self.logger.warning(
-                        f"[LLM Reasoner] Invalid action structure - type: {action_type}, "
-                        f"params type: {type(parameters)}"
+                        "[LLM Reasoner] No valid actions found in adaptation response"
                     )
-                return None
+                return []
 
-            adaptation_action = AdaptationAction(
-                action_id=str(uuid.uuid4()),
-                action_type=action_type,
-                target_system=system_id,
-                parameters={**parameters, "llm_reasoning": reasoning},
-            )
+            adaptation_actions = []
+            for action_data in raw_actions:
+                if not isinstance(action_data, dict):
+                    continue
+
+                action_type = action_data.get("type")
+                parameters = action_data.get("parameters", {})
+
+                if not action_type or not isinstance(parameters, dict):
+                    if self.logger:
+                        self.logger.warning(
+                            f"[LLM Reasoner] Invalid individual action structure: {action_data}"
+                        )
+                    continue
+
+                adaptation_actions.append(
+                    AdaptationAction(
+                        action_id=str(uuid.uuid4()),
+                        action_type=action_type,
+                        target_system=system_id,
+                        parameters={**parameters, "llm_reasoning": reasoning},
+                    )
+                )
 
             if self.logger:
                 self.logger.info(
-                    f"[LLM Reasoner] Successfully created adaptation action: {adaptation_action.action_id}"
+                    f"[LLM Reasoner] Successfully created {len(adaptation_actions)} adaptation actions"
                 )
 
-            return adaptation_action
+            return adaptation_actions
 
         except json.JSONDecodeError as e:
             if self.logger:
                 self.logger.error(f"[LLM Reasoner] JSON parsing error: {str(e)}")
-                self.logger.debug(
-                    f"[LLM Reasoner] Failed to parse content (first 300 chars): {response[:300]}..."
-                )
-            return None
+            return []
         except (KeyError, TypeError, AttributeError) as e:
             if self.logger:
                 self.logger.error(
                     f"[LLM Reasoner] Error extracting adaptation data: {type(e).__name__}: {str(e)}"
                 )
-            return None
+            return []
 
     async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """Track adaptation success."""
@@ -396,19 +406,18 @@ Should this system be adapted right now? Analyze the state and provide your deci
         is_success = hasattr(result, "status") and result.status.value == "success"
         if is_success:
             self._success_count += 1
-        if self.metrics:
-            self.metrics.increment(
-                "polaris.strategy.llm.actions_executed",
-                tags={
-                    "action_type": action.action_type,
-                    "system_id": action.target_system,
-                    "status": result.status.value if hasattr(result, "status") else "unknown",
-                },
-            )
-            self.metrics.gauge(
-                "polaris.strategy.llm.success_rate",
-                self._success_count / self._adaptation_count if self._adaptation_count > 0 else 0.0,
-            )
+        self.metrics.increment(
+            "polaris.strategy.llm.actions_executed",
+            tags={
+                "action_type": action.action_type,
+                "system_id": action.target_system,
+                "status": result.status.value if hasattr(result, "status") else "unknown",
+            },
+        )
+        self.metrics.gauge(
+            "polaris.strategy.llm.success_rate",
+            self._success_count / self._adaptation_count if self._adaptation_count > 0 else 0.0,
+        )
 
         if self.logger:
             status_str = "SUCCESS" if is_success else "FAILED"

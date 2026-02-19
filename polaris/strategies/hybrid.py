@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
 class HybridStrategy(AdaptationStrategy):
@@ -44,7 +45,7 @@ class HybridStrategy(AdaptationStrategy):
         self._success_count = 0
         self._strategy_usage = dict.fromkeys(range(len(strategies)), 0)
         self._logger = logger
-        self._metrics = metrics
+        self._metrics = metrics or NullMetricsCollector()
 
         if self._logger:
             self._logger.info(
@@ -54,12 +55,11 @@ class HybridStrategy(AdaptationStrategy):
                 min_confidence=self.min_confidence,
             )
 
-        if self._metrics:
-            self._metrics.increment("polaris.strategy.hybrid.initialized")
+        self._metrics.increment("polaris.strategy.hybrid.initialized")
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
-    ) -> Optional[AdaptationAction]:
+    ) -> List[AdaptationAction]:
         """Assess using all strategies and select best action."""
         if self._logger:
             self._logger.debug(
@@ -68,11 +68,10 @@ class HybridStrategy(AdaptationStrategy):
                 selection_mode=self.selection_mode,
             )
 
-        if self._metrics:
-            self._metrics.increment(
-                "polaris.strategy.hybrid.assessments",
-                tags={"system_id": state.system_id, "selection_mode": self.selection_mode},
-            )
+        self._metrics.increment(
+            "polaris.strategy.hybrid.assessments",
+            tags={"system_id": state.system_id, "selection_mode": self.selection_mode},
+        )
 
         assess_start = datetime.now(timezone.utc)
 
@@ -90,16 +89,16 @@ class HybridStrategy(AdaptationStrategy):
         for i, (result, (strategy, priority)) in enumerate(zip(results, self.strategies)):
             if isinstance(result, Exception):
                 continue
-            if result and isinstance(result, AdaptationAction):
-                # Estimate confidence asynchronously
-                confidence_tasks.append(self._estimate_confidence(strategy, result, state))
+            if isinstance(result, list) and result:
+                # Estimate confidence asynchronously using the first action as representative
+                confidence_tasks.append(self._estimate_confidence(strategy, result[0], state))
                 valid_indices.append((i, priority, result, strategy))
 
         confidences: List[Union[float, BaseException]] = []
         if confidence_tasks:
             confidences = await asyncio.gather(*confidence_tasks, return_exceptions=True)
 
-        for (i, priority, action, _strategy), conf in zip(valid_indices, confidences):
+        for (i, priority, action_list, _strategy), conf in zip(valid_indices, confidences):
             # Handle any exceptions during confidence estimation
             if isinstance(conf, Exception):
                 conf_val = 0.7  # fallback default
@@ -107,7 +106,7 @@ class HybridStrategy(AdaptationStrategy):
                 conf_val = float(conf)
             else:
                 conf_val = 0.7  # fallback for any other type
-            proposals.append((action, conf_val, priority, i))
+            proposals.append((action_list, conf_val, priority, i))
 
         if not proposals:
             if self._logger:
@@ -115,72 +114,73 @@ class HybridStrategy(AdaptationStrategy):
                     "HybridStrategy found no valid proposals",
                     system_id=state.system_id,
                 )
-            if self._metrics:
-                self._metrics.increment(
-                    "polaris.strategy.hybrid.no_action_needed",
-                    tags={"system_id": state.system_id},
-                )
-            if self._metrics:
-                duration = (datetime.now(timezone.utc) - assess_start).total_seconds()
-                self._metrics.histogram(
-                    "polaris.strategy.hybrid.assess_duration_seconds",
-                    duration,
-                    tags={"system_id": state.system_id},
-                )
-            return None
-
-        # Select based on mode
-        selected = None
-        selected_idx = None
-
-        if self.selection_mode == "first":
-            # Return first proposal (highest priority)
-            selected, _, _, selected_idx = proposals[0]
-
-        elif self.selection_mode == "priority":
-            # Use highest priority strategy with valid action
-            for action, conf, _pri, idx in sorted(proposals, key=lambda x: x[2], reverse=True):
-                if conf >= self.min_confidence:
-                    selected = action
-                    selected_idx = idx
-                    break
-
-        elif self.selection_mode == "confidence":
-            # Return highest confidence proposal above threshold
-            valid = [(a, c, p, i) for a, c, p, i in proposals if c >= self.min_confidence]
-            if valid:
-                selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
-
-        # Track which strategy was used
-        if selected and selected_idx is not None and isinstance(selected, AdaptationAction):
-            self._strategy_usage[selected_idx] += 1
-
-        if self._metrics:
+            self._metrics.increment(
+                "polaris.strategy.hybrid.selection_none",
+                tags={"system_id": state.system_id, "mode": self.selection_mode},
+            )
             duration = (datetime.now(timezone.utc) - assess_start).total_seconds()
             self._metrics.histogram(
                 "polaris.strategy.hybrid.assess_duration_seconds",
                 duration,
                 tags={"system_id": state.system_id},
             )
-            if selected:
-                self._metrics.increment(
-                    "polaris.strategy.hybrid.actions_selected",
-                    tags={
-                        "system_id": state.system_id,
-                        "selection_mode": self.selection_mode,
-                        "selected_index": str(selected_idx),
-                    },
-                )
+            return []
+
+        # Select based on mode
+        selected = None
+        selected_idx = None
+        best_idx = None  # This variable is introduced by the provided snippet
+
+        if self.selection_mode == "first":
+            # Return first proposal (highest priority)
+            selected, _, _, selected_idx = proposals[0]
+            best_idx = selected_idx
+
+        elif self.selection_mode == "priority":
+            # Use highest priority strategy with valid action
+            for action_list, conf, _pri, idx in sorted(proposals, key=lambda x: x[2], reverse=True):
+                if conf >= self.min_confidence:
+                    selected = action_list
+                    selected_idx = idx
+                    best_idx = selected_idx
+                    break
+
+        elif self.selection_mode == "confidence":
+            # Return highest confidence proposal above threshold
+            valid = [(al, c, p, i) for al, c, p, i in proposals if c >= self.min_confidence]
+            if valid:
+                selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
+                best_idx = selected_idx
+
+        # Track which strategy was used
+        if selected and selected_idx is not None:
+            self._strategy_usage[selected_idx] += 1
+
+        self._metrics.histogram(
+            "polaris.strategy.hybrid.assess_duration_seconds",
+            (datetime.now(timezone.utc) - assess_start).total_seconds(),
+            tags={"system_id": state.system_id},
+        )
+        if selected:
+            self._metrics.increment(
+                "polaris.strategy.hybrid.selection_success",
+                tags={
+                    "system_id": state.system_id,
+                    "mode": self.selection_mode,
+                    "strategy_index": str(best_idx),
+                },
+            )
 
         if self._logger:
             self._logger.debug(
                 "HybridStrategy assessment completed",
                 system_id=state.system_id,
                 selected=bool(selected),
+                action_count=len(selected) if selected else 0,
                 selection_mode=self.selection_mode,
             )
 
-        return selected if isinstance(selected, AdaptationAction) else None
+        return selected if selected else []
 
     async def _estimate_confidence(
         self, strategy: AdaptationStrategy, action: AdaptationAction, state: SystemState

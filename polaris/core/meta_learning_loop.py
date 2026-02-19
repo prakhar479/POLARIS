@@ -5,6 +5,7 @@ can be tested and reused independently of the monitoring loop.
 """
 
 import asyncio
+import random
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -51,7 +52,9 @@ class MetaLearningLoop:
 
         while self._running:
             try:
-                await asyncio.sleep(self._interval_seconds)
+                # Add ±10% jitter to prevent multi-instance thundering herd.
+                jitter = self._interval_seconds * 0.1 * (random.random() * 2 - 1)
+                await asyncio.sleep(max(0, self._interval_seconds + jitter))
 
                 for system_id in self._registry.system_ids():
                     await self._run_for_system(system_id)

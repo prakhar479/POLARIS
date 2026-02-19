@@ -55,9 +55,9 @@ class MockKnowledgeStore:
 class MockStrategy(AdaptationStrategy):
     """Mock strategy for testing."""
 
-    async def assess(self, state, context):
+    async def assess(self, state, context) -> List:
         """Mock assess method."""
-        return None
+        return []
 
     def get_tunable_parameters(self) -> Dict[str, Any]:
         return {
@@ -242,7 +242,8 @@ class TestLLMMetaLearner:
 
         assert isinstance(result, PerformanceAnalysis)
         assert result.system_id == "test-system"
-        assert len(result.recommendations) == 0  # Fallback has no recommendations
+        # Fallback has no recommendations
+        assert len(result.recommendations) == 0
 
     @pytest.mark.asyncio
     async def test_propose_strategy_updates_success(

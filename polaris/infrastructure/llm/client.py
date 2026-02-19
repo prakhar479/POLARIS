@@ -12,14 +12,14 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 
 @dataclass
 class LLMMessage:
     """A message in an LLM conversation."""
 
-    role: str  # 'system', 'user', or 'assistant'
+    role: Literal["system", "user", "assistant"]
     content: str
 
 

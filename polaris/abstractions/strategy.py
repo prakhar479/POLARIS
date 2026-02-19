@@ -2,9 +2,16 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+if TYPE_CHECKING:
+    from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+else:
+    # Use Any as fallback for runtime type checks if models can't be imported
+    # (avoiding circular imports)
+    AdaptationAction = Any
+    ExecutionResult = Any
+    SystemState = Any
 
 
 @dataclass
@@ -12,7 +19,7 @@ class AdaptationContext:
     """Context information for adaptation decisions."""
 
     system_id: str
-    historical_states: list
+    historical_states: List["SystemState"]
     world_model_insights: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
 
@@ -39,8 +46,8 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     async def assess(
-        self, state: SystemState, context: AdaptationContext
-    ) -> Optional[AdaptationAction]:
+        self, state: "SystemState", context: AdaptationContext
+    ) -> List["AdaptationAction"]:
         """
         Assess system state and decide on adaptation.
 
@@ -49,7 +56,7 @@ class AdaptationStrategy(ABC):
             context: Additional context (history, world model, etc.)
 
         Returns:
-            AdaptationAction if adaptation needed, None otherwise
+            List of AdaptationActions if adaptation needed, empty list otherwise
         """
         pass
 

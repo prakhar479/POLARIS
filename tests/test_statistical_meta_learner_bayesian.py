@@ -15,7 +15,8 @@ from polaris.meta_learner.statistical import StatisticalMetaLearner
 class DummyStrategyWithBayesian(AdaptationStrategy):
     """Strategy with tunable parameters for Bayesian optimization testing."""
 
-    def get_tunable_parameters(self) -> Dict[str, Any]:  # type: ignore[override]
+    # type: ignore[override]
+    def get_tunable_parameters(self) -> Dict[str, Any]:
         class Spec:
             def __init__(
                 self, current: float, param_type: type, min_val=None, max_val=None, kind=None
@@ -39,10 +40,12 @@ class DummyStrategyWithBayesian(AdaptationStrategy):
     async def assess(self, state, context):  # type: ignore[override]
         return None
 
-    async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:  # type: ignore[override]
+    # type: ignore[override]
+    async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
         return True
 
-    async def on_action_executed(self, action, result):  # type: ignore[override]
+    # type: ignore[override]
+    async def on_action_executed(self, action, result):
         pass
 
 
@@ -61,7 +64,7 @@ class TestStatisticalMetaLearnerBayesian:
     @pytest.fixture
     def logger(self):
         """Mock logger."""
-        return AsyncMock()
+        return MagicMock()
 
     @pytest.fixture
     def world_model(self):

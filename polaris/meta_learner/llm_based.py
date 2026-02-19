@@ -15,6 +15,7 @@ from polaris.abstractions.meta_learner import (
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationStrategy, ParameterSpec
 from polaris.infrastructure.llm import LLMClient, LLMMessage
+from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
 class LLMMetaLearner(MetaLearner):
@@ -52,7 +53,7 @@ class LLMMetaLearner(MetaLearner):
         self.logger = logger
         self.auto_apply = auto_apply
         self.temperature = temperature
-        self.metrics = metrics
+        self.metrics = metrics or NullMetricsCollector()
         self.analysis_system_prompt = analysis_system_prompt
         self.optimization_system_prompt = optimization_system_prompt
         self._per_system_prompts = per_system_prompts or {}
@@ -61,11 +62,10 @@ class LLMMetaLearner(MetaLearner):
         self, system_id: str, time_window_hours: float = 24.0
     ) -> PerformanceAnalysis:
         """Analyze system performance using LLM."""
-        if self.metrics:
-            self.metrics.increment(
-                "polaris.meta_learning.llm.analysis_requests",
-                tags={"system_id": system_id},
-            )
+        self.metrics.increment(
+            "polaris.meta_learning.llm.analysis_requests",
+            tags={"system_id": system_id},
+        )
 
         # Handle null knowledge store gracefully
         if not self.knowledge_store:
@@ -73,11 +73,10 @@ class LLMMetaLearner(MetaLearner):
                 "Knowledge store not available for system %s, using fallback analysis",
                 system_id=system_id,
             )
-            if self.metrics:
-                self.metrics.increment(
-                    "polaris.meta_learning.llm.analysis_knowledge_store_unavailable",
-                    tags={"system_id": system_id},
-                )
+            self.metrics.increment(
+                "polaris.meta_learning.llm.analysis_knowledge_store_unavailable",
+                tags={"system_id": system_id},
+            )
             return PerformanceAnalysis(
                 system_id=system_id,
                 time_window_hours=time_window_hours,
@@ -124,13 +123,12 @@ class LLMMetaLearner(MetaLearner):
                 messages, temperature=self.temperature, max_tokens=1024
             )
 
-            if self.metrics:
-                duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
-                self.metrics.histogram(
-                    "polaris.meta_learning.llm.analysis_llm_duration_seconds",
-                    duration,
-                    tags={"system_id": system_id},
-                )
+            duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
+            self.metrics.histogram(
+                "polaris.meta_learning.llm.analysis_llm_duration_seconds",
+                duration,
+                tags={"system_id": system_id},
+            )
 
             # Parse LLM response
             analysis_data = self._parse_analysis_response(response.content)
@@ -143,11 +141,10 @@ class LLMMetaLearner(MetaLearner):
                 "identified_issues": analysis_data.get("issues", []),
             }
 
-            if self.metrics:
-                self.metrics.increment(
-                    "polaris.meta_learning.llm.analysis_success",
-                    tags={"system_id": system_id},
-                )
+            self.metrics.increment(
+                "polaris.meta_learning.llm.analysis_success",
+                tags={"system_id": system_id},
+            )
 
             return PerformanceAnalysis(
                 system_id=system_id,
@@ -159,11 +156,10 @@ class LLMMetaLearner(MetaLearner):
 
         except Exception as e:
             self.logger.error(f"LLM analysis failed: {e}")
-            if self.metrics:
-                self.metrics.increment(
-                    "polaris.meta_learning.llm.analysis_errors",
-                    tags={"system_id": system_id},
-                )
+            self.metrics.increment(
+                "polaris.meta_learning.llm.analysis_errors",
+                tags={"system_id": system_id},
+            )
             # Fallback to basic analysis
             return PerformanceAnalysis(
                 system_id=system_id,
@@ -177,21 +173,19 @@ class LLMMetaLearner(MetaLearner):
         self, strategy: AdaptationStrategy, analysis: PerformanceAnalysis
     ) -> List[ParameterProposal]:
         """Use LLM to propose parameter updates."""
-        if self.metrics:
-            self.metrics.increment(
-                "polaris.meta_learning.llm.proposals_requests",
-                tags={"system_id": analysis.system_id},
-            )
+        self.metrics.increment(
+            "polaris.meta_learning.llm.proposals_requests",
+            tags={"system_id": analysis.system_id},
+        )
 
         # Get tunable parameters
         tunable_params = strategy.get_tunable_parameters()
 
         if not tunable_params:
-            if self.metrics:
-                self.metrics.increment(
-                    "polaris.meta_learning.llm.proposals_no_tunable_parameters",
-                    tags={"system_id": analysis.system_id},
-                )
+            self.metrics.increment(
+                "polaris.meta_learning.llm.proposals_no_tunable_parameters",
+                tags={"system_id": analysis.system_id},
+            )
             return []
 
         # Build prompt for parameter optimization
@@ -239,22 +233,20 @@ class LLMMetaLearner(MetaLearner):
                     )
                 )
 
-            if self.metrics:
-                self.metrics.gauge(
-                    "polaris.meta_learning.llm.proposals_generated",
-                    len(proposals),
-                    tags={"system_id": analysis.system_id},
-                )
+            self.metrics.gauge(
+                "polaris.meta_learning.llm.proposals_generated",
+                len(proposals),
+                tags={"system_id": analysis.system_id},
+            )
 
             return proposals
 
         except Exception as e:
             self.logger.error(f"LLM proposal generation failed: {e}")
-            if self.metrics:
-                self.metrics.increment(
-                    "polaris.meta_learning.llm.proposals_errors",
-                    tags={"system_id": analysis.system_id},
-                )
+            self.metrics.increment(
+                "polaris.meta_learning.llm.proposals_errors",
+                tags={"system_id": analysis.system_id},
+            )
             return []
 
     async def validate_proposals(
@@ -283,19 +275,18 @@ class LLMMetaLearner(MetaLearner):
                 proposal.status = ProposalStatus.REJECTED
                 rejected += 1
 
-        if self.metrics:
-            self.metrics.gauge(
-                "polaris.meta_learning.llm.proposals_approved",
-                approved,
-            )
-            self.metrics.gauge(
-                "polaris.meta_learning.llm.proposals_rejected",
-                rejected,
-            )
-            self.metrics.gauge(
-                "polaris.meta_learning.llm.validation_avg_score",
-                sum(p.confidence for p in proposals) / len(proposals) if proposals else 0,
-            )
+        self.metrics.gauge(
+            "polaris.meta_learning.llm.proposals_approved",
+            approved,
+        )
+        self.metrics.gauge(
+            "polaris.meta_learning.llm.proposals_rejected",
+            rejected,
+        )
+        self.metrics.gauge(
+            "polaris.meta_learning.llm.validation_avg_score",
+            sum(p.confidence for p in proposals) / len(proposals) if proposals else 0,
+        )
 
         self.logger.info(
             "Proposal validation completed: %d approved, %d rejected, avg_score: %.3f",

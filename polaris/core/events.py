@@ -85,7 +85,7 @@ class EventBus:
                 tasks.append(handler(event))
             else:
                 # Wrap sync handlers
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 tasks.append(loop.run_in_executor(None, handler, event))
 
             # Best-effort handler identifier for logging

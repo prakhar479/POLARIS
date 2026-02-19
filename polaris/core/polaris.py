@@ -85,7 +85,7 @@ class Polaris:
         self.logger: "Logger" = logger or ComponentBuilder.build_logger(
             self.config, self.cli_overrides
         )
-        self.metrics: Optional["MetricsCollector"] = metrics or ComponentBuilder.build_metrics(
+        self.metrics: "MetricsCollector" = metrics or ComponentBuilder.build_metrics(
             self.config, self.cli_overrides
         )
         self.event_bus: EventBus = event_bus or ComponentBuilder.build_event_bus(
@@ -177,9 +177,7 @@ class Polaris:
             metrics_enabled=self.metrics is not None,
             monitoring_interval_seconds=self._monitoring_interval,
         )
-        if self.metrics and ComponentBuilder.should_collect(
-            self.config, "core_framework", self.metrics
-        ):
+        if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
             self.metrics.increment("polaris.core.initialized")
             self.metrics.gauge(
                 "polaris.core.monitoring_interval_seconds", self._monitoring_interval
@@ -233,6 +231,7 @@ class Polaris:
                 logger=self.logger,
                 metrics=self.metrics,
                 config=self.config,
+                dry_run=bool(self.cli_overrides.get("dry_run", False)),
             )
 
         monitoring = MonitoringLoop(
@@ -291,9 +290,7 @@ class Polaris:
         self._running = False
         self.logger.info("Stopping Polaris framework")
 
-        if self.metrics and ComponentBuilder.should_collect(
-            self.config, "core_framework", self.metrics
-        ):
+        if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
             self.metrics.increment("polaris.core.stop_called")
             self.metrics.gauge(
                 "polaris.core.connectors_at_shutdown", len(self.registry.system_ids())
@@ -350,16 +347,14 @@ class Polaris:
             file_path: Destination file path.
             format: ``'json'`` or ``'csv'``.
         """
-        if self.metrics and hasattr(self.metrics, "export_to_file"):
+        if hasattr(self.metrics, "export_to_file"):
             self.metrics.export_to_file(file_path, format)
         else:
             raise NotImplementedError("Metrics collector does not support export")
 
     def get_metrics_summary(self) -> Dict[str, Any]:
         """Return the current metrics summary dict."""
-        if self.metrics:
-            return self.metrics.get_summary()
-        return {}
+        return self.metrics.get_summary()
 
     # ──────────────────────────────────────────────────────────────────────
     # Async context manager

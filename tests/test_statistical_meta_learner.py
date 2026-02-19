@@ -1,7 +1,7 @@
 """Tests for StatisticalMetaLearner world model integration."""
 
 from typing import Any, Dict
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -13,7 +13,8 @@ from polaris.meta_learner.statistical import StatisticalMetaLearner
 class DummyStrategy(AdaptationStrategy):
     """Minimal strategy with a single tunable threshold parameter."""
 
-    def get_tunable_parameters(self) -> Dict[str, Any]:  # type: ignore[override]
+    # type: ignore[override]
+    def get_tunable_parameters(self) -> Dict[str, Any]:
         class Spec:
             def __init__(self, current: float) -> None:
                 self.current_value = current
@@ -30,7 +31,8 @@ class DummyStrategy(AdaptationStrategy):
         """Minimal implementation to satisfy abstract interface; not used in these tests."""
         return None
 
-    async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:  # type: ignore[override]
+    # type: ignore[override]
+    async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
         """Minimal implementation that always reports success; used indirectly by meta-learner tuning."""
         return True
 
@@ -60,7 +62,7 @@ async def test_analyze_performance_includes_world_model_uncertainty():
         }
     }
 
-    logger = AsyncMock()
+    logger = MagicMock()
 
     meta = StatisticalMetaLearner(
         knowledge_store=knowledge_store,
@@ -95,7 +97,7 @@ async def test_proposal_confidence_adjusted_by_world_model_uncertainty():
     )
 
     knowledge_store = AsyncMock()
-    logger = AsyncMock()
+    logger = MagicMock()
     meta = StatisticalMetaLearner(
         knowledge_store=knowledge_store, logger=logger, conservative_mode=True
     )

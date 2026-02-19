@@ -70,15 +70,18 @@ class TestThresholdReactiveStrategy:
             system_id="test-system",
             timestamp=datetime.now(timezone.utc),
             metrics={
-                "cpu_usage": MetricValue("cpu_usage", 85.0, "percent"),  # Above 80% threshold
+                # Above 80% threshold
+                "cpu_usage": MetricValue("cpu_usage", 85.0, "percent"),
                 "memory_usage": MetricValue("memory_usage", 50.0, "percent"),
             },
             health_status=HealthStatus.HEALTHY,
         )
 
-        action = await strategy.assess(state, context)
+        actions = await strategy.assess(state, context)
 
-        assert action is not None
+        assert isinstance(actions, list)
+        assert len(actions) == 1
+        action = actions[0]
         assert action.action_type == "scale_up"
         assert action.target_system == "test-system"
         assert action.parameters["metric"] == "cpu_usage"
@@ -93,15 +96,18 @@ class TestThresholdReactiveStrategy:
             system_id="test-system",
             timestamp=datetime.now(timezone.utc),
             metrics={
-                "cpu_usage": MetricValue("cpu_usage", 15.0, "percent"),  # Below 20% threshold
+                # Below 20% threshold
+                "cpu_usage": MetricValue("cpu_usage", 15.0, "percent"),
                 "memory_usage": MetricValue("memory_usage", 50.0, "percent"),
             },
             health_status=HealthStatus.HEALTHY,
         )
 
-        action = await strategy.assess(state, context)
+        actions = await strategy.assess(state, context)
 
-        assert action is not None
+        assert isinstance(actions, list)
+        assert len(actions) == 1
+        action = actions[0]
         assert action.action_type == "scale_down"
         assert action.target_system == "test-system"
         assert action.parameters["metric"] == "cpu_usage"
@@ -116,15 +122,17 @@ class TestThresholdReactiveStrategy:
             system_id="test-system",
             timestamp=datetime.now(timezone.utc),
             metrics={
-                "cpu_usage": MetricValue("cpu_usage", 50.0, "percent"),  # Between thresholds
-                "memory_usage": MetricValue("memory_usage", 60.0, "percent"),  # Between thresholds
+                # Between thresholds
+                "cpu_usage": MetricValue("cpu_usage", 50.0, "percent"),
+                # Between thresholds
+                "memory_usage": MetricValue("memory_usage", 60.0, "percent"),
             },
             health_status=HealthStatus.HEALTHY,
         )
 
-        action = await strategy.assess(state, context)
-
-        assert action is None
+        actions = await strategy.assess(state, context)
+        assert isinstance(actions, list)
+        assert len(actions) == 0
 
     @pytest.mark.asyncio
     async def test_cooldown_period(self, strategy, context):
@@ -137,13 +145,16 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        # First assessment should return action
-        action1 = await strategy.assess(state, context)
-        assert action1 is not None
+        # First assessment should return action in list
+        actions1 = await strategy.assess(state, context)
+        assert isinstance(actions1, list)
+        assert len(actions1) == 1
+        assert actions1[0] is not None
 
-        # Second assessment immediately after should return None (cooldown)
-        action2 = await strategy.assess(state, context)
-        assert action2 is None
+        # Second assessment immediately after should return empty list (cooldown)
+        actions2 = await strategy.assess(state, context)
+        assert isinstance(actions2, list)
+        assert len(actions2) == 0
 
     @pytest.mark.asyncio
     async def test_cooldown_expires(self, strategy, context):
@@ -161,8 +172,10 @@ class TestThresholdReactiveStrategy:
         )
 
         # Should return action since cooldown has expired
-        action = await strategy.assess(state, context)
-        assert action is not None
+        actions = await strategy.assess(state, context)
+        assert isinstance(actions, list)
+        assert len(actions) == 1
+        assert actions[0] is not None
 
     @pytest.mark.asyncio
     async def test_unknown_metric(self, strategy, context):
@@ -174,8 +187,9 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        action = await strategy.assess(state, context)
-        assert action is None
+        actions = await strategy.assess(state, context)
+        assert isinstance(actions, list)
+        assert len(actions) == 0
 
     @pytest.mark.asyncio
     async def test_invalid_metric_value(self, strategy, context):
@@ -187,8 +201,9 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        action = await strategy.assess(state, context)
-        assert action is None
+        actions = await strategy.assess(state, context)
+        assert isinstance(actions, list)
+        assert len(actions) == 0
 
     @pytest.mark.asyncio
     async def test_server_count_logic(self, strategy, context):
@@ -206,9 +221,10 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        action_low = await strategy.assess(state_low, context)
-        assert action_low is not None
-        assert action_low.action_type == "scale_up"
+        actions_low = await strategy.assess(state_low, context)
+        assert isinstance(actions_low, list)
+        assert len(actions_low) == 1
+        assert actions_low[0].action_type == "scale_up"
 
         # Reset cooldown for next test
         strategy._last_adaptation.clear()
@@ -223,9 +239,10 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        action_high = await strategy.assess(state_high, context)
-        assert action_high is not None
-        assert action_high.action_type == "scale_down"
+        actions_high = await strategy.assess(state_high, context)
+        assert isinstance(actions_high, list)
+        assert len(actions_high) == 1
+        assert actions_high[0].action_type == "scale_down"
 
     @pytest.mark.asyncio
     async def test_on_action_executed(self, strategy):

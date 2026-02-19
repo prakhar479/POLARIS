@@ -103,6 +103,12 @@ def main() -> int:
         help="Monitoring loop interval in seconds (overrides config file setting)",
     )
 
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run the monitoring loop and log proposed adaptations without executing them",
+    )
+
     args = parser.parse_args()
 
     if args.version:
@@ -146,6 +152,8 @@ def main() -> int:
             cli_overrides["metrics_auto_export_interval"] = args.auto_export_metrics
         if args.monitoring_interval is not None:
             cli_overrides["monitoring_interval"] = args.monitoring_interval
+        if args.dry_run:
+            cli_overrides["dry_run"] = True
 
         polaris = Polaris(config_path=config_path, cli_overrides=cli_overrides)
 

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from polaris.core.events import EventBus
     from polaris.core.models import SystemState
     from polaris.infrastructure.config import PolarisConfig
+from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
 class AdaptationPipeline:
@@ -28,13 +29,13 @@ class AdaptationPipeline:
 
     1. Builds an ``AdaptationContext`` (with world-model insights).
     2. Asks the strategy to ``assess`` the state.
-    3. If an action is proposed, validates it against the connector.
-    4. Executes the action and stores the result in the knowledge store.
-    5. Notifies the strategy via ``on_action_executed``.
-    6. Publishes an ``AdaptationEvent`` on the event bus.
+    3. If actions are proposed, validates each against the connector.
+    4. Executes the actions and stores the results in the knowledge store.
+    5. Notifies the strategy via ``on_action_executed`` for each.
+    6. Publishes ``AdaptationEvent``s on the event bus.
 
-    Returns ``True`` if an action was successfully executed, ``False``
-    otherwise (including the case where no action was proposed).
+    Returns ``True`` if at least one action was successfully executed (or would
+    have been in dry-run mode), ``False`` otherwise.
     """
 
     def __init__(
@@ -46,6 +47,7 @@ class AdaptationPipeline:
         logger: "Logger",
         metrics: Optional["MetricsCollector"],
         config: "PolarisConfig",
+        dry_run: bool = False,
     ) -> None:
         """Initialize the pipeline."""
         self._strategy = strategy
@@ -53,8 +55,9 @@ class AdaptationPipeline:
         self._world_model = world_model
         self._event_bus = event_bus
         self._logger = logger
-        self._metrics = metrics
+        self._metrics = metrics or NullMetricsCollector()
         self._config = config
+        self._dry_run = dry_run
 
     async def run(
         self,
@@ -68,7 +71,7 @@ class AdaptationPipeline:
             connector: The connector for the managed system.
 
         Returns:
-            ``True`` if an adaptation action was executed, ``False`` otherwise.
+            ``True`` if at least one adaptation action was executed, ``False`` otherwise.
         """
         from polaris.abstractions.strategy import AdaptationContext
         from polaris.core.events import AdaptationEvent
@@ -99,77 +102,106 @@ class AdaptationPipeline:
         )
 
         # Assess
-        action = await self._strategy.assess(state, context)
+        actions = await self._strategy.assess(state, context)
         self._emit(
             "polaris.strategy.assessments",
             tags={"system_id": state.system_id},
             component="strategy",
         )
 
-        if not action:
+        if not actions:
             return False
 
-        self._logger.info(
-            f"Adaptation proposed for {state.system_id}: {action.action_type}",
-            action_id=action.action_id,
-        )
-        self._emit(
-            "polaris.adaptations.proposed",
-            tags={"system_id": state.system_id, "action_type": action.action_type},
-            component="core_framework",
-        )
-
-        # Validate
-        if not await connector.validate_action(action):
-            self._logger.warning(
-                f"Action validation failed for {action.action_type}",
+        executed_any = False
+        for action in actions:
+            self._logger.info(
+                f"Adaptation proposed for {state.system_id}: {action.action_type}",
                 action_id=action.action_id,
             )
             self._emit(
-                "polaris.adaptations.validation_errors",
+                "polaris.adaptations.proposed",
                 tags={"system_id": state.system_id, "action_type": action.action_type},
                 component="core_framework",
             )
-            return False
 
-        # Execute
-        result = await connector.execute_action(action)
-        self._emit(
-            "polaris.adaptations.executed",
-            tags={
-                "system_id": state.system_id,
-                "action_type": action.action_type,
-                "status": result.status.value,
-            },
-            component="core_framework",
-        )
+            # Validate
+            if not await connector.validate_action(action):
+                self._logger.warning(
+                    f"Action validation failed for {action.action_type}",
+                    action_id=action.action_id,
+                )
+                self._emit(
+                    "polaris.adaptations.validation_errors",
+                    tags={"system_id": state.system_id, "action_type": action.action_type},
+                    component="core_framework",
+                )
+                continue
 
-        # Store
-        if self._knowledge_store:
-            await self._knowledge_store.store_action(action, result)
+            # Execute (or skip in dry-run mode)
+            if self._dry_run:
+                self._logger.info(
+                    f"[DRY-RUN] Would execute {action.action_type} on {state.system_id} "
+                    f"(action_id={action.action_id})",
+                    parameters=action.parameters,
+                )
+                self._emit(
+                    "polaris.adaptations.dry_run_skipped",
+                    tags={"system_id": state.system_id, "action_type": action.action_type},
+                    component="core_framework",
+                )
+                executed_any = True
+                continue
 
-        # Notify strategy
-        await self._strategy.on_action_executed(action, result)
+            try:
+                result = await connector.execute_action(action)
+                executed_any = True
 
-        # Publish event
-        await self._event_bus.publish(
-            AdaptationEvent(
-                action=action,
-                result=result,
-                timestamp=result.completed_at or datetime.now(timezone.utc),
-            )
-        )
-        self._emit(
-            "polaris.events.adaptation_published",
-            tags={"system_id": state.system_id},
-            component="event_bus",
-        )
+                self._logger.info(
+                    f"Adaptation executed: {action.action_type} -> {result.status.value}",
+                    action_id=action.action_id,
+                )
+                self._emit(
+                    "polaris.adaptations.executed",
+                    tags={
+                        "system_id": state.system_id,
+                        "action_type": action.action_type,
+                        "status": result.status.value,
+                    },
+                    component="core_framework",
+                )
 
-        self._logger.info(
-            f"Adaptation executed: {action.action_type} -> {result.status.value}",
-            action_id=action.action_id,
-        )
-        return True
+                # Store result
+                if self._knowledge_store:
+                    await self._knowledge_store.store_action(action, result)
+
+                # Notify strategy
+                await self._strategy.on_action_executed(action, result)
+
+                # Publish event
+                await self._event_bus.publish(
+                    AdaptationEvent(
+                        action=action,
+                        result=result,
+                        timestamp=result.completed_at or datetime.now(timezone.utc),
+                    )
+                )
+                self._emit(
+                    "polaris.events.adaptation_published",
+                    tags={"system_id": state.system_id},
+                    component="event_bus",
+                )
+            except Exception as e:
+                self._logger.error(
+                    f"Error executing adaptation {action.action_type} on {state.system_id}: {e}",
+                    action_id=action.action_id,
+                )
+                self._emit(
+                    "polaris.adaptations.execution_errors",
+                    tags={"system_id": state.system_id, "action_type": action.action_type},
+                    component="core_framework",
+                )
+
+        return executed_any
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -177,8 +209,6 @@ class AdaptationPipeline:
 
     def _emit(self, metric: str, tags: dict, component: str) -> None:
         """Increment a counter metric if the component is enabled."""
-        if not self._metrics:
-            return
         from polaris.core.component_builder import ComponentBuilder
 
         if ComponentBuilder.should_collect(self._config, component, self._metrics):

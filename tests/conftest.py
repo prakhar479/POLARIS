@@ -1,7 +1,7 @@
 """Shared test fixtures and configuration."""
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -76,9 +76,11 @@ class MockStrategy(AdaptationStrategy):
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
-    ) -> Optional[AdaptationAction]:
+    ) -> List[AdaptationAction]:
         self.assess_calls.append((state, context))
-        return self.action_to_return
+        if self.action_to_return:
+            return [self.action_to_return]
+        return []
 
     def get_tunable_parameters(self) -> Dict[str, Any]:
         return {"threshold": {"current_value": self.parameters["threshold"], "type": float}}
