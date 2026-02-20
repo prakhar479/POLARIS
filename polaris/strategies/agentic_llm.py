@@ -60,6 +60,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
         steps_limit: int = 3,
         temperature: float = 0.1,
         allowed_tools: Optional[List[str]] = None,
+        system_prompt: Optional[str] = None,
+        per_system_prompts: Optional[Dict[str, str]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -73,6 +75,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
             steps_limit: Maximum number of reasoning steps (default: 3)
             temperature: LLM temperature for response randomness (default: 0.1)
             allowed_tools: List of permitted tools for the LLM
+            system_prompt: Optional custom system prompt template
+            per_system_prompts: Optional per-system prompt overrides keyed by system_id
             logger: Optional logger for debugging
             metrics: Optional metrics collector for monitoring
         """
@@ -90,6 +94,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
             "get_action_history",
             "list_supported_actions",
         ]
+        self._system_prompt_template = system_prompt
+        self._per_system_prompts = per_system_prompts or {}
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
         self._adaptation_count = 0
@@ -119,7 +125,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         )
         start = datetime.now(timezone.utc)
         messages: List[LLMMessage] = [
-            LLMMessage(role="system", content=self._system_prompt()),
+            LLMMessage(role="system", content=self._system_prompt(state.system_id)),
             LLMMessage(role="user", content=self._initial_user_prompt(state, context)),
         ]
         try:
@@ -343,6 +349,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
         if "steps_limit" in config:
             await self.update_parameter("steps_limit", config["steps_limit"])
 
+        if "system_prompt" in config:
+            self._system_prompt_template = config["system_prompt"]
+        if "per_system_prompts" in config and isinstance(config["per_system_prompts"], dict):
+            self._per_system_prompts = config["per_system_prompts"]
+
         tools_cfg = config.get("tools")
         if isinstance(tools_cfg, dict):
             enabled = tools_cfg.get("enabled")
@@ -371,8 +382,25 @@ class AgenticLLMStrategy(AdaptationStrategy):
             "total_adaptations": float(self._adaptation_count),
         }
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, system_id: Optional[str] = None) -> str:
+        # Per-system override if provided
+        if system_id and self._per_system_prompts:
+            override = self._per_system_prompts.get(system_id)
+            if override:
+                return override
+
         tools = ", ".join(self.allowed_tools)
+
+        # Global template override, optionally formatted
+        if self._system_prompt_template:
+            try:
+                return self._system_prompt_template.format(
+                    system_id=system_id or "",
+                    allowed_tools=tools,
+                )
+            except Exception:
+                return self._system_prompt_template
+
         return (
             "You are an adaptation controller. Use a short tool-using loop "
             "to reason about the system and then decide.\n"

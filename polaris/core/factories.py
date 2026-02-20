@@ -271,6 +271,8 @@ def _register_default_strategy_factories() -> None:
                     steps_limit=steps_limit,
                     temperature=temperature,
                     allowed_tools=allowed_tools,
+                    system_prompt=agent_cfg.get("system_prompt"),
+                    per_system_prompts=agent_cfg.get("per_system_prompts"),
                     logger=logger,
                     metrics=metrics,
                 )
@@ -322,6 +324,8 @@ def _register_default_strategy_factories() -> None:
             steps_limit=steps_limit,
             temperature=temperature,
             allowed_tools=allowed_tools,
+            system_prompt=agent_conf.get("system_prompt"),
+            per_system_prompts=agent_conf.get("per_system_prompts"),
             logger=logger,
             metrics=metrics,
         )

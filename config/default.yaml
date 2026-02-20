@@ -187,6 +187,20 @@ strategy:
           provider: gemini # "google" or "openai" (default: google)
           steps_limit: 3 # Max reasoning steps (default: 3)
           temperature: 0.1 # Model creativity (default: 0.1)
+          # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
+          # system_prompt: |
+          #   You are an adaptation controller for {system_id}.
+          #   Use tools sparingly. Allowed: {allowed_tools}.
+          #   Always reply in strict JSON.
+          #
+          # Per-system prompt overrides (keyed by systems[].id)
+          # per_system_prompts:
+          #   swim: |
+          #     You are an adaptation controller for SWIM.
+          #     Focus on response time, throughput, and utilization.
+          #   wildfire: |
+          #     You are an adaptation controller for Wildfire.
+          #     Focus on containment and UAV safety.
           tools:
             enabled: # List of available tools for the agent
               - get_recent_states
@@ -217,6 +231,20 @@ strategy:
   #   provider: gemini # "google" or "openai" (default: google)
   #   steps_limit: 3 # Max reasoning steps (default: 3)
   #   temperature: 0.1 # Model creativity (default: 0.1)
+  #   # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
+  #   # system_prompt: |
+  #   #   You are an adaptation controller for {system_id}.
+  #   #   Use tools sparingly. Allowed: {allowed_tools}.
+  #   #   Always reply in strict JSON.
+  #   #
+  #   # Per-system prompt overrides (keyed by systems[].id)
+  #   # per_system_prompts:
+  #   #   swim: |
+  #   #     You are an adaptation controller for SWIM.
+  #   #     Focus on response time, throughput, and utilization.
+  #   #   wildfire: |
+  #   #     You are an adaptation controller for Wildfire.
+  #   #     Focus on containment and UAV safety.
   #   tools:
   #     enabled: # List of available tools for the agent
   #       - get_recent_states # Recent system states
