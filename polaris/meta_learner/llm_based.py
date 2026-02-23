@@ -288,11 +288,12 @@ class LLMMetaLearner(MetaLearner):
             sum(p.confidence for p in proposals) / len(proposals) if proposals else 0,
         )
 
+        avg_score = sum(p.confidence for p in proposals) / len(proposals) if proposals else 0.0
         self.logger.info(
-            "Proposal validation completed: %d approved, %d rejected, avg_score: %.3f",
+            "Proposal validation completed",
             approved=approved,
             rejected=rejected,
-            avg_score=sum(p.confidence for p in proposals) / len(proposals) if proposals else 0,
+            avg_score=avg_score,
         )
 
         return validated

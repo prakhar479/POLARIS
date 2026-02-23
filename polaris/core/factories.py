@@ -175,22 +175,24 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        if not strategy_cfg.llm:
+        if not strategy_cfg.llm_reasoning:
             raise ValueError("LLM strategy requires 'llm_reasoning' configuration section")
 
-        resilience_cfg = strategy_cfg.llm.get("resilience")
-        provider = strategy_cfg.llm.get("provider", "google")
+        resilience_cfg = strategy_cfg.llm_reasoning.get("resilience")
+        provider = strategy_cfg.llm_reasoning.get("provider", "google")
         llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg)
 
         return LLMReasoningStrategy(
             llm_client=llm_client,
-            system_description=strategy_cfg.llm.get("system_description", "Managed system"),
-            adaptation_goals=strategy_cfg.llm.get(
+            system_description=strategy_cfg.llm_reasoning.get(
+                "system_description", "Managed system"
+            ),
+            adaptation_goals=strategy_cfg.llm_reasoning.get(
                 "adaptation_goals", "Maintain optimal performance"
             ),
-            temperature=strategy_cfg.llm.get("temperature", 0.1),
-            system_prompt=strategy_cfg.llm.get("system_prompt"),
-            per_system_prompts=strategy_cfg.llm.get("per_system_prompts"),
+            temperature=strategy_cfg.llm_reasoning.get("temperature", 0.1),
+            system_prompt=strategy_cfg.llm_reasoning.get("system_prompt"),
+            per_system_prompts=strategy_cfg.llm_reasoning.get("per_system_prompts"),
             logger=logger,
             metrics=metrics,
         )
@@ -305,7 +307,7 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        agent_conf = strategy_cfg.agentic or {}
+        agent_conf = strategy_cfg.agentic_llm or {}
         steps_limit = int(agent_conf.get("steps_limit", 3))
         temperature = float(agent_conf.get("temperature", 0.1))
         allowed_tools = None

@@ -147,7 +147,7 @@ class PolarisInteractiveCLI(cmd.Cmd):
         table.add_column("Connector Type", style="yellow")
 
         for connector in self.polaris.registry.all():
-            system_id = asyncio.run(connector.get_system_id())
+            system_id = self._run_async(connector.get_system_id())
             connector_type = connector.__class__.__name__
             table.add_row(system_id, "✓ Connected", connector_type)
 

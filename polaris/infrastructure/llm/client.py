@@ -449,33 +449,37 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     """Create LLM client for specified provider.
 
     Args:
-        provider: 'google' or 'openai'
+        provider: 'google'/'gemini', 'openai', or 'groq'
         **kwargs: Additional arguments for the client
 
     Returns:
         LLMClient instance
     """
+    provider_norm = provider.lower()
+    if provider_norm == "gemini":
+        provider_norm = "google"
+
     resilience: Optional[Dict[str, Any]] = kwargs.pop("resilience", None)
     model = kwargs.get("model")
 
     # If resilience is explicitly provided or env enables it, wrap with ResilientLLMClient
     enabled_env = os.getenv("LLM_RESILIENCE_ENABLED", "0").lower() in ("1", "true", "yes")
     has_multi_keys = (
-        (provider.lower() == "openai" and os.getenv("OPENAI_API_KEYS"))
-        or (provider.lower() in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"))
-        or (provider.lower() == "groq" and os.getenv("GROQ_API_KEYS"))
+        (provider_norm == "openai" and os.getenv("OPENAI_API_KEYS"))
+        or (provider_norm == "google" and os.getenv("GEMINI_API_KEYS"))
+        or (provider_norm == "groq" and os.getenv("GROQ_API_KEYS"))
     )
 
     if resilience or enabled_env or has_multi_keys:
         return ResilientLLMClient(
-            provider=provider, model=model, inner_kwargs=kwargs, resilience=resilience
+            provider=provider_norm, model=model, inner_kwargs=kwargs, resilience=resilience
         )
 
-    if provider.lower() == "google":
+    if provider_norm == "google":
         return GoogleGeminiClient(**kwargs)
-    elif provider.lower() == "openai":
+    elif provider_norm == "openai":
         return OpenAIClient(**kwargs)
-    elif provider.lower() == "groq":
+    elif provider_norm == "groq":
         return GroqClient(**kwargs)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}")
+        raise ValueError(f"Unknown LLM provider: {provider_norm}")

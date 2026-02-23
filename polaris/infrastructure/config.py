@@ -56,9 +56,9 @@ class StrategyConfig:
 
     type: str = "threshold"
     threshold: Optional[Dict[str, Any]] = None
-    llm: Optional[Dict[str, Any]] = None
+    llm_reasoning: Optional[Dict[str, Any]] = None
     hybrid: Optional[Dict[str, Any]] = None
-    agentic: Optional[Dict[str, Any]] = None
+    agentic_llm: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         """Validate strategy configuration after initialization."""
@@ -120,11 +120,21 @@ class StrategyConfig:
                             f"Hybrid.strategies[{idx}].priority must be a number if provided"
                         )
 
+        if self.type == "llm_reasoning":
+            if self.llm_reasoning is None:
+                self.llm_reasoning = {}
+            elif not isinstance(self.llm_reasoning, dict):
+                raise ValueError(
+                    "LLM reasoning strategy requires 'llm_reasoning' configuration block to be a dict"
+                )
+
         # Validate agentic strategy parameters
         if self.type == "agentic_llm":
-            if self.agentic is not None and not isinstance(self.agentic, dict):
+            if self.agentic_llm is None:
+                self.agentic_llm = {}
+            elif not isinstance(self.agentic_llm, dict):
                 raise ValueError(
-                    "Agentic LLM strategy requires 'agentic_llm' configuration block to be a dict if provided"
+                    "Agentic LLM strategy requires 'agentic_llm' configuration block to be a dict"
                 )
 
 
@@ -135,10 +145,11 @@ class PolarisConfig:
     systems: list = field(default_factory=list)
     strategy: Optional[StrategyConfig] = None
     world_model: Optional[Dict[str, Any]] = None
-    knowledge: Optional[Dict[str, Any]] = None
+    knowledge_store: Optional[Dict[str, Any]] = None
     meta_learner: Optional[Dict[str, Any]] = None
     observability: Optional[Dict[str, Any]] = None
-    monitoring: Optional[Dict[str, Any]] = None  # Add monitoring configuration
+    monitoring: Optional[Dict[str, Any]] = None
+    max_concurrent_connectors: int = 10
 
     @classmethod
     def from_file(cls, path: str) -> "PolarisConfig":
@@ -161,6 +172,14 @@ class PolarisConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PolarisConfig":
         """Create config from dictionary."""
+        if not isinstance(data, dict):
+            raise ValueError("Config root must be a dictionary")
+
+        if "knowledge" in data:
+            raise ValueError(
+                "The 'knowledge' config key was removed. Use 'knowledge_store' instead."
+            )
+
         # Parse systems
         systems = [
             SystemConfig(
@@ -175,22 +194,54 @@ class PolarisConfig:
 
         # Parse strategy
         strategy_data = data.get("strategy", {})
+        if strategy_data is not None and not isinstance(strategy_data, dict):
+            raise ValueError("'strategy' must be a dictionary")
+        if strategy_data is None:
+            strategy_data = {}
         strategy = StrategyConfig(
             type=strategy_data.get("type", "threshold"),
             threshold=strategy_data.get("threshold"),
-            llm=strategy_data.get("llm_reasoning"),
+            llm_reasoning=strategy_data.get("llm_reasoning"),
             hybrid=strategy_data.get("hybrid"),
-            agentic=strategy_data.get("agentic_llm"),
+            agentic_llm=strategy_data.get("agentic_llm"),
         )
+        knowledge_store_data = data.get("knowledge_store")
+        if knowledge_store_data is not None and not isinstance(knowledge_store_data, dict):
+            raise ValueError("'knowledge_store' must be a dictionary")
+
+        world_model_data = data.get("world_model")
+        if world_model_data is not None and not isinstance(world_model_data, dict):
+            raise ValueError("'world_model' must be a dictionary")
+
+        meta_learner_data = data.get("meta_learner")
+        if meta_learner_data is not None and not isinstance(meta_learner_data, dict):
+            raise ValueError("'meta_learner' must be a dictionary")
+
+        observability_data = data.get("observability")
+        if observability_data is not None and not isinstance(observability_data, dict):
+            raise ValueError("'observability' must be a dictionary")
+
+        monitoring_data = data.get("monitoring")
+        if monitoring_data is not None and not isinstance(monitoring_data, dict):
+            raise ValueError("'monitoring' must be a dictionary")
+
+        max_concurrent_connectors = data.get("max_concurrent_connectors", 10)
+        try:
+            max_concurrent_connectors = int(max_concurrent_connectors)
+        except Exception:
+            max_concurrent_connectors = 10
+        if max_concurrent_connectors <= 0:
+            max_concurrent_connectors = 10
 
         return cls(
             systems=systems,
             strategy=strategy,
-            world_model=data.get("world_model"),
-            knowledge=data.get("knowledge"),
-            meta_learner=data.get("meta_learner"),
-            observability=data.get("observability"),
-            monitoring=data.get("monitoring"),
+            world_model=world_model_data,
+            knowledge_store=knowledge_store_data,
+            meta_learner=meta_learner_data,
+            observability=observability_data,
+            monitoring=monitoring_data,
+            max_concurrent_connectors=max_concurrent_connectors,
         )
 
     @staticmethod

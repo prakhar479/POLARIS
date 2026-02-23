@@ -184,7 +184,7 @@ strategy:
       - type: agentic_llm # Sub-strategy 2
         priority: 0.6
         agentic_llm:
-          provider: gemini # "google" or "openai" (default: google)
+          provider: google # "google" or "openai" (default: google)
           steps_limit: 3 # Max reasoning steps (default: 3)
           temperature: 0.1 # Model creativity (default: 0.1)
           # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
@@ -228,7 +228,7 @@ strategy:
   # Suited for: Complex adaptation requiring multi-step planning, trade-off analysis
   #
   # agentic_llm:
-  #   provider: gemini # "google" or "openai" (default: google)
+  #   provider: google # "google" or "openai" (default: google)
   #   steps_limit: 3 # Max reasoning steps (default: 3)
   #   temperature: 0.1 # Model creativity (default: 0.1)
   #   # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
@@ -298,11 +298,14 @@ world_model:
 #   - memory: In-memory storage (good for dev/testing)
 #
 
-knowledge:
+knowledge_store:
   type: "memory" # DEFAULT: memory
   memory:
     # Max states per system to keep in memory
     max_states_per_system: 1000 # DEFAULT: 1000
+  # sqlite:
+  #   db_path: "./data/polaris.db"
+  #   max_states_per_system: 5000
 
 ################################################################################
 # 6. META-LEARNER (OPTIONAL, DISABLED BY DEFAULT)

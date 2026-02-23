@@ -46,6 +46,7 @@ class StatisticalWorldModel(WorldModel):
         self,
         knowledge_store: KnowledgeStore,
         use_kalman: bool = False,
+        window_size: int = 100,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -55,10 +56,12 @@ class StatisticalWorldModel(WorldModel):
         Args:
             knowledge_store: Knowledge store for retrieving historical data
             use_kalman: Whether to use Kalman filtering for predictions
+            window_size: Number of recent metric values retained per system/metric
             logger: Logger for logging events
             metrics: Metrics collector for tracking performance
         """
         self.knowledge_store = knowledge_store
+        self._window_size = max(1, int(window_size))
         self._metric_history: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
         self._use_kalman = use_kalman
         self._kalman_filters: Dict[str, Dict[str, _ScalarKalmanFilter]] = defaultdict(dict)
@@ -72,6 +75,7 @@ class StatisticalWorldModel(WorldModel):
             self._logger.info(
                 "StatisticalWorldModel initialized",
                 use_kalman=self._use_kalman,
+                window_size=self._window_size,
             )
 
         if self._metrics:
@@ -91,11 +95,11 @@ class StatisticalWorldModel(WorldModel):
                 value = float(metric.value)
                 self._metric_history[state.system_id][metric_name].append(value)
 
-                # Keep only last 100 values
-                if len(self._metric_history[state.system_id][metric_name]) > 100:
+                # Keep only recent values for memory-bounded insights/prediction.
+                if len(self._metric_history[state.system_id][metric_name]) > self._window_size:
                     self._metric_history[state.system_id][metric_name] = self._metric_history[
                         state.system_id
-                    ][metric_name][-100:]
+                    ][metric_name][-self._window_size :]
 
                 values_recorded += 1
 

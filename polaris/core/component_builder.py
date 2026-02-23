@@ -134,27 +134,35 @@ class ComponentBuilder:
         logger: "Logger",
         metrics: Optional["MetricsCollector"],
     ) -> "KnowledgeStore":
-        """Create the knowledge store from config.
-
-        If ``config.knowledge_store.db_path`` is set the SQLite-backed store is
-        used (data survives restarts).  Otherwise the default in-memory store is
-        used.
-        """
+        """Create the knowledge store from canonical ``knowledge_store`` config."""
         ks_metrics = (
             metrics if ComponentBuilder.should_collect(config, "knowledge_store", metrics) else None
         )
 
-        db_path: Optional[str] = None
-        max_states: int = 5000
-        if hasattr(config, "knowledge_store") and config.knowledge_store:
+        ks_cfg: Dict[str, Any] = {}
+        if isinstance(config.knowledge_store, dict):
             ks_cfg = config.knowledge_store
-            if isinstance(ks_cfg, dict):
-                db_path = ks_cfg.get("db_path")
-                max_states = int(ks_cfg.get("max_states_per_system", max_states))
-            elif hasattr(ks_cfg, "db_path"):
-                db_path = ks_cfg.db_path
-                if hasattr(ks_cfg, "max_states_per_system"):
-                    max_states = int(ks_cfg.max_states_per_system)
+
+        ks_type = str(ks_cfg.get("type", "memory")).lower()
+
+        max_states = 1000
+        db_path: Optional[str] = None
+
+        if ks_type == "sqlite":
+            sqlite_cfg = ks_cfg.get("sqlite", {}) if isinstance(ks_cfg.get("sqlite"), dict) else {}
+            db_path = sqlite_cfg.get("db_path") or ks_cfg.get("db_path")
+            max_states = int(
+                sqlite_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 5000))
+            )
+        else:
+            if ks_type != "memory":
+                logger.warning(
+                    f"Unknown knowledge store type '{ks_type}', using in-memory knowledge store"
+                )
+            memory_cfg = ks_cfg.get("memory", {}) if isinstance(ks_cfg.get("memory"), dict) else {}
+            max_states = int(
+                memory_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 1000))
+            )
 
         if db_path:
             from polaris.knowledge.sqlite_store import SQLiteKnowledgeStore
@@ -168,7 +176,11 @@ class ComponentBuilder:
 
         from polaris.knowledge import InMemoryKnowledgeStore
 
-        return InMemoryKnowledgeStore(logger=logger, metrics=ks_metrics)
+        return InMemoryKnowledgeStore(
+            max_states_per_system=max_states,
+            logger=logger,
+            metrics=ks_metrics,
+        )
 
     @staticmethod
     def build_world_model(
@@ -183,7 +195,34 @@ class ComponentBuilder:
         wm_metrics = (
             metrics if ComponentBuilder.should_collect(config, "world_model", metrics) else None
         )
-        return StatisticalWorldModel(knowledge_store, logger=logger, metrics=wm_metrics)
+        wm_cfg: Dict[str, Any] = {}
+        if isinstance(config.world_model, dict):
+            wm_cfg = config.world_model
+
+        wm_type = str(wm_cfg.get("type", "statistical")).lower()
+        if wm_type != "statistical":
+            logger.warning(
+                f"Unknown world model type '{wm_type}', falling back to statistical world model"
+            )
+
+        stat_cfg = (
+            wm_cfg.get("statistical", {}) if isinstance(wm_cfg.get("statistical"), dict) else {}
+        )
+        use_kalman = bool(stat_cfg.get("use_kalman", False))
+        try:
+            window_size = int(stat_cfg.get("window_size", 100))
+        except Exception:
+            window_size = 100
+        if window_size <= 0:
+            window_size = 100
+
+        return StatisticalWorldModel(
+            knowledge_store,
+            use_kalman=use_kalman,
+            window_size=window_size,
+            logger=logger,
+            metrics=wm_metrics,
+        )
 
     @staticmethod
     def build_strategy(
@@ -252,8 +291,8 @@ class ComponentBuilder:
         meta_type = meta_config.get("type", "statistical")
 
         if meta_type == "statistical":
-            from polaris.meta_learner import StatisticalMetaLearner
             from polaris.meta_learner.bayesian_optimizer import AcquisitionFunction
+            from polaris.meta_learner.statistical import StatisticalMetaLearner
 
             stat_cfg = meta_config.get("statistical", {}) or {}
             conservative_mode = bool(stat_cfg.get("conservative_mode", True))
@@ -283,7 +322,7 @@ class ComponentBuilder:
         if meta_type == "llm":
             try:
                 from polaris.infrastructure.llm import create_llm_client
-                from polaris.meta_learner import LLMMetaLearner
+                from polaris.meta_learner.llm_based import LLMMetaLearner
 
                 llm_cfg = meta_config.get("llm", {}) or {}
                 provider = llm_cfg.get("provider", "google")

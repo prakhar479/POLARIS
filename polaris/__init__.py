@@ -1,5 +1,7 @@
 """Polaris - Modular Self-Adaptive Systems Framework."""
 
+from typing import Any
+
 __version__ = "2.0.0"
 
 # Abstractions
@@ -22,7 +24,6 @@ from polaris.core import (
     SystemState,
 )
 from polaris.knowledge import InMemoryKnowledgeStore
-from polaris.meta_learner import LLMMetaLearner, StatisticalMetaLearner
 
 # Default implementations
 from polaris.strategies import ThresholdReactiveStrategy
@@ -50,3 +51,15 @@ __all__ = [
     "StatisticalMetaLearner",
     "LLMMetaLearner",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy-load optional meta-learners to avoid hard dependency at import time."""
+    if name in {"StatisticalMetaLearner", "LLMMetaLearner"}:
+        from polaris.meta_learner import LLMMetaLearner, StatisticalMetaLearner
+
+        return {
+            "StatisticalMetaLearner": StatisticalMetaLearner,
+            "LLMMetaLearner": LLMMetaLearner,
+        }[name]
+    raise AttributeError(f"module 'polaris' has no attribute {name!r}")

@@ -155,7 +155,7 @@ world_model:
     # reasoning string.
 
 # Knowledge store configuration
-knowledge:
+knowledge_store:
   type: "memory"
   memory:
     max_states_per_system: 1000

@@ -4,8 +4,6 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import httpx
-
 from polaris.abstractions.connector import Connector
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
@@ -18,7 +16,7 @@ from polaris.core.models import (
 )
 
 if TYPE_CHECKING:
-    pass
+    import httpx
 
 
 # Use string-based import to avoid circular imports
@@ -49,11 +47,18 @@ class WildfireConnector(Connector):
         self.auto_create_session = auto_create_session
         self._logger = logger
         self._metrics = metrics
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: Optional["httpx.AsyncClient"] = None
         self._connected = False
 
-    async def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> "httpx.AsyncClient":
         """Ensure HTTP client is initialized."""
+        try:
+            import httpx
+        except ImportError as exc:
+            raise ImportError(
+                "WildfireConnector requires 'httpx'. Install with: pip install httpx"
+            ) from exc
+
         if self._client is None:
             self._client = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout)
         return self._client

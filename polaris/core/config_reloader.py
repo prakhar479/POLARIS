@@ -109,11 +109,11 @@ class ConfigReloader:
         if desired_type == "threshold":
             config_payload = strategy_config.threshold or {}
         elif desired_type == "llm_reasoning":
-            config_payload = strategy_config.llm or {}
+            config_payload = strategy_config.llm_reasoning or {}
         elif desired_type == "hybrid":
             config_payload = strategy_config.hybrid or {}
         elif desired_type == "agentic_llm":
-            config_payload = strategy_config.agentic or {}
+            config_payload = strategy_config.agentic_llm or {}
         else:
             config_payload = {}
 

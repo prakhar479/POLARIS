@@ -4,6 +4,7 @@ import pytest
 
 from polaris.core.polaris import Polaris
 from polaris.infrastructure.config import PolarisConfig
+from polaris.infrastructure.llm.client import create_llm_client
 
 
 @pytest.mark.asyncio
@@ -128,3 +129,22 @@ async def test_default_provider_is_google(monkeypatch):
 
     _ = Polaris(config=cfg)
     assert captured.get("provider") == "google"
+
+
+def test_gemini_alias_maps_to_google_client(monkeypatch):
+    captured = {}
+
+    class DummyGoogleClient:
+        def __init__(self, **kwargs):
+            captured["called"] = True
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("polaris.infrastructure.llm.client.GoogleGeminiClient", DummyGoogleClient)
+    monkeypatch.delenv("LLM_RESILIENCE_ENABLED", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
+    monkeypatch.delenv("GROQ_API_KEYS", raising=False)
+
+    client = create_llm_client("gemini")
+    assert isinstance(client, DummyGoogleClient)
+    assert captured.get("called") is True
