@@ -1,10 +1,13 @@
 """Tests for meta-learning and metrics-export background loops."""
 
 import asyncio
+import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
+from polaris.abstractions.meta_learner import ProposalStatus
 from polaris.core.meta_learning_loop import MetaLearningLoop
 from polaris.core.metrics_export_loop import MetricsExportLoop
 
@@ -86,6 +89,7 @@ async def test_meta_learning_run_for_system_success(mock_logger):
         metrics=metrics,
         interval_seconds=1.0,
         config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": False},
     )
 
     await loop._run_for_system("sys-1")
@@ -113,6 +117,7 @@ async def test_meta_learning_run_for_system_no_proposals_short_circuits(mock_log
         metrics=metrics,
         interval_seconds=1.0,
         config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": False},
     )
 
     await loop._run_for_system("sys-1")
@@ -133,6 +138,7 @@ async def test_meta_learning_run_for_system_error_path_emits_error_metric(mock_l
         metrics=metrics,
         interval_seconds=1.0,
         config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": False},
     )
 
     await loop._run_for_system("sys-err")
@@ -161,6 +167,7 @@ async def test_meta_learning_run_start_stop_and_jitter(monkeypatch, mock_logger)
         metrics=metrics,
         interval_seconds=10.0,
         config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": False},
     )
 
     sleep_values = []
@@ -197,6 +204,7 @@ async def test_meta_learning_run_handles_cancelled_sleep(monkeypatch, mock_logge
         metrics=_Metrics(),
         interval_seconds=1.0,
         config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": False},
     )
 
     async def cancelled_sleep(_seconds):
@@ -221,12 +229,148 @@ def test_meta_learning_metrics_respect_component_toggle(mock_logger):
         metrics=metrics,
         interval_seconds=1.0,
         config=_cfg_meta(enabled=False),
+        transparency_config={"enabled": False},
     )
 
     loop._emit("x")
     loop._emit_tagged("y", "sys-1")
     loop._gauge_tagged("z", 1.0, "sys-1")
     assert metrics.calls == []
+
+
+@pytest.mark.asyncio
+async def test_meta_learning_transparency_writes_cycle_record(tmp_path, mock_logger):
+    metrics = _Metrics()
+    approved = SimpleNamespace(
+        proposal_id="p-approved",
+        parameter_path="strategy.cooldown_seconds",
+        current_value=60,
+        proposed_value=75,
+        rationale="Reduce adaptation churn",
+        expected_impact="Lower adaptation rate",
+        confidence=0.81,
+        status=ProposalStatus.APPROVED,
+        created_at=datetime.now(timezone.utc),
+        applied_at=None,
+    )
+    rejected = SimpleNamespace(
+        proposal_id="p-rejected",
+        parameter_path="strategy.threshold.cpu.high",
+        current_value=80,
+        proposed_value=120,
+        rationale="Aggressive threshold increase",
+        expected_impact="Fewer scale-ups",
+        confidence=0.42,
+        status=ProposalStatus.REJECTED,
+        created_at=datetime.now(timezone.utc),
+        applied_at=None,
+    )
+    learner = _MetaLearner(
+        proposals=[approved, rejected],
+        validated=[approved],
+        applied=[SimpleNamespace(proposal_id="p-approved", success=True, error_message=None)],
+    )
+    output_path = tmp_path / "meta-updates.jsonl"
+    loop = MetaLearningLoop(
+        meta_learner=learner,
+        strategy=object(),
+        registry=_Registry(["sys-1"]),
+        logger=mock_logger,
+        metrics=metrics,
+        interval_seconds=1.0,
+        config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": True, "output_path": str(output_path)},
+    )
+
+    await loop._run_for_system("sys-1")
+
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["status"] == "completed"
+    assert row["system_id"] == "sys-1"
+    assert row["counts"] == {
+        "generated": 2,
+        "approved": 1,
+        "rejected": 1,
+        "applied": 1,
+        "applied_succeeded": 1,
+        "applied_failed": 0,
+    }
+    by_id = {proposal["proposal_id"]: proposal for proposal in row["proposals"]}
+    assert by_id["p-approved"]["apply_success"] is True
+    assert by_id["p-approved"]["validation_status"] == "approved"
+    assert by_id["p-rejected"]["apply_success"] is None
+    assert by_id["p-rejected"]["validation_status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_meta_learning_transparency_writes_error_record(tmp_path, mock_logger):
+    output_path = tmp_path / "meta-errors.jsonl"
+    loop = MetaLearningLoop(
+        meta_learner=_MetaLearner(fail=True),
+        strategy=object(),
+        registry=_Registry(["sys-err"]),
+        logger=mock_logger,
+        metrics=_Metrics(),
+        interval_seconds=1.0,
+        config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": True, "output_path": str(output_path)},
+    )
+
+    await loop._run_for_system("sys-err")
+
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["status"] == "error"
+    assert row["error"]["stage"] == "analysis"
+    assert "analysis failed" in row["error"]["message"]
+    assert row["counts"]["generated"] == 0
+
+
+@pytest.mark.asyncio
+async def test_meta_learning_transparency_write_failure_is_non_fatal(tmp_path, mock_logger):
+    approved = SimpleNamespace(
+        proposal_id="p-approved",
+        parameter_path="strategy.cooldown_seconds",
+        current_value=60,
+        proposed_value=75,
+        rationale="Reduce adaptation churn",
+        expected_impact="Lower adaptation rate",
+        confidence=0.81,
+        status=ProposalStatus.APPROVED,
+        created_at=datetime.now(timezone.utc),
+        applied_at=None,
+    )
+    learner = _MetaLearner(
+        proposals=[approved],
+        validated=[approved],
+        applied=[SimpleNamespace(proposal_id="p-approved", success=True, error_message=None)],
+    )
+    output_path = tmp_path / "meta-updates.jsonl"
+    loop = MetaLearningLoop(
+        meta_learner=learner,
+        strategy=object(),
+        registry=_Registry(["sys-1"]),
+        logger=mock_logger,
+        metrics=_Metrics(),
+        interval_seconds=1.0,
+        config=_cfg_meta(enabled=True),
+        transparency_config={"enabled": True, "output_path": str(output_path)},
+    )
+
+    class _BrokenWriter:
+        def record_cycle(self, _record):
+            raise RuntimeError("disk full")
+
+    loop._transparency_writer = _BrokenWriter()
+    await loop._run_for_system("sys-1")
+
+    assert any(
+        level == "warning" and "Failed to record meta-learning transparency cycle" in message
+        for level, message, _ in mock_logger.logs
+    )
 
 
 @pytest.mark.asyncio

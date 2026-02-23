@@ -166,6 +166,9 @@ meta_learner:
   type: "statistical" # Options: statistical, llm
   analysis_interval_hours: 1.0
   conservative_mode: true
+  transparency:
+    enabled: true
+    output_path: "./logs/meta_learning_updates.jsonl"
 
   # When a statistical world model is provided to Polaris, the
   # StatisticalMetaLearner automatically consumes its insights via
@@ -183,6 +186,9 @@ meta_learner:
 #   enabled: true
 #   type: "llm"
 #   analysis_interval_hours: 1.0   # Controls how often the meta-learning loop runs
+#   transparency:
+#     enabled: true                # Enabled by default when meta-learning is enabled
+#     output_path: "./logs/meta_learning_updates.jsonl"
 #   llm:
 #     provider: google             # or "openai"
 #     temperature: 0.1             # LLM temperature for analysis and proposals
@@ -797,6 +803,9 @@ meta_learner:
   enabled: true
   type: "llm"
   analysis_interval_hours: 2.0
+  transparency:
+    enabled: true
+    output_path: "./logs/meta_learning_updates.jsonl"
   llm:
     provider: "openai"
     temperature: 0.1
@@ -909,6 +918,8 @@ observability:
 - [ ] If `meta_learner.enabled: true`:
   - [ ] `meta_learner.type`: "statistical" or "llm"
   - [ ] `meta_learner.analysis_interval_hours`: Positive float
+  - [ ] `meta_learner.transparency.enabled`: boolean
+  - [ ] `meta_learner.transparency.output_path`: Writable file path
   - [ ] If type="llm": API credentials available
 
 #### 7. Observability Configuration (Optional)
@@ -1050,6 +1061,8 @@ Configure the managed systems to monitor and adapt.
 | `meta_learner.type`                    | string  | `statistical` | Type: statistical or llm                 |
 | `meta_learner.analysis_interval_hours` | float   | `1.0`         | Analysis interval in hours               |
 | `meta_learner.conservative_mode`       | boolean | `true`        | Conservative mode (cautious adjustments) |
+| `meta_learner.transparency.enabled`    | boolean | `true`        | Persist per-cycle update transparency    |
+| `meta_learner.transparency.output_path` | string  | `./logs/meta_learning_updates.jsonl` | JSONL file for transparency records |
 | `meta_learner.llm.provider`            | string  | `google`      | LLM provider (if type=llm)               |
 | `meta_learner.llm.temperature`         | float   | `0.1`         | Model creativity                         |
 | `meta_learner.llm.auto_apply`          | boolean | `false`       | Auto-apply proposals                     |

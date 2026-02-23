@@ -128,9 +128,14 @@ class Polaris:
         # ── Meta-learner ─────────────────────────────────────────────────
         self.meta_learner: Optional["MetaLearner"] = meta_learner
         self._meta_learning_interval_seconds: float = 3600.0
+        meta_cfg = getattr(self.config, "meta_learner", None)
+        self._meta_learning_transparency_config: Dict[str, Any] = (
+            ComponentBuilder.resolve_meta_learning_transparency_config(
+                meta_cfg if isinstance(meta_cfg, dict) else None
+            )
+        )
 
         if self.meta_learner is None:
-            meta_cfg = getattr(self.config, "meta_learner", None)
             meta_enabled = isinstance(meta_cfg, dict) and bool(meta_cfg.get("enabled", False))
 
             if enable_meta_learning or meta_enabled:
@@ -267,6 +272,7 @@ class Polaris:
                 metrics=self.metrics,
                 interval_seconds=self._meta_learning_interval_seconds,
                 config=self.config,
+                transparency_config=self._meta_learning_transparency_config,
             )
             self._tasks.append(asyncio.create_task(meta_loop.run()))
 

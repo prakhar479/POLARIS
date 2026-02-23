@@ -351,3 +351,20 @@ def test_should_collect_and_meta_interval_helpers():
         == 3600.0
     )
     assert ComponentBuilder.resolve_meta_learning_interval(None) == 3600.0
+
+    assert ComponentBuilder.resolve_meta_learning_transparency_config(None) == {
+        "enabled": True,
+        "output_path": "./logs/meta_learning_updates.jsonl",
+    }
+    assert ComponentBuilder.resolve_meta_learning_transparency_config(
+        {"transparency": {"enabled": False, "output_path": "/tmp/meta.jsonl"}}
+    ) == {
+        "enabled": False,
+        "output_path": "/tmp/meta.jsonl",
+    }
+    assert ComponentBuilder.resolve_meta_learning_transparency_config(
+        {"transparency": {"enabled": "yes", "output_path": ""}}
+    ) == {
+        "enabled": True,
+        "output_path": "./logs/meta_learning_updates.jsonl",
+    }

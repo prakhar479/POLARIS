@@ -326,6 +326,11 @@ meta_learner:
   # Interval between meta-learning analysis runs (hours)
   analysis_interval_hours: 0.2 # DEFAULT: 1.0
 
+  # Transparency ledger for meta-learning updates (full lifecycle)
+  transparency:
+    enabled: true # Enabled by default when meta-learning is enabled
+    output_path: "./logs/meta_learning_updates.jsonl" # Append-only JSONL file
+
   # For Statistical Meta-Learner
   # statistical:
   #   conservative_mode: true # Conservative param changes (default: true)

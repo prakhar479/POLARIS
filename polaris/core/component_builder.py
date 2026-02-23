@@ -463,6 +463,39 @@ class ComponentBuilder:
         return 3600.0
 
     @staticmethod
+    def resolve_meta_learning_transparency_config(
+        meta_config: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Return normalized transparency config for meta-learning records."""
+        defaults = {
+            "enabled": True,
+            "output_path": "./logs/meta_learning_updates.jsonl",
+        }
+        if not isinstance(meta_config, dict):
+            return defaults
+
+        transparency = meta_config.get("transparency")
+        if transparency is None:
+            return defaults
+        if not isinstance(transparency, dict):
+            return defaults
+
+        enabled = transparency.get("enabled", defaults["enabled"])
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
+        elif not isinstance(enabled, bool):
+            enabled = defaults["enabled"]
+
+        output_path = transparency.get("output_path", defaults["output_path"])
+        if not isinstance(output_path, str) or not output_path.strip():
+            output_path = defaults["output_path"]
+
+        return {
+            "enabled": bool(enabled),
+            "output_path": output_path,
+        }
+
+    @staticmethod
     def resolve_monitoring_interval(
         config: "PolarisConfig",
         cli_overrides: Dict[str, Any],
