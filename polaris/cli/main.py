@@ -11,6 +11,11 @@ from polaris import Polaris
 
 def main() -> int:
     """Run main CLI entry point with dashboard support."""
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        from polaris.cli.doctor import run_doctor_cli
+
+        return run_doctor_cli(sys.argv[2:])
+
     parser = argparse.ArgumentParser(
         description="Polaris - Modular Self-Adaptive Systems Framework"
     )
@@ -28,14 +33,14 @@ def main() -> int:
         "--interactive",
         "-i",
         action="store_true",
-        help="Launch interactive CLI interface in separate terminal for querying knowledge base and world model",
+        help="Launch interactive CLI in single-process mode for querying knowledge base and world model",
     )
 
     parser.add_argument(
         "--both",
         "-b",
         action="store_true",
-        help="Launch both dashboard and interactive CLI together",
+        help="Run dashboard and interactive CLI together in split-screen mode",
     )
 
     parser.add_argument(
@@ -134,8 +139,8 @@ def main() -> int:
             cli_overrides["log_format"] = args.log_format
         if args.log_level:
             cli_overrides["log_level"] = args.log_level
-        # In dashboard modes, suppress raw console logging to keep TUI clean.
-        if args.dashboard or args.both:
+        # In dashboard/interactive modes, suppress raw console logging to keep UI clean.
+        if args.dashboard or args.interactive or args.both:
             cli_overrides["console_logging"] = False
 
         # Metrics CLI overrides
@@ -167,36 +172,23 @@ def main() -> int:
             # Clear screen by default for a clean dashboard unless --no-clear is set
             asyncio.run(run_with_dashboard(polaris, clear_screen=not args.no_clear))
         elif args.interactive:
-            # Launch interactive CLI in separate process
-            print("Launching Polaris interactive CLI in separate terminal")
+            # Launch interactive CLI in same process
+            print("Starting Polaris with interactive CLI (single-process mode)")
             print("Config:", config_path)
             if args.export_logs:
                 print("Logs will be exported to:", args.export_logs)
-            print()
-
-            from polaris.cli.interactive import run_interactive_cli_standalone
-
-            run_interactive_cli_standalone(config_path, cli_overrides)
-
-            # Also start the main framework
-            print("Starting main Polaris framework")
             print("Press Ctrl+C to stop\n")
-            asyncio.run(run_framework(polaris))
+            print()
+            asyncio.run(run_with_interactive_cli(polaris))
         elif args.both:
-            # Launch both dashboard and interactive CLI
-            print("Starting Polaris with both dashboard and interactive CLI")
+            # Combined dashboard + interactive CLI mode
+            print("Starting Polaris with dashboard + interactive CLI")
             print("Config:", config_path)
             if args.export_logs:
                 print("Exporting logs to:", args.export_logs)
+            print("Press Ctrl+C to stop\n")
             print()
-
-            # Launch interactive CLI in separate terminal
-            from polaris.cli.interactive import run_interactive_cli_standalone
-
-            run_interactive_cli_standalone(config_path, cli_overrides)
-
-            # Run dashboard in main process
-            asyncio.run(run_with_dashboard(polaris, clear_screen=not args.no_clear))
+            asyncio.run(run_with_dashboard_and_interactive(polaris, clear_screen=not args.no_clear))
         else:
             # Standard CLI
             print(f"Starting Polaris with config: {config_path}")
@@ -307,6 +299,42 @@ async def run_with_dashboard(polaris: Polaris, clear_screen: bool = False) -> No
             except asyncio.CancelledError:
                 pass
 
+    except KeyboardInterrupt:
+        pass
+    finally:
+        await polaris.stop()
+
+
+async def run_with_dashboard_and_interactive(polaris: Polaris, clear_screen: bool = False) -> None:
+    """Run Polaris with dashboard and interactive CLI in one split-screen UI."""
+    try:
+        from polaris.cli.dashboard import Dashboard
+    except ImportError:
+        print("Error: Combined mode requires 'rich' library")
+        print("Install with: pip install rich")
+        return
+
+    if clear_screen:
+        try:
+            os.system("cls" if os.name == "nt" else "clear")
+        except Exception:
+            pass
+
+    dashboard = Dashboard(polaris)
+
+    polaris_task = asyncio.create_task(polaris.run())
+    both_task = asyncio.create_task(dashboard.run_with_interactive_cli(refresh_rate=0.2))
+
+    try:
+        done, pending = await asyncio.wait(
+            [polaris_task, both_task], return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     except KeyboardInterrupt:
         pass
     finally:

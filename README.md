@@ -80,6 +80,12 @@ polaris --config config/default.yaml
 # Launch interactive dashboard
 polaris --config config/default.yaml --dashboard
 
+# Dashboard + interactive commands in split-screen mode
+polaris --config config/default.yaml --both
+
+# Run diagnostics (config/env/optional dependencies)
+polaris doctor --config config/default.yaml
+
 # Show version
 polaris --version
 ```

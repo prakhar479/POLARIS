@@ -14,6 +14,9 @@ pip install rich  # Required for enhanced features
 
 ```bash
 python -m polaris.cli [OPTIONS]
+
+# Diagnostics
+python -m polaris.cli doctor [--config config/default.yaml]
 ```
 
 ## Command Options
@@ -30,8 +33,8 @@ python -m polaris.cli [OPTIONS]
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--dashboard` | `-d` | Launch interactive dashboard |
-| `--interactive` | `-i` | Launch interactive CLI in separate terminal |
-| `--both` | `-b` | Launch both dashboard and interactive CLI |
+| `--interactive` | `-i` | Launch interactive CLI in single-process mode |
+| `--both` | `-b` | Run dashboard + interactive CLI together (split-screen mode) |
 | `--no-clear` | `-` | Do not clear the terminal when launching the dashboard |
 
 ### Logging Options
@@ -74,11 +77,20 @@ python -m polaris.cli --dashboard --config config/default.yaml --metrics-export 
 
 ### Interactive CLI Mode
 ```bash
-# Launch interactive CLI (separate terminal)
+# Launch interactive CLI (single-process mode)
 python -m polaris.cli --interactive --config config/default.yaml
 
-# Both dashboard and interactive CLI
+# Dashboard + interactive CLI in one split-screen terminal
 python -m polaris.cli --both --config config/default.yaml
+```
+
+### Doctor Diagnostics
+```bash
+# Run config/env/optional-dependency diagnostics
+python -m polaris.cli doctor --config config/default.yaml
+
+# Treat warnings as failures
+python -m polaris.cli doctor --config config/default.yaml --strict
 ```
 
 ## Dashboard Features
@@ -107,9 +119,15 @@ The interactive CLI provides the following commands:
 | `worldmodel` | `worldmodel [system_id]` | Query world model insights |
 | `predict` | `predict <system_id> <action> [params]` | Predict action outcome |
 | `export` | `export <file> [format]` | Export metrics to file |
+| `history` | `history [N]` | Show recent command history |
 | `clear` | `clear` | Clear screen |
 | `help` | `help` | Show available commands |
 | `quit` | `quit` or `exit` | Exit CLI |
+
+Interactive CLI UX features:
+- Aliases: `h` (help), `q` (quit), `wm` (worldmodel), `ks` (knowledge), `st` (status)
+- Repeat previous command: `!!`
+- Tab completion for key commands/arguments
 
 ## Configuration
 
@@ -149,7 +167,9 @@ See `CONFIGURATION.md` for the registration pattern and examples.
 
 ## Notes
 
-- The interactive CLI runs in a separate terminal when using `--interactive`
+- `polaris doctor` checks runtime, config validity, environment variables, and optional dependencies.
+- `--both` runs a clean split-screen mode: live dashboard on top, interactive command pane at bottom.
+- Split-screen mode includes Up/Down history navigation and Tab command completion.
 - Dashboard updates in real-time (1-second intervals)
 - Dashboard log panel shows a concise, human-readable summary of recent logs; full raw logs remain available via log files/exports.
 - All CLI options can be combined as needed

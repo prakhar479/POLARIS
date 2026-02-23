@@ -6,9 +6,13 @@ events/logs in a minimal, developer-friendly layout.
 
 import asyncio
 import logging
+import os
+import sys
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Deque, Dict, List, Optional
+from io import StringIO
+from typing import Any, Deque, Dict, List, Optional, cast
 
 try:
     from rich.console import Console
@@ -21,6 +25,62 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+
+class _EmbeddedInteractiveCLI:
+    """Interactive command runner for split dashboard mode."""
+
+    def __init__(self, polaris: Any, output: Deque[str]) -> None:
+        from polaris.cli.interactive import PolarisInteractiveCLI
+
+        self._output = output
+        self._cli = PolarisInteractiveCLI(polaris)
+
+        # Route all interactive output into the dashboard output pane.
+        self._cli._print = self._print  # type: ignore[method-assign]
+        self._cli._print_table = self._print_table  # type: ignore[method-assign]
+        self._cli._print_json = self._print_json  # type: ignore[method-assign]
+        self._cli.do_clear = self.do_clear  # type: ignore[method-assign]
+
+    def _append(self, value: Any) -> None:
+        text = str(value).strip("\n")
+        for line in text.splitlines():
+            self._output.append(line)
+
+    def _print(self, content: Any, style: Optional[str] = None) -> None:
+        _ = style
+        self._append(content)
+
+    def _print_table(self, table: Any) -> None:
+        if RICH_AVAILABLE:
+            buffer = StringIO()
+            console = Console(file=buffer, force_terminal=False, color_system=None, width=120)
+            console.print(table)
+            self._append(buffer.getvalue())
+        else:
+            self._append("Table output requires 'rich' library")
+
+    def _print_json(self, data: Any) -> None:
+        import json
+
+        self._append(json.dumps(data, indent=2, default=str))
+
+    def do_clear(self, arg: str) -> None:
+        _ = arg
+        self._output.clear()
+        self._output.append("Cleared interactive output.")
+
+    def execute(self, command: str) -> bool:
+        """Execute one CLI command. Returns True when command requests exit."""
+        return bool(self._cli.onecmd(command))
+
+    def command_names(self) -> List[str]:
+        """Return available command names for interactive completion hints."""
+        names = []
+        for attr in dir(self._cli):
+            if attr.startswith("do_"):
+                names.append(attr[3:])
+        return sorted(names)
 
 
 class Dashboard:
@@ -41,6 +101,7 @@ class Dashboard:
         self.polaris = polaris
         self.console = Console()
         self.running = False
+        self._started_at = datetime.now()
 
         # Event tracking
         self.recent_events: List[Dict[str, Any]] = []
@@ -159,14 +220,24 @@ class Dashboard:
         header_text = Text()
         header_text.append("POLARIS", style="bold cyan")
         header_text.append(" - Self-Adaptive Systems Framework", style="dim")
+        header_text.append("  |  ", style="dim")
+        status = "RUNNING" if self.polaris.is_running() else "STOPPED"
+        status_style = "green bold" if self.polaris.is_running() else "red bold"
+        header_text.append(status, style=status_style)
+        header_text.append("  |  ", style="dim")
+        header_text.append(f"Systems: {len(self.polaris.registry.system_ids())}", style="white")
+        header_text.append("  |  ", style="dim")
+        header_text.append(f"Events: {len(self.recent_events)}", style="white")
         layout["header"].update(Panel(header_text, border_style="cyan"))
 
         # Systems panel
         systems_table = Table(title="Connected Systems", show_header=True)
         systems_table.add_column("System ID", style="cyan")
         systems_table.add_column("Status", style="green")
-
-        for system_id in self.polaris.registry.system_ids():
+        systems = list(self.polaris.registry.system_ids())
+        if not systems:
+            systems_table.add_row("No systems connected", "—")
+        for system_id in systems:
             systems_table.add_row(system_id, "✓ Connected")
 
         layout["systems"].update(Panel(systems_table, border_style="green"))
@@ -177,11 +248,15 @@ class Dashboard:
         metrics_table.add_column("Value", style="white")
         metrics_table.add_column("Trend", style="dim")
 
-        for metric_name, history in self.metric_history.items():
+        metric_items = sorted(self.metric_history.items(), key=lambda item: item[0])[:30]
+        if not metric_items:
+            metrics_table.add_row("No telemetry yet", "—", "—")
+
+        for metric_name, history in metric_items:
             if history:
                 current = history[-1][1]
                 trend = self._calculate_trend(history)
-                metrics_table.add_row(metric_name, str(current), trend)
+                metrics_table.add_row(metric_name, self._format_metric_value(current), trend)
 
         layout["metrics"].update(Panel(metrics_table, border_style="yellow"))
 
@@ -191,10 +266,14 @@ class Dashboard:
         events_table.add_column("Event", style="white")
         events_table.add_column("Status", style="green")
 
+        if not self.recent_events:
+            events_table.add_row("—", "No events yet", "—")
+
         for event in self.recent_events[-10:]:
             time_str = event["time"].strftime("%H:%M:%S")
             event_str = f"{event['action']} on {event['system']}"
-            status = "✓" if event["status"] == "success" else "✗"
+            status_ok = event["status"] == "success"
+            status = "[green]✓[/green]" if status_ok else "[red]✗[/red]"
             events_table.add_row(time_str, event_str, status)
 
         layout["events"].update(Panel(events_table, border_style="magenta"))
@@ -206,13 +285,17 @@ class Dashboard:
         logs_table.add_column("Comp", style="magenta", no_wrap=True)
         logs_table.add_column("Message", style="white", overflow="fold")
 
-        for rec in list(self._log_records)[-20:]:
-            logs_table.add_row(
-                rec.get("time", ""),
-                rec.get("level", ""),
-                rec.get("component", ""),
-                rec.get("message", ""),
-            )
+        recent_logs = list(self._log_records)[-20:]
+        if not recent_logs:
+            logs_table.add_row("—", "—", "—", "No logs yet")
+        else:
+            for rec in recent_logs:
+                logs_table.add_row(
+                    rec.get("time", ""),
+                    rec.get("level", ""),
+                    rec.get("component", ""),
+                    rec.get("message", ""),
+                )
 
         layout["logs"].update(Panel(logs_table, border_style="white"))
 
@@ -224,6 +307,14 @@ class Dashboard:
         if self.polaris.strategy:
             strategy_name = self.polaris.strategy.__class__.__name__
             strategy_info.add_row("Type", strategy_name)
+            strategy_info.add_row(
+                "Meta Learner",
+                (
+                    self.polaris.meta_learner.__class__.__name__
+                    if self.polaris.meta_learner
+                    else "Disabled"
+                ),
+            )
 
             # Use cached performance metrics
             if hasattr(self, "_cached_perf_metrics") and self._cached_perf_metrics:
@@ -251,59 +342,72 @@ class Dashboard:
                 gauges = metrics_summary.get("gauges", {})
                 histograms = metrics_summary.get("histograms", {})
 
+                max_rows = 22
+                rows_added = 0
+
+                def add_row(component: str, name: str, value: str) -> None:
+                    nonlocal rows_added
+                    if rows_added >= max_rows:
+                        return
+                    system_metrics_table.add_row(component, name, value)
+                    rows_added += 1
+
                 # Show monitoring metrics
                 for metric_name, value in counters.items():
                     if "polaris.monitoring" in metric_name:
                         component = "Monitoring"
                         clean_name = metric_name.replace("polaris.monitoring.", "")
-                        system_metrics_table.add_row(component, clean_name, str(int(value)))
+                        add_row(component, clean_name, str(int(value)))
 
                 # Show telemetry metrics
                 for metric_name, value in counters.items():
                     if "polaris.telemetry" in metric_name:
                         component = "Telemetry"
                         clean_name = metric_name.replace("polaris.telemetry.", "")
-                        system_metrics_table.add_row(component, clean_name, str(int(value)))
+                        add_row(component, clean_name, str(int(value)))
 
                 # Show adaptation metrics
                 for metric_name, value in counters.items():
                     if "polaris.adaptations" in metric_name:
                         component = "Adaptations"
                         clean_name = metric_name.replace("polaris.adaptations.", "")
-                        system_metrics_table.add_row(component, clean_name, str(int(value)))
+                        add_row(component, clean_name, str(int(value)))
 
                 # Show knowledge store metrics
                 for metric_name, value in counters.items():
                     if "polaris.knowledge" in metric_name:
                         component = "Knowledge"
                         clean_name = metric_name.replace("polaris.knowledge.", "")
-                        system_metrics_table.add_row(component, clean_name, str(int(value)))
+                        add_row(component, clean_name, str(int(value)))
 
                 # Show world model metrics
                 for metric_name, value in counters.items():
                     if "polaris.world_model" in metric_name:
                         component = "World Model"
                         clean_name = metric_name.replace("polaris.world_model.", "")
-                        system_metrics_table.add_row(component, clean_name, str(int(value)))
+                        add_row(component, clean_name, str(int(value)))
 
                 # Show gauge metrics (current values)
                 for metric_name, value in gauges.items():
                     if "polaris.monitoring" in metric_name:
                         component = "Monitoring"
                         clean_name = metric_name.replace("polaris.monitoring.", "")
-                        system_metrics_table.add_row(component, clean_name, str(int(value)))
+                        add_row(component, clean_name, str(int(value)))
 
                 # Show histogram averages for performance metrics
                 for metric_name, hist_data in histograms.items():
                     if "polaris.monitoring.loop_duration" in metric_name:
                         component = "Performance"
                         avg_duration = hist_data.get("avg", 0)
-                        system_metrics_table.add_row(
-                            component, "Avg Loop Duration", f"{avg_duration: .2f}s"
-                        )
+                        add_row(component, "Avg Loop Duration", f"{avg_duration: .2f}s")
+
+                if rows_added == 0:
+                    system_metrics_table.add_row("—", "No system metrics yet", "—")
 
             except Exception as e:
                 system_metrics_table.add_row("Error", "Metrics", f"Failed to load: {str(e)}")
+        else:
+            system_metrics_table.add_row("—", "Metrics collector disabled", "—")
 
         layout["system_metrics"].update(Panel(system_metrics_table, border_style="red"))
 
@@ -312,6 +416,7 @@ class Dashboard:
         footer_text.append("Status: ", style="dim")
         status = "Running" if self.polaris.is_running() else "Stopped"
         footer_text.append(status, style="green bold" if self.polaris.is_running() else "red bold")
+        footer_text.append(f" | Uptime: {self._format_uptime()}", style="dim")
         footer_text.append(f" | Time: {datetime.now().strftime('%H:%M:%S')}", style="dim")
         footer_text.append(f" | Metrics tracked: {len(self.metric_history)}", style="dim")
 
@@ -329,6 +434,28 @@ class Dashboard:
         layout["footer"].update(Panel(footer_text, border_style="dim"))
 
         return layout
+
+    def _format_metric_value(self, value: Any) -> str:
+        try:
+            numeric = float(value)
+        except Exception:
+            return str(value)
+        if abs(numeric) >= 1000:
+            return f"{numeric:,.0f}"
+        if abs(numeric) >= 10:
+            return f"{numeric:,.2f}"
+        return f"{numeric:,.3f}"
+
+    def _format_uptime(self) -> str:
+        elapsed = datetime.now() - self._started_at
+        seconds = int(elapsed.total_seconds())
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}h {minutes}m {secs}s"
+        if minutes > 0:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
 
     def _calculate_trend(self, history: list) -> str:
         """Calculate simple trend indicator."""
@@ -354,6 +481,119 @@ class Dashboard:
                 return "→"
         except (ValueError, TypeError, ZeroDivisionError):
             return "—"
+
+    @contextmanager
+    def _raw_terminal_input(self) -> Any:
+        """Enable non-blocking, character-at-a-time stdin reads on POSIX."""
+        if os.name == "nt" or not sys.stdin.isatty():
+            yield
+            return
+
+        import fcntl
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_attrs = termios.tcgetattr(fd)
+        old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        try:
+            tty.setcbreak(fd)
+            fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+            yield
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
+
+    def _read_key_nonblocking(self) -> Optional[str]:
+        """Read one key from stdin without blocking."""
+        if os.name == "nt":
+            try:
+                import msvcrt
+
+                if not msvcrt.kbhit():  # type: ignore[attr-defined]
+                    return None
+                ch = cast(str, msvcrt.getwch())  # type: ignore[attr-defined]
+                if ch in ("\x00", "\xe0"):
+                    code = cast(str, msvcrt.getwch())  # type: ignore[attr-defined]
+                    windows_arrow_map: Dict[str, str] = {
+                        "H": "<UP>",
+                        "P": "<DOWN>",
+                        "K": "<LEFT>",
+                        "M": "<RIGHT>",
+                    }
+                    return windows_arrow_map.get(code)
+                return ch
+            except Exception:
+                return None
+
+        if not sys.stdin.isatty():
+            return None
+
+        try:
+            ch = sys.stdin.read(1)
+        except OSError:
+            return None
+
+        if not ch:
+            return None
+
+        # Ignore escape sequences (arrow keys, etc.)
+        if ch == "\x1b":
+            try:
+                bracket = sys.stdin.read(1)
+                code = sys.stdin.read(1)
+                if bracket == "[":
+                    unix_arrow_map: Dict[str, str] = {
+                        "A": "<UP>",
+                        "B": "<DOWN>",
+                        "C": "<RIGHT>",
+                        "D": "<LEFT>",
+                    }
+                    return unix_arrow_map.get(code)
+            except Exception:
+                pass
+            return None
+
+        return ch
+
+    def _render_with_interactive(
+        self,
+        input_buffer: str,
+        output_lines: Deque[str],
+        command_running: bool,
+    ) -> Layout:
+        """Render dashboard with an interactive command pane."""
+        base = self._render()
+
+        panel_text = Text()
+        visible_lines = list(output_lines)[-16:]
+        if not visible_lines:
+            panel_text.append("No command output yet.\n", style="dim")
+        else:
+            for line in visible_lines:
+                panel_text.append(line)
+                panel_text.append("\n")
+
+        if command_running:
+            panel_text.append("[running] ", style="yellow")
+        else:
+            panel_text.append("[idle] ", style="green")
+        panel_text.append(f"polaris> {input_buffer}", style="bold cyan")
+
+        root = Layout()
+        root.split_column(
+            Layout(name="dashboard", ratio=5),
+            Layout(name="interactive", size=12),
+        )
+        root["dashboard"].update(base)
+        root["interactive"].update(
+            Panel(
+                panel_text,
+                title="Interactive CLI (Enter=run, Tab=complete, Up/Down=history, Ctrl+C=exit)",
+                border_style="cyan",
+            )
+        )
+        return root
 
     async def _update_metrics_cache(self) -> None:
         """Update cached performance metrics in background."""
@@ -408,3 +648,125 @@ class Dashboard:
                         root_logger.removeHandler(self._log_handler)
                     except Exception:
                         pass
+
+    async def run_with_interactive_cli(self, refresh_rate: float = 0.2) -> None:
+        """Run split-screen dashboard + interactive command mode."""
+        self.running = True
+
+        metrics_task = asyncio.create_task(self._update_metrics_cache())
+        output_lines: Deque[str] = deque(maxlen=200)
+        input_buffer = ""
+        command_task: Optional[asyncio.Task] = None
+        runner = _EmbeddedInteractiveCLI(self.polaris, output_lines)
+        known_commands = runner.command_names()
+        command_history: List[str] = []
+        history_cursor = 0
+
+        output_lines.append("Split mode active.")
+        output_lines.append("Type a command and press Enter (help, status, systems, metrics, ...).")
+
+        with self._raw_terminal_input():
+            with Live(
+                self._render_with_interactive(
+                    input_buffer=input_buffer,
+                    output_lines=output_lines,
+                    command_running=False,
+                ),
+                console=self.console,
+                refresh_per_second=max(1, int(1.0 / refresh_rate)),
+            ) as live:
+                try:
+                    while self.running and self.polaris.is_running():
+                        if command_task is not None and command_task.done():
+                            try:
+                                should_exit = bool(command_task.result())
+                                if should_exit:
+                                    break
+                            except Exception as exc:
+                                output_lines.append(f"Command failed: {exc}")
+                            command_task = None
+
+                        while True:
+                            ch = self._read_key_nonblocking()
+                            if ch is None:
+                                break
+
+                            if ch in ("\r", "\n"):
+                                command = input_buffer.strip()
+                                input_buffer = ""
+                                if command:
+                                    output_lines.append(f"> {command}")
+                                    command_history.append(command)
+                                    history_cursor = len(command_history)
+                                    if command_task is None:
+                                        command_task = asyncio.create_task(
+                                            asyncio.to_thread(runner.execute, command)
+                                        )
+                                    else:
+                                        output_lines.append(
+                                            "A command is already running. Please wait."
+                                        )
+                            elif ch in ("\x7f", "\b", "\x08"):
+                                input_buffer = input_buffer[:-1]
+                                history_cursor = len(command_history)
+                            elif ch == "\t":
+                                prefix = input_buffer.strip()
+                                if prefix and " " not in prefix:
+                                    matches = [
+                                        cmd for cmd in known_commands if cmd.startswith(prefix)
+                                    ]
+                                    if len(matches) == 1:
+                                        input_buffer = matches[0]
+                                    elif len(matches) > 1:
+                                        output_lines.append(
+                                            f"Completions: {', '.join(matches[:8])}"
+                                        )
+                                history_cursor = len(command_history)
+                            elif ch == "<UP>":
+                                if command_history:
+                                    history_cursor = max(0, history_cursor - 1)
+                                    input_buffer = command_history[history_cursor]
+                            elif ch == "<DOWN>":
+                                if command_history:
+                                    history_cursor = min(len(command_history), history_cursor + 1)
+                                    if history_cursor == len(command_history):
+                                        input_buffer = ""
+                                    else:
+                                        input_buffer = command_history[history_cursor]
+                            elif ch == "\x03":
+                                raise KeyboardInterrupt
+                            elif ch == "\x04":
+                                self.running = False
+                                break
+                            elif ch.isprintable():
+                                input_buffer += ch
+                                history_cursor = len(command_history)
+
+                        live.update(
+                            self._render_with_interactive(
+                                input_buffer=input_buffer,
+                                output_lines=output_lines,
+                                command_running=command_task is not None,
+                            )
+                        )
+                        await asyncio.sleep(refresh_rate)
+
+                except KeyboardInterrupt:
+                    pass
+                finally:
+                    self.running = False
+                    metrics_task.cancel()
+                    try:
+                        await metrics_task
+                    except asyncio.CancelledError:
+                        pass
+
+                    if command_task is not None and not command_task.done():
+                        command_task.cancel()
+
+                    if self._log_handler is not None:
+                        try:
+                            root_logger = logging.getLogger("polaris")
+                            root_logger.removeHandler(self._log_handler)
+                        except Exception:
+                            pass
