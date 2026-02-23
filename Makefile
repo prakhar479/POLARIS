@@ -33,7 +33,7 @@ test-verbose:
 	pytest tests/ -vv --tb=long
 
 test-all:
-	pytest tests/ -v --cov=polaris --cov-report=term-missing --cov-fail-under=40
+	pytest tests/ -v --cov=polaris --cov-report=term-missing --cov-fail-under=60
 
 # Code formatting
 format:
@@ -65,7 +65,9 @@ clean:
 	rm -rf dist/
 	rm -rf *.egg-info/
 	rm -rf .pytest_cache/
+	rm -rf .mypy_cache/
 	rm -rf .coverage
+	rm -rf .benchmark/
 	rm -rf htmlcov/
 	find . -type d -name __pycache__ -prune -exec rm -rf {} \;
 	find . -type f -name "*.pyc" -delete

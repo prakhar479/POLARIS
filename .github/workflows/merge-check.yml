@@ -28,7 +28,7 @@ jobs:
 
     - name: Run full test suite
       run: |
-        pytest tests/ -v --cov=polaris --cov-report=xml --cov-fail-under=40
+        pytest tests/ -v --cov=polaris --cov-report=xml --cov-fail-under=60
 
     - name: Check merge conflicts
       run: |

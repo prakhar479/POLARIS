@@ -43,7 +43,7 @@ jobs:
     - name: Test Suite
       run: |
         echo "=== Running Test Suite ==="
-        pytest tests/ -v --cov=polaris --cov-report=xml --cov-fail-under=40
+        pytest tests/ -v --cov=polaris --cov-report=xml --cov-fail-under=60
 
     - name: Coverage Report
       uses: codecov/codecov-action@v3
