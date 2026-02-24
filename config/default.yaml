@@ -177,8 +177,8 @@ strategy:
         priority: 0.9
         threshold:
           thresholds:
-            response_time:
-              high: 750 # milliseconds
+            average_response_time:
+              high: 0.75 # milliseconds
           cooldown_seconds: 45
 
       - type: agentic_llm # Sub-strategy 2
@@ -188,16 +188,16 @@ strategy:
           steps_limit: 3 # Max reasoning steps (default: 3)
           temperature: 0.1 # Model creativity (default: 0.1)
           # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
-          # system_prompt: |
-          #   You are an adaptation controller for {system_id}.
-          #   Use tools sparingly. Allowed: {allowed_tools}.
-          #   Always reply in strict JSON.
-          #
+          system_prompt: |
+            You are an adaptation controller for {system_id}.
+            Use tools sparingly. Allowed: {allowed_tools}.
+            Always reply in strict JSON.
+
           # Per-system prompt overrides (keyed by systems[].id)
-          # per_system_prompts:
-          #   swim: |
-          #     You are an adaptation controller for SWIM.
-          #     Focus on response time, throughput, and utilization.
+          per_system_prompts:
+            swim: |
+              You are an adaptation controller for SWIM.
+              Focus on response time, throughput, and utilization.
           #   wildfire: |
           #     You are an adaptation controller for Wildfire.
           #     Focus on containment and UAV safety.
