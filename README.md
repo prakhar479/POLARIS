@@ -55,6 +55,7 @@ Polaris includes built-in connectors for common exemplar systems:
 
 - **SWIM**: Connects to SWIM (Simulated Web Infrastructure Manager) via TCP.
 - **Wildfire**: Connects to the WildFire multi-UAV fire suppression simulation via REST API.
+- **Kubernetes**: Connects to Kubernetes clusters (natively or via kubeconfig) to monitor pods and scale deployments.
 
 See [CONFIGURATION.md](./CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
 
@@ -147,6 +148,7 @@ Polaris supports multiple LLM-powered strategies:
 
 - `llm_reasoning`: single-shot LLM decision-making
 - `agentic_llm`: iterative tool-using loop with the LLM calling safe tools
+- `multi_agent`: advanced multi-agent committee (Diagnostician -> Planner -> Validator)
 - `hybrid`: combine strategies, including LLM-based ones
 
 You can choose the LLM provider per strategy. Supported providers: `google` (Gemini, default) and `openai`.

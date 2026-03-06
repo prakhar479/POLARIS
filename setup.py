@@ -31,6 +31,9 @@ setup(
         "openai>=1.0.0",
         # Rich for dashboard
         "rich>=13.0.0",
+        # New feature dependencies
+        "redis>=4.5.0",
+        "kubernetes>=28.1.0",
     ],
     extras_require={
         "dev": [

@@ -1,0 +1,131 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Strategy Adaptation Executions (All Systems)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(polaris_strategy_actions_executed_total[5m])) by (action_type, strategy)",
+          "legendFormat": "{{strategy}} - {{action_type}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "title": "LLM Meta-Learner Tuning Confidence",
+      "type": "gauge",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "avg(polaris_meta_learner_confidence)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "title": "Global System Health Status",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(polaris_system_health_status)",
+          "legendFormat": "Health (0=Healthy, 1=Warning, 2=Degraded, 3=Critical)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "title": "LLM Strategy Reasoning Duration (seconds)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "avg(rate(polaris_strategy_agentic_assess_duration_seconds_sum[5m]) / rate(polaris_strategy_agentic_assess_duration_seconds_count[5m]))",
+          "legendFormat": "Agentic Assess Duration",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(rate(polaris_strategy_multi_agent_assess_duration_seconds_sum[5m]) / rate(polaris_strategy_multi_agent_assess_duration_seconds_count[5m]))",
+          "legendFormat": "Multi-Agent Assess Duration",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "title": "Event Bus Published Events",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(polaris_event_bus_published_total[5m])) by (event_type)",
+          "legendFormat": "{{event_type}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "tags": ["polaris", "sas"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Polaris Default Dashboard",
+  "uid": "polaris-main",
+  "version": 2
+}

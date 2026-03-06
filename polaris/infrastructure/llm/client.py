@@ -38,7 +38,11 @@ class LLMClient(ABC):
 
     @abstractmethod
     async def generate(
-        self, messages: List[LLMMessage], temperature: float = 0.7, max_tokens: int = 1024
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate a response from the LLM."""
         pass
@@ -71,7 +75,11 @@ class GoogleGeminiClient(LLMClient):
             )
 
     async def generate(
-        self, messages: List[LLMMessage], temperature: float = 0.7, max_tokens: int = 1024
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using Google Gemini with error handling."""
         try:
@@ -89,7 +97,13 @@ class GoogleGeminiClient(LLMClient):
                     prompt_parts.append(f"Assistant: {msg.content}\n")
 
             prompt = "\n".join(prompt_parts)
-            gen_config = {"temperature": temperature, "max_output_tokens": max_tokens}
+            gen_config: Dict[str, Any] = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+            if response_schema:
+                gen_config["response_mime_type"] = "application/json"
+                gen_config["response_schema"] = response_schema
 
             # generate_content() is synchronous — run in a thread-pool executor
             # so we don't block the asyncio event loop (P0 fix).
@@ -140,19 +154,28 @@ class OpenAIClient(LLMClient):
             raise ImportError("openai package not installed. " "Install with: pip install openai")
 
     async def generate(
-        self, messages: List[LLMMessage], temperature: float = 0.7, max_tokens: int = 1024
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using OpenAI with error handling."""
         try:
             # Convert to OpenAI format
             openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=openai_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": openai_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if response_schema:
+                # Basic support if user passes pydantic model in future
+                pass
+
+            response = await self.client.chat.completions.create(**kwargs)
 
             if not response.choices or not response.choices[0].message.content:
                 raise ValueError("Empty response from OpenAI API")
@@ -193,7 +216,11 @@ class GroqClient(LLMClient):
             raise ImportError("groq package not installed. " "Install with: pip install groq")
 
     async def generate(
-        self, messages: List[LLMMessage], temperature: float = 0.7, max_tokens: int = 1024
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using Groq with error handling."""
         try:
@@ -352,7 +379,11 @@ class ResilientLLMClient(LLMClient):
         return is_retryable, is_rate, etype
 
     async def generate(
-        self, messages: List[LLMMessage], temperature: float = 0.7, max_tokens: int = 1024
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using resilient LLM client with retry logic."""
         await self._semaphore.acquire()
@@ -364,7 +395,10 @@ class ResilientLLMClient(LLMClient):
                 start = time.monotonic()
                 try:
                     resp = await self._current_client().generate(
-                        messages, temperature=temperature, max_tokens=max_tokens
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_schema=response_schema,
                     )
                     latency_ms = int((time.monotonic() - start) * 1000)
                     self._logger.info(
