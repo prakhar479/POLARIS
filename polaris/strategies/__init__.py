@@ -3,6 +3,7 @@
 from polaris.strategies.agentic_llm import AgenticLLMStrategy
 from polaris.strategies.hybrid import HybridStrategy
 from polaris.strategies.llm_reasoning import LLMReasoningStrategy
+from polaris.strategies.multi_agent import MultiAgentStrategy
 from polaris.strategies.threshold import ThresholdReactiveStrategy
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "LLMReasoningStrategy",
     "HybridStrategy",
     "AgenticLLMStrategy",
+    "MultiAgentStrategy",
 ]

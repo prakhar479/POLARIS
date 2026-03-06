@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from polaris.core.events import AdaptationEvent, EventBus, TelemetryEvent
+from polaris.core.events import AdaptationEvent, InMemoryEventBus, TelemetryEvent
 from polaris.core.models import (
     AdaptationAction,
     ExecutionResult,
@@ -23,7 +23,7 @@ class TestEventBus:
     @pytest.fixture
     def event_bus(self, mock_metrics):
         """Create event bus with mock metrics."""
-        return EventBus(metrics=mock_metrics)
+        return InMemoryEventBus(metrics=mock_metrics)
 
     @pytest.mark.asyncio
     async def test_event_bus_lifecycle(self, event_bus):
@@ -175,7 +175,7 @@ class TestEventBus:
     @pytest.mark.asyncio
     async def test_handler_exception_logging(self, mock_metrics, mock_logger):
         """Test that handler exceptions are logged when a logger is provided."""
-        bus = EventBus(metrics=mock_metrics, logger=mock_logger)
+        bus = InMemoryEventBus(metrics=mock_metrics, logger=mock_logger)
         await bus.start()
 
         async def failing_handler(event):
@@ -260,7 +260,7 @@ class TestEventBus:
 
     def test_metrics_tracking(self, mock_metrics):
         """Test that metrics are tracked correctly."""
-        event_bus = EventBus(metrics=mock_metrics)
+        event_bus = InMemoryEventBus(metrics=mock_metrics)
 
         # Check start/stop metrics
         asyncio.run(event_bus.start())

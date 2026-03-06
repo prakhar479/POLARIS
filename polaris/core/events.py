@@ -1,6 +1,7 @@
 """Event system for Polaris."""
 
 import asyncio
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,7 +29,36 @@ class AdaptationEvent:
     timestamp: datetime
 
 
-class EventBus:
+class EventBus(ABC):
+    """Abstract EventBus interface for component communication."""
+
+    @abstractmethod
+    async def start(self) -> None:
+        """Start the event bus."""
+        pass
+
+    @abstractmethod
+    async def stop(self) -> None:
+        """Stop the event bus."""
+        pass
+
+    @abstractmethod
+    async def publish(self, event: Any) -> None:
+        """Publish an event to the bus."""
+        pass
+
+    @abstractmethod
+    def subscribe(self, event_type: Type, handler: Callable) -> str:
+        """Subscribe a handler to an event type."""
+        pass
+
+    @abstractmethod
+    def unsubscribe(self, event_type: Type, handler: Callable) -> None:
+        """Unsubscribe a handler from an event type."""
+        pass
+
+
+class InMemoryEventBus(EventBus):
     """Simple async event bus for component communication."""
 
     def __init__(
@@ -78,11 +108,13 @@ class EventBus:
             )
 
         # Call all handlers concurrently
-        tasks: List[asyncio.Future] = []
+        tasks: List[asyncio.Future[Any]] = []
         handler_names: List[str] = []
         for handler in handlers:
             if asyncio.iscoroutinefunction(handler):
-                tasks.append(handler(event))
+                tasks.append(
+                    asyncio.create_task(handler(event))
+                )  # create_task avoids some type hint warnings sometimes vs just func call
             else:
                 # Wrap sync handlers
                 loop = asyncio.get_running_loop()

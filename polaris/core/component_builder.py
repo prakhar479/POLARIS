@@ -5,7 +5,7 @@ orchestrator and used by third-party code that wants to construct individual
 components without instantiating the full framework.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
     from polaris.abstractions import (
@@ -117,12 +117,41 @@ class ComponentBuilder:
         logger: "Logger",
     ) -> "EventBus":
         """Create an EventBus, optionally wired to the metrics collector."""
-        from polaris.core.events import EventBus
+        from polaris.core.events import InMemoryEventBus
+
+        RedisEventBus: Optional[Any] = None
+        try:
+            from polaris.infrastructure.events.redis_bus import RedisEventBus as RedisEventBusCls
+
+            RedisEventBus = RedisEventBusCls
+        except ImportError:
+            pass
 
         event_bus_metrics = (
             metrics if ComponentBuilder.should_collect(config, "event_bus", metrics) else None
         )
-        return EventBus(metrics=event_bus_metrics, logger=logger)
+
+        bus_type = "memory"
+        if hasattr(config, "observability") and config.observability:
+            obs = config.observability
+            if "event_bus" in obs and isinstance(obs["event_bus"], dict):
+                bus_type = obs["event_bus"].get("type", "memory")
+
+        if bus_type == "redis" and RedisEventBus is not None:
+            redis_url = obs["event_bus"].get("url", "redis://localhost:6379")
+            return cast(
+                "EventBus",
+                RedisEventBus(redis_url=redis_url, metrics=event_bus_metrics, logger=logger),
+            )
+
+        if bus_type not in ("memory", "redis"):
+            logger.warning(f"Unknown event bus type '{bus_type}', falling back to in-memory bus")
+        elif bus_type == "redis" and RedisEventBus is None:
+            logger.warning(
+                "RedisEventBus is not available (is redis installed?), falling back to in-memory bus"
+            )
+
+        return InMemoryEventBus(metrics=event_bus_metrics, logger=logger)
 
     # ------------------------------------------------------------------
     # Core domain components

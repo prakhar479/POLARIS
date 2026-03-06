@@ -17,6 +17,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 
+from pydantic import BaseModel, Field
+
 if TYPE_CHECKING:
     from polaris.abstractions.connector import Connector
 
@@ -33,6 +35,51 @@ def _get_connector_class() -> Type["Connector"]:
     from polaris.abstractions.connector import Connector
 
     return Connector
+
+
+class ActionBlock(BaseModel):
+    """A block defining an action to be executed."""
+
+    type: str = Field(description="The name or type of the action to execute")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict, description="Parameters required for the action"
+    )
+
+
+class FinalDecisionBlock(BaseModel):
+    """A block containing the final adaptation decision."""
+
+    needs_adaptation: bool = Field(description="True if adaptation is needed, False otherwise")
+    reasoning: str = Field(description="Explanation of why this decision was made")
+    actions: List[ActionBlock] = Field(
+        default_factory=list, description="List of actions to execute"
+    )
+    action: Optional[ActionBlock] = Field(
+        None, description="(Deprecated) Single action for backward compatibility"
+    )
+
+    def __init__(self, **data: Any) -> None:
+        """Initialize the FinalDecisionBlock."""
+        super().__init__(**data)
+        # Backward compatibility: if action (singular) is provided but actions (plural) is empty,
+        # convert action to actions
+        if self.action is not None and not self.actions:
+            self.actions = [self.action]
+
+
+class AgenticResponseSchema(BaseModel):
+    """Schema for responses from the agentic LLM reasoning engine."""
+
+    tool: Optional[str] = Field(
+        None, description="Name of the tool to call. Leave null if making a final decision."
+    )
+    args: Optional[Dict[str, Any]] = Field(
+        None, description="Arguments to pass to the tool. Leave null if making a final decision."
+    )
+    final: Optional[FinalDecisionBlock] = Field(
+        None,
+        description="Provide this block only when you are ready to make a final adaptation decision.",
+    )
 
 
 class AgenticLLMStrategy(AdaptationStrategy):
@@ -137,7 +184,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 )
                 llm_start = datetime.now(timezone.utc)
                 response = await self.llm.generate(
-                    messages, temperature=self.temperature, max_tokens=2048
+                    messages,
+                    temperature=self.temperature,
+                    max_tokens=2048,
+                    response_schema=AgenticResponseSchema,
                 )
                 self.metrics.histogram(
                     "polaris.strategy.agentic.llm_call_duration_seconds",
@@ -152,28 +202,28 @@ class AgenticLLMStrategy(AdaptationStrategy):
                             content_preview=response.content[:300],
                         )
                     break
-                if "final" in parsed:
-                    final = parsed.get("final") or {}
-                    if not isinstance(final, dict):
-                        break
-                    needs = bool(final.get("needs_adaptation", False))
-                    if not needs:
+
+                try:
+                    structured_response = AgenticResponseSchema.model_validate(parsed)
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(
+                            "AgenticLLMStrategy validation error",
+                            error=str(e),
+                            content=response.content,
+                        )
+                    break
+
+                if structured_response.final is not None:
+                    final = structured_response.final
+                    if not final.needs_adaptation:
                         if self.logger:
                             self.logger.info(
                                 "Agentic decision: no adaptation", system_id=state.system_id
                             )
                         return []
 
-                    action_block = final.get("action")
-                    actions_list = final.get("actions")
-
-                    raw_actions = []
-                    if isinstance(actions_list, list):
-                        raw_actions = actions_list
-                    elif isinstance(action_block, dict):
-                        raw_actions = [action_block]
-
-                    if not raw_actions:
+                    if not final.actions:
                         if self.logger:
                             self.logger.warning(
                                 "Agentic decision: needs_adaptation=true but no actions provided",
@@ -181,23 +231,17 @@ class AgenticLLMStrategy(AdaptationStrategy):
                             )
                         return []
 
-                    reasoning = str(final.get("reasoning", ""))
-                    proposed_actions = []
-
-                    for ab in raw_actions:
-                        if not isinstance(ab, dict):
-                            continue
-                        at = ab.get("type")
-                        ap = ab.get("parameters") or {}
-                        if not at or not isinstance(ap, dict):
+                    proposed_actions: List[AdaptationAction] = []
+                    for ab in final.actions:
+                        if not ab.type:
                             continue
 
                         proposed_actions.append(
                             AdaptationAction(
                                 action_id=str(uuid.uuid4()),
-                                action_type=str(at),
+                                action_type=ab.type,
                                 target_system=state.system_id,
-                                parameters={**ap, "llm_reasoning": reasoning},
+                                parameters={**ab.parameters, "llm_reasoning": final.reasoning},
                             )
                         )
 
@@ -218,8 +262,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
                             },
                         )
                     return proposed_actions
-                tool = parsed.get("tool")
-                args = parsed.get("args") or {}
+
+                tool = structured_response.tool
+                args = structured_response.args or {}
                 if not tool:
                     break
                 if tool not in self.allowed_tools:

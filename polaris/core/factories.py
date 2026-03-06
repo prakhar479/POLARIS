@@ -99,7 +99,7 @@ def registered_strategy_types() -> List[str]:
 def _register_default_connector_factories() -> None:
     """Register factories for built-in connector types."""
     # Import here to avoid circular imports
-    from polaris.connectors import SWIMConnector, WildfireConnector
+    from polaris.connectors import KubernetesConnector, SWIMConnector, WildfireConnector
 
     def _swim_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
@@ -130,6 +130,22 @@ def _register_default_connector_factories() -> None:
 
     register_connector_factory("wildfire", _wildfire_factory)
 
+    def _kubernetes_factory(
+        system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
+    ) -> "Connector":
+        kubeconfig = system_cfg.connection.get("kubeconfig_path")
+        in_cluster = system_cfg.connection.get("in_cluster", False)
+        namespace = system_cfg.connection.get("namespace", "default")
+        return KubernetesConnector(
+            kubeconfig_path=kubeconfig,
+            in_cluster=in_cluster,
+            namespace=namespace,
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_connector_factory("kubernetes", _kubernetes_factory)
+
 
 def _register_default_strategy_factories() -> None:
     """Register factories for built-in strategy types."""
@@ -138,6 +154,7 @@ def _register_default_strategy_factories() -> None:
         AgenticLLMStrategy,
         HybridStrategy,
         LLMReasoningStrategy,
+        MultiAgentStrategy,
         ThresholdReactiveStrategy,
     )
 
@@ -333,6 +350,33 @@ def _register_default_strategy_factories() -> None:
         )
 
     register_strategy_factory("agentic_llm", _agentic_llm_factory)
+
+    def _multi_agent_factory(
+        strategy_cfg: Any,
+        logger: "Logger",
+        metrics: Optional["MetricsCollector"],
+        knowledge_store: "KnowledgeStore",
+        world_model: "WorldModel",
+        registry: ConnectorRegistry,
+    ) -> "AdaptationStrategy":
+        agent_conf = strategy_cfg.multi_agent or {}
+        temperature = float(agent_conf.get("temperature", 0.1))
+        system_description = agent_conf.get("system_description", "A generic managed cloud system")
+
+        provider = agent_conf.get("provider", "google")
+        llm_client = _llm.create_llm_client(provider, resilience=agent_conf.get("resilience"))
+
+        return MultiAgentStrategy(
+            llm_client=llm_client,
+            knowledge_store=knowledge_store,
+            world_model=world_model,
+            temperature=temperature,
+            system_description=system_description,
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_strategy_factory("multi_agent", _multi_agent_factory)
 
 
 # Register built-in factories lazily when first needed

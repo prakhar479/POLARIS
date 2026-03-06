@@ -54,7 +54,7 @@ class Polaris:
         # Configuration
         config_path: Optional[str] = None,
         config: Optional[PolarisConfig] = None,
-        cli_overrides: Optional[dict] = None,
+        cli_overrides: Optional[Dict[str, Any]] = None,
         # Core components (swappable)
         strategy: Optional["AdaptationStrategy"] = None,
         world_model: Optional["WorldModel"] = None,
@@ -171,7 +171,7 @@ class Polaris:
 
         # ── Internal state ───────────────────────────────────────────────
         self._running: bool = False
-        self._tasks: List[asyncio.Task] = []
+        self._tasks: List[asyncio.Task[Any]] = []
 
         # ── Log summary ──────────────────────────────────────────────────
         self.logger.info(

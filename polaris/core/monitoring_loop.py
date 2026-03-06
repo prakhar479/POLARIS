@@ -7,7 +7,7 @@ independently of the Polaris orchestrator.
 
 import asyncio
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from polaris.abstractions import Connector, KnowledgeStore, Logger, MetricsCollector, WorldModel
@@ -81,7 +81,7 @@ class MonitoringLoop:
                     async with semaphore:
                         return await self._process_system(connector)
 
-                results = await asyncio.gather(
+                results: List[Union[Dict[str, int], BaseException]] = await asyncio.gather(
                     *[_bounded(c) for c in connectors], return_exceptions=True
                 )
 
