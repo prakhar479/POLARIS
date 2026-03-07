@@ -34,9 +34,10 @@ from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.abstractions.world_model import WorldModel
-from polaris.core.models import AdaptationAction, MetricValue, SystemState
+from polaris.core.models import AdaptationAction, SystemState
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+from polaris.tools import ToolDependencies, ToolRegistry, get_builtin_tools
 
 # ---------------------------------------------------------------------------
 # Agent output models
@@ -288,6 +289,15 @@ class MultiAgentStrategy(AdaptationStrategy):
 
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
+        # Initialize tool registry with built-in tools
+        self._tool_registry = ToolRegistry(metrics=self.metrics)
+        all_tools = get_builtin_tools()
+        if self.allowed_tools:
+            for tool in all_tools:
+                if tool.name in self.allowed_tools:
+                    self._tool_registry.register(tool)
+        else:
+            self._tool_registry.register_all(all_tools)
         self._adaptation_count = 0
         self._success_count = 0
 
@@ -661,16 +671,42 @@ class MultiAgentStrategy(AdaptationStrategy):
                 break
 
             if tool not in allowed_tools:
-                tool_result = {"error": f"tool_not_allowed: {tool}"}
+                from polaris.tools import ToolError
+
+                tool_result = ToolError(
+                    code="tool_not_allowed",
+                    message=f"tool_not_allowed: {tool}",
+                    recoverable=True,
+                ).to_dict()
             else:
                 try:
-                    tool_result = await self._execute_tool(tool, args, state, context)
+                    # Build tool dependencies
+                    deps = ToolDependencies(
+                        knowledge_store=self.knowledge_store,
+                        world_model=self.world_model,
+                        connector=None,  # MultiAgentStrategy doesn't have connector access
+                        logger=self.logger,
+                        metrics=self.metrics,
+                    )
+                    tool_result = await self._tool_registry.execute(
+                        tool_name=tool,
+                        args=args,
+                        state=state,
+                        context=context,
+                        deps=deps,
+                    )
                 except Exception as e:
                     if self.logger:
                         self.logger.error(
                             f"MultiAgent tool error in {role}", tool=tool, error=str(e)
                         )
-                    tool_result = {"error": f"tool_error: {type(e).__name__}: {str(e)}"}
+                    from polaris.tools import ToolError
+
+                    tool_result = ToolError(
+                        code="tool_error",
+                        message=f"tool_error: {type(e).__name__}: {str(e)}",
+                        recoverable=True,
+                    ).to_dict()
 
             tool_msg = json.dumps({"tool_result": {"tool": tool, "data": tool_result}})
             messages.append(LLMMessage(role="user", content=tool_msg))
@@ -680,109 +716,26 @@ class MultiAgentStrategy(AdaptationStrategy):
     async def _execute_tool(
         self, tool: str, args: Dict[str, Any], state: SystemState, context: AdaptationContext
     ) -> Dict[str, Any]:
-        """Execute a tool for an agent. Adapted from AgenticLLMStrategy."""
-        from datetime import timedelta
+        """Execute a tool directly (deprecated).
 
-        if tool == "get_recent_states":
-            window_seconds = int(max(1, min(int(args.get("window_seconds", 600)), 3600)))
-            limit = int(max(1, min(int(args.get("limit", 50)), 200)))
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            states = await self.knowledge_store.query_states(state.system_id, start, end)
-            if states:
-                states = states[-limit:]
-            out: List[Dict[str, Any]] = []
-            for s in states:
-                m = {}
-                for name, mv in s.metrics.items():
-                    try:
-                        m[name] = float(mv.value)
-                    except Exception:
-                        pass
-                out.append({"timestamp": s.timestamp.isoformat(), "metrics": m})
-            return {"states": out}
+        This method is maintained for backward compatibility but delegates
+        to the ToolRegistry. New code should use the registry directly.
+        """
+        deps = ToolDependencies(
+            knowledge_store=self.knowledge_store,
+            world_model=self.world_model,
+            connector=None,  # MultiAgentStrategy doesn't have connector access
+            logger=self.logger,
+            metrics=self.metrics,
+        )
 
-        if tool == "summarize_metric_trends":
-            metric = str(args.get("metric", "")).strip()
-            if not metric:
-                return {"error": "missing_metric"}
-            window_seconds = int(max(1, min(int(args.get("window_seconds", 600)), 3600)))
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            states = await self.knowledge_store.query_states(state.system_id, start, end)
-            vals: List[float] = []
-            for s in states:
-                metric_value: Optional[MetricValue] = s.metrics.get(metric)
-                if metric_value is None or metric_value.value is None:
-                    continue
-                try:
-                    vals.append(float(metric_value.value))
-                except Exception:
-                    continue
-            if not vals:
-                return {"count": 0}
-            return {
-                "count": len(vals),
-                "min": min(vals),
-                "max": max(vals),
-                "avg": sum(vals) / len(vals),
-            }
-
-        if tool == "get_world_model_insights":
-            insights = await self.world_model.get_insights()
-            return {"insights": insights}
-
-        if tool == "predict_outcome":
-            block = args.get("candidate_action") or {}
-            if not isinstance(block, dict):
-                return {"error": "invalid_candidate_action"}
-            a_type = block.get("type")
-            params = block.get("parameters") or {}
-            if not a_type or not isinstance(params, dict):
-                return {"error": "invalid_candidate_action"}
-            candidate = AdaptationAction(
-                action_id=str(uuid.uuid4()),
-                action_type=str(a_type),
-                target_system=state.system_id,
-                parameters=params,
-            )
-            pred = await self.world_model.predict(candidate, state)
-            return {
-                "predicted_metrics": pred.predicted_metrics,
-                "confidence": pred.confidence,
-                "reasoning": pred.reasoning,
-            }
-
-        if tool == "get_action_history":
-            window_seconds = int(
-                max(1, min(int(args.get("window_seconds", 86400)), 30 * 24 * 3600))
-            )
-            limit = int(max(1, min(int(args.get("limit", 50)), 500)))
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            history = await self.knowledge_store.query_actions(state.system_id, start, end)
-            items = []
-            for action, result in history[-limit:]:
-                completed_at = getattr(result, "completed_at", None)
-                items.append(
-                    {
-                        "action_id": getattr(action, "action_id", None),
-                        "type": getattr(action, "action_type", None),
-                        "parameters": getattr(action, "parameters", {}),
-                        "status": getattr(getattr(result, "status", None), "value", None),
-                        "error": getattr(result, "error_message", None),
-                        "completed_at": completed_at.isoformat() if completed_at else None,
-                    }
-                )
-            return {"items": items}
-
-        if tool == "list_supported_actions":
-            # This is a bit complex as it requires connector access.
-            # For now, we return empty as MultiAgentStrategy doesn't hold connector references.
-            # In a real setup, this would be provided via the KnowledgeStore or AdaptationContext.
-            return {"actions": ["scale_up", "scale_down", "set_dimmer"]}
-
-        return {"error": f"unknown_tool: {tool}"}
+        return await self._tool_registry.execute(
+            tool_name=tool,
+            args=args,
+            state=state,
+            context=context,
+            deps=deps,
+        )
 
     def _format_system_context(self, state: SystemState, context: AdaptationContext) -> str:
         """Format system state and context into a JSON string."""

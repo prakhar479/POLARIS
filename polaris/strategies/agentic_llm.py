@@ -14,7 +14,7 @@ The strategy follows a step-by-step reasoning process:
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field
@@ -26,9 +26,10 @@ from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.abstractions.world_model import WorldModel
-from polaris.core.models import AdaptationAction, MetricValue, SystemState
+from polaris.core.models import AdaptationAction, SystemState
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+from polaris.tools import ToolRegistry, get_builtin_tools
 
 
 def _get_connector_class() -> Type["Connector"]:
@@ -145,6 +146,17 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self._per_system_prompts = per_system_prompts or {}
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
+        # Initialize tool registry with built-in tools
+        self._tool_registry = ToolRegistry(metrics=self.metrics)
+        all_tools = get_builtin_tools()
+        if self.allowed_tools:
+            # Only register allowed tools
+            for tool in all_tools:
+                if tool.name in self.allowed_tools:
+                    self._tool_registry.register(tool)
+        else:
+            self._tool_registry.register_all(all_tools)
+
         self._adaptation_count = 0
         self._success_count = 0
 
@@ -271,12 +283,43 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     self.metrics.increment(
                         "polaris.strategy.agentic.invalid_tool", tags={"tool": str(tool)}
                     )
-                    tool_result = {"error": f"tool_not_allowed: {tool}"}
+                    from polaris.tools import ToolError
+
+                    tool_result = ToolError(
+                        code="tool_not_allowed",
+                        message=f"tool_not_allowed: {tool}",
+                        recoverable=True,
+                    ).to_dict()
                 else:
                     try:
                         if self.logger:
                             self.logger.debug("Agentic tool requested", tool=tool, args=args)
-                        tool_result = await self._execute_tool(tool, args, state, context)
+
+                        # Build tool dependencies
+                        from polaris.tools import ToolDependencies
+
+                        connector = None
+                        if callable(self._get_connector):
+                            try:
+                                connector = self._get_connector(state.system_id)
+                            except Exception:
+                                connector = None
+
+                        deps = ToolDependencies(
+                            knowledge_store=self.knowledge_store,
+                            world_model=self.world_model,
+                            connector=connector,
+                            logger=self.logger,
+                            metrics=self.metrics,
+                        )
+
+                        tool_result = await self._tool_registry.execute(
+                            tool_name=tool,
+                            args=args,
+                            state=state,
+                            context=context,
+                            deps=deps,
+                        )
                         self.metrics.increment(
                             "polaris.strategy.agentic.tool_called",
                             tags={"tool": tool, "system_id": state.system_id},
@@ -399,11 +442,19 @@ class AgenticLLMStrategy(AdaptationStrategy):
         if "per_system_prompts" in config and isinstance(config["per_system_prompts"], dict):
             self._per_system_prompts = config["per_system_prompts"]
 
-        tools_cfg = config.get("tools")
-        if isinstance(tools_cfg, dict):
-            enabled = tools_cfg.get("enabled")
-            if isinstance(enabled, list):
-                self.allowed_tools = enabled
+        # Update allowed tools in registry if changed
+        if "tools" in config:
+            tools_cfg = config["tools"]
+            if isinstance(tools_cfg, dict):
+                enabled = tools_cfg.get("enabled")
+                if isinstance(enabled, list):
+                    self.allowed_tools = enabled
+                    # Re-initialize registry with new allowed tools
+                    self._tool_registry = ToolRegistry(metrics=self.metrics)
+                    all_tools = get_builtin_tools()
+                    for tool in all_tools:
+                        if tool.name in self.allowed_tools:
+                            self._tool_registry.register(tool)
 
         resil = config.get("resilience")
         if resil and hasattr(self.llm, "update_resilience"):
@@ -446,6 +497,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
             except Exception:
                 return self._system_prompt_template
 
+        tool_descriptions = self._get_tool_descriptions()
+
         return (
             "You are an adaptation controller. Use a short tool-using loop "
             "to reason about the system and then decide.\n"
@@ -455,7 +508,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
             '"actions": [{"type": "...", "parameters": {...}}]}} to finish.\n'
             "IMPORTANT: You can propose MULTIPLE actions in the 'actions' list if "
             "it helps achieve system goals more effectively.\n"
-            f"Allowed tools: {tools}. Keep steps minimal."
+            f"Allowed tools: {tools}.\n"
+            f"Tool descriptions:\n{tool_descriptions}\n"
+            "Keep steps minimal."
         )
 
     def _initial_user_prompt(self, state: SystemState, context: AdaptationContext) -> str:
@@ -500,143 +555,42 @@ class AgenticLLMStrategy(AdaptationStrategy):
             )
             return {}
 
+    def _get_tool_descriptions(self) -> str:
+        """Get descriptions of available tools for the system prompt."""
+        descriptions = []
+        for name, desc in self._tool_registry.get_tool_descriptions().items():
+            descriptions.append(f"- {name}: {desc}")
+        return "\n".join(descriptions)
+
     async def _execute_tool(
         self, tool: str, args: Dict[str, Any], state: SystemState, context: AdaptationContext
     ) -> Dict[str, Any]:
-        if tool == "get_recent_states":
-            window_seconds = int(max(1, min(int(args.get("window_seconds", 600)), 3600)))
-            limit = int(max(1, min(int(args.get("limit", 50)), 200)))
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            states = await self.knowledge_store.query_states(state.system_id, start, end)
-            if states:
-                states = states[-limit:]
-            out: List[Dict[str, Any]] = []
-            for s in states:
-                m = {}
-                for name, mv in s.metrics.items():
-                    try:
-                        m[name] = float(mv.value)
-                    except Exception:
-                        pass
-                out.append({"timestamp": s.timestamp.isoformat(), "metrics": m})
-            return {"states": out}
-        if tool == "summarize_metric_trends":
-            metric = str(args.get("metric", "")).strip()
-            if not metric:
-                return {"error": "missing_metric"}
-            window_seconds = int(max(1, min(int(args.get("window_seconds", 600)), 3600)))
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            states = await self.knowledge_store.query_states(state.system_id, start, end)
-            vals: List[float] = []
-            for s in states:
-                metric_value: Optional[MetricValue] = s.metrics.get(metric)
-                if metric_value is None or metric_value.value is None:
-                    continue
-                try:
-                    vals.append(float(metric_value.value))
-                except Exception:
-                    continue
-            if not vals:
-                return {"count": 0}
-            return {
-                "count": len(vals),
-                "min": min(vals),
-                "max": max(vals),
-                "avg": sum(vals) / len(vals),
-            }
-        if tool == "get_world_model_insights":
-            insights = await self.world_model.get_insights()
-            return {"insights": insights}
-        if tool == "predict_outcome":
-            block = args.get("candidate_action") or {}
-            if not isinstance(block, dict):
-                return {"error": "invalid_candidate_action"}
-            a_type = block.get("type")
-            params = block.get("parameters") or {}
-            if not a_type or not isinstance(params, dict):
-                return {"error": "invalid_candidate_action"}
-            candidate = AdaptationAction(
-                action_id=str(uuid.uuid4()),
-                action_type=str(a_type),
-                target_system=state.system_id,
-                parameters=params,
-            )
-            pred = await self.world_model.predict(candidate, state)
-            return {
-                "predicted_metrics": pred.predicted_metrics,
-                "confidence": pred.confidence,
-                "reasoning": pred.reasoning,
-            }
-        if tool == "get_action_history":
-            window_seconds = int(
-                max(1, min(int(args.get("window_seconds", 86400)), 30 * 24 * 3600))
-            )
-            limit = int(max(1, min(int(args.get("limit", 50)), 500)))
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            history = await self.knowledge_store.query_actions(state.system_id, start, end)
-            items = []
-            for action, result in history[-limit:]:
-                completed_at = getattr(result, "completed_at", None)
-                items.append(
-                    {
-                        "action_id": getattr(action, "action_id", None),
-                        "type": getattr(action, "action_type", None),
-                        "parameters": getattr(action, "parameters", {}),
-                        "status": getattr(getattr(result, "status", None), "value", None),
-                        "error": getattr(result, "error_message", None),
-                        "completed_at": completed_at.isoformat() if completed_at else None,
-                    }
-                )
-            return {"items": items}
-        if tool == "list_supported_actions":
-            # Prefer connector-reported supported actions if available
-            if callable(self._get_connector):
-                try:
-                    connector = self._get_connector(state.system_id)
-                except Exception:
-                    connector = None
-                if connector is not None and hasattr(connector, "get_supported_actions"):
-                    try:
-                        actions = await connector.get_supported_actions()
-                        types = sorted(
-                            {
-                                action_type
-                                for a in (actions or [])
-                                if (action_type := getattr(a, "action_type", None))
-                            }
-                        )
-                        if types:
-                            return {"action_types": types, "source": "connector"}
-                    except Exception as e:
-                        if self.logger:
-                            self.logger.warning(
-                                "Connector get_supported_actions failed, falling back to history",
-                                system_id=state.system_id,
-                                error=str(e),
-                            )
-                        self.metrics.increment(
-                            "polaris.strategy.agentic.tool_fallback",
-                            tags={
-                                "tool": "list_supported_actions",
-                                "reason": "connector_failed",
-                            },
-                        )
-            # Fallback to historical inference
-            window_seconds = int(
-                max(1, min(int(args.get("window_seconds", 30 * 24 * 3600)), 365 * 24 * 3600))
-            )
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-            history = await self.knowledge_store.query_actions(state.system_id, start, end)
-            types = sorted(
-                {
-                    action_type
-                    for a, _ in history
-                    if (action_type := getattr(a, "action_type", None))
-                }
-            )
-            return {"action_types": types, "source": "historical"}
-        return {"error": "unknown_tool"}
+        """Execute a tool directly (deprecated).
+
+        This method is maintained for backward compatibility but delegates
+        to the ToolRegistry. New code should use the registry directly.
+        """
+        from polaris.tools import ToolDependencies
+
+        connector = None
+        if callable(self._get_connector):
+            try:
+                connector = self._get_connector(state.system_id)
+            except Exception:
+                connector = None
+
+        deps = ToolDependencies(
+            knowledge_store=self.knowledge_store,
+            world_model=self.world_model,
+            connector=connector,
+            logger=self.logger,
+            metrics=self.metrics,
+        )
+
+        return await self._tool_registry.execute(
+            tool_name=tool,
+            args=args,
+            state=state,
+            context=context,
+            deps=deps,
+        )
