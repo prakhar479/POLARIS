@@ -8,7 +8,7 @@
 #
 # Key Features:
 # - Manage multiple systems concurrently
-# - Multiple adaptation strategies (threshold, LLM reasoning, hybrid, agentic)
+# - Multiple adaptation strategies (threshold, LLM reasoning, hybrid, agentic, multi-agent)
 # - Observability with metrics and structured/human-readable logging
 # - Meta-learning for continuous optimization
 # - World models for predictive capabilities
@@ -24,8 +24,9 @@
 # Each system requires a connector to communicate with it.
 #
 # Supported connector types:
-#   - swim:       SWIM web application server pool
-#   - wildfire:   Wildfire UAV-fire simulation
+#   - swim:        SWIM web application server pool
+#   - wildfire:    Wildfire UAV-fire simulation
+#   - kubernetes:  Kubernetes cluster (pods, deployments)
 #
 
 systems:
@@ -53,6 +54,16 @@ systems:
   #     # Option B: Using host and port (if base_url not provided)
   #     # host: "localhost"
   #     # port: 5000
+
+  # Example 3: Kubernetes System (commented out)
+  # Connects to a Kubernetes cluster to monitor pods and scale deployments.
+  # - id: "k8s-prod"
+  #   connector_type: "kubernetes"
+  #   enabled: true
+  #   connection:
+  #     kubeconfig_path: null   # Path to kubeconfig file; null uses default (~/.kube/config)
+  #     in_cluster: false       # Set to true when running inside the cluster
+  #     namespace: "default"    # Namespace to monitor and manage
 
 ################################################################################
 # 2. MONITORING CONFIGURATION
@@ -257,6 +268,58 @@ strategy:
   #     rps: 2
   #     burst: 4
   #     concurrency: 4
+  #     max_retries: 4
+  #     base_backoff_ms: 200
+  #     max_backoff_ms: 4000
+
+  ###############################################################################
+  # STRATEGY E: Multi-Agent Committee Strategy
+  ###############################################################################
+  #
+  # A committee of three specialized LLM agents that collaborate:
+  #   1. Diagnostician  - Detects anomalies and identifies root causes
+  #   2. Planner        - Proposes a sequence of adaptation actions
+  #   3. SafetyValidator - Reviews the plan and approves/rejects/filters it
+  #
+  # Each agent can use a DIFFERENT LLM provider, temperature, and system
+  # prompt, enabling fully autonomous multi-agent setups.
+  #
+  # Suited for: High-stakes systems needing multi-perspective analysis
+  #
+  # multi_agent:
+  #   provider: google          # Shared/fallback LLM provider (default: google)
+  #   temperature: 0.1          # Shared/fallback temperature (default: 0.1)
+  #   steps_limit: 3            # Default max reasoning steps per agent stage (default: 3)
+  #   system_description: "SWIM web application server pool"
+  #
+  #   # -------- Per-agent overrides (all optional) --------
+  #   # Each agent block can set: provider, temperature, resilience,
+  #   # system_prompt, max_tokens, steps_limit, tools.
+  #
+  #   diagnostician:
+  #     provider: google        # Use a fast/cheap model for detection
+  #     temperature: 0.0        # Deterministic: either anomaly or not
+  #     steps_limit: 5          # Allow more tool-use steps for diagnosis
+  #     resilience:
+  #       rps: 2
+  #       burst: 4
+  #
+  #   planner:
+  #     provider: openai        # Use a smarter model for planning
+  #     temperature: 0.7        # Creative to explore multiple plans
+  #     tools:                  # Restricted tools if desired
+  #       - predict_outcome
+  #       - get_action_history
+  #
+  #   validator:
+  #     provider: google
+  #     temperature: 0.0        # Conservative: reject borderline plans
+  #     max_tokens: 2000
+  #
+  #   resilience:               # Shared resilience fallback for all agents
+  #     rps: 1
+  #     burst: 2
+  #     concurrency: 2
   #     max_retries: 4
   #     base_backoff_ms: 200
   #     max_backoff_ms: 4000

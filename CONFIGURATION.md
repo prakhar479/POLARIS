@@ -447,13 +447,13 @@ The framework validates configuration at startup:
 
 - `id` cannot be empty
 - `connector_type` must be one of the types registered in the connector factory registry
-  (built-ins: `"swim"`, `"wildfire"`)
+  (built-ins: `"swim"`, `"wildfire"`, `"kubernetes"`)
 - `port` must be a valid integer between 1-65535 (for connectors that use it)
 
 ### Strategy Configuration Validation
 
 - `type` must be one of the types registered in the strategy factory registry
-  (built-ins: `"threshold"`, `"llm_reasoning"`, `"hybrid"`, `"agentic_llm"`)
+  (built-ins: `"threshold"`, `"llm_reasoning"`, `"hybrid"`, `"agentic_llm"`, `"multi_agent"`)
 - For threshold strategy:
   - High thresholds must be greater than low thresholds
   - `cooldown_seconds` must be non-negative
@@ -558,6 +558,80 @@ strategy:
 - Set `GOOGLE_API_KEY` or `OPENAI_API_KEY` environment variable
 - Install LLM client libraries: `pip install google-generativeai` or `pip install openai`
 
+### Multi-Agent Strategy
+
+A committee of three specialized LLM agents — **Diagnostician**, **Planner**, and **SafetyValidator** — collaborate sequentially. Each agent can use its own LLM provider, temperature, and system prompt.
+
+```yaml
+strategy:
+  type: "multi_agent"
+  multi_agent:
+    provider: google             # Shared/fallback LLM provider
+    temperature: 0.1             # Shared/fallback temperature
+    steps_limit: 3               # Default max reasoning steps per agent (new)
+    system_description: "SWIM web application server pool"
+
+    # --- Per-agent overrides (all optional) ---
+    # Omit any block to inherit shared values.
+
+    diagnostician:
+      provider: google           # Fast model for anomaly detection
+      temperature: 0.0           # Deterministic
+      max_tokens: 1024
+      # system_prompt: |
+      #   You are a precise diagnostician for {system_description}.
+      #   Return strict JSON only.
+      resilience:
+        rps: 2
+        burst: 4
+        max_retries: 4
+        base_backoff_ms: 200
+        max_backoff_ms: 4000
+
+    planner:
+      provider: openai           # Stronger creative model for planning
+      temperature: 0.2
+      max_tokens: 1500
+      # system_prompt: |
+      #   You are a creative Planner for {system_description}.
+      #   Propose concrete, reversible actions.
+
+    validator:
+      provider: google
+      temperature: 0.0           # Conservative: reject borderline plans
+      max_tokens: 1500
+      tools:                     # Restricted tools for validator
+        - get_world_model_insights
+        - predict_outcome
+      # system_prompt: |
+      #   You are a conservative Safety Validator for {system_description}.
+      #   Only approve safe, reversible plans.
+
+    resilience:                  # Shared fallback resilience
+      rps: 1
+      burst: 2
+      concurrency: 2
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+```
+
+**Agent pipeline:**
+
+1. **Diagnostician** — Receives system state → returns `is_anomaly_detected`, `issues`, `root_causes`, `severity`.
+2. **Planner** — Receives diagnosis → returns `plans` (list of typed actions) and `rationale`.
+3. **SafetyValidator** — Receives plan → returns `approved`, `reasoning`, and `safe_actions` (approved subset).
+
+**Hot-reloadable parameters** (without restart):
+
+The following parameters can be updated via the configuration file and will take effect immediately:
+- `temperature`, `steps_limit`, `system_description`
+- `diagnostician.temperature`, `planner.temperature`, `validator.temperature`
+- `diagnostician.steps_limit`, `planner.steps_limit`, `validator.steps_limit`
+- `diagnostician.system_prompt`, `planner.system_prompt`, `validator.system_prompt`
+- `diagnostician.max_tokens`, `planner.max_tokens`, `validator.max_tokens`
+- `resilience.*` (shared + per-agent, when using resilient LLM client)
+
 ### LLM Resilience (Retries, Rate Limiting, Key Rotation)
 
 You can enable a resilience layer for LLM calls that adds retries with exponential backoff, async rate limiting, optional concurrency caps, and API key rotation.
@@ -610,6 +684,64 @@ systems:
       collection_interval: 5 # seconds
 ```
 
+### Wildfire Connector
+
+See the full [Wildfire Connector](#wildfire-connector) section earlier in this document.
+
+### Kubernetes Connector
+
+Connects to a Kubernetes cluster to monitor pods and scale deployments. Works both in-cluster (running inside a pod) and externally via a kubeconfig file.
+
+```yaml
+systems:
+  - id: "k8s-prod"
+    connector_type: "kubernetes"
+    enabled: true
+    connection:
+      kubeconfig_path: null   # Path to kubeconfig file (null = ~/.kube/config)
+      in_cluster: false       # Set to true when running as a pod inside the cluster
+      namespace: "default"    # Kubernetes namespace to monitor and manage
+    monitoring:
+      collection_interval: 10
+```
+
+**Connection parameters:**
+
+- `kubeconfig_path` (string, optional): Absolute path to a kubeconfig file. When `null`, uses the default kubeconfig (`~/.kube/config` or `KUBECONFIG` env var).
+- `in_cluster` (boolean): Set to `true` when Polaris itself runs as a Kubernetes pod. Default: `false`.
+- `namespace` (string): Namespace to watch. Default: `"default"`.
+
+**Metrics provided:**
+
+- `pod_count` (int): Total pods in namespace
+- `running_pods` (int): Pods in Running state
+- `pending_pods` (int): Pods in Pending state
+- `failed_pods` (int): Pods in Failed state
+- `deployment_available_replicas` (int): Available replicas across deployments
+- `deployment_desired_replicas` (int): Desired replicas across deployments
+
+**Supported actions:**
+
+- `scale_deployment`: Scale a deployment to a target replica count.
+  ```yaml
+  parameters:
+    deployment: "my-deployment"
+    replicas: 3
+  ```
+- `restart_deployment`: Trigger a rolling restart of a deployment.
+  ```yaml
+  parameters:
+    deployment: "my-deployment"
+  ```
+
+**Installation requirements:**
+
+```bash
+pip install kubernetes
+```
+
+**Permissions:** The service account or kubeconfig must allow `get`, `list`, `watch`, `update`, `patch` on `pods`, `deployments`, and `replicasets`.
+
 ## Observability Configuration
 
 ### Logging
@@ -657,6 +789,7 @@ What is hot-reloaded:
 - Threshold strategy: `cooldown_seconds` and per-metric `thresholds.{metric}.{high|low}`
 - LLM reasoning: `temperature`, `system_description`, `system_prompt`, `per_system_prompts`, and LLM `resilience` (when using the resilient client)
 - Hybrid strategy: `selection_mode`, `min_confidence`, and sub-strategy parameters (index-matched), including resilience for LLM sub-strategies
+- Multi-agent strategy: `temperature`, `system_description`, per-agent `temperature`/`system_prompt`/`max_tokens`, and per-agent `resilience` (when using the resilient client)
 
 Limitations:
 - Changing the strategy type (e.g., threshold → hybrid) requires a restart
@@ -997,9 +1130,9 @@ Configure the managed systems to monitor and adapt.
 
 ### Strategy
 
-| Field           | Type   | Default     | Description                                                  |
-| --------------- | ------ | ----------- | ------------------------------------------------------------ |
-| `strategy.type` | string | `threshold` | Strategy type: threshold, llm_reasoning, hybrid, agentic_llm |
+| Field           | Type   | Default     | Description                                                                         |
+| --------------- | ------ | ----------- | ----------------------------------------------------------------------------------- |
+| `strategy.type` | string | `threshold` | Strategy type: `threshold`, `llm_reasoning`, `hybrid`, `agentic_llm`, `multi_agent` |
 
 **Threshold Strategy Parameters:**
 
@@ -1042,6 +1175,41 @@ Configure the managed systems to monitor and adapt.
 | `strategy.agentic_llm.system_prompt`      | string  | -        | Custom system prompt template (supports `{system_id}`, `{allowed_tools}`) |
 | `strategy.agentic_llm.per_system_prompts` | object  | -        | Per-system prompt overrides keyed by `systems[].id`                       |
 | `strategy.agentic_llm.tools.enabled`      | array   | -        | Enabled tools array                                                       |
+
+**Multi-Agent Strategy Parameters:**
+
+| Field                                             | Type        | Default                           | Description                                              |
+| ------------------------------------------------- | ----------- | --------------------------------- | -------------------------------------------------------- |
+| `strategy.multi_agent.provider`                   | string      | `google`                          | Shared/fallback LLM provider                             |
+| `strategy.multi_agent.temperature`                | float       | `0.1`                             | Shared/fallback sampling temperature                     |
+| `strategy.multi_agent.steps_limit`                | integer     | `3`                               | Shared/fallback max reasoning steps per agent stage      |
+| `strategy.multi_agent.system_description`         | string      | `A generic managed cloud system`  | System description embedded in default agent prompts     |
+| `strategy.multi_agent.resilience.*`               | object      | -                                 | Shared LLM resilience settings (see resilience section)  |
+| `strategy.multi_agent.diagnostician`              | object      | -                                 | Per-agent override for Diagnostician role                |
+| `strategy.multi_agent.diagnostician.provider`     | string      | inherits shared                   | LLM provider for the Diagnostician agent                 |
+| `strategy.multi_agent.diagnostician.temperature`  | float       | inherits shared                   | Sampling temperature for the Diagnostician agent         |
+| `strategy.multi_agent.diagnostician.system_prompt`| string      | built-in                          | Custom system prompt for Diagnostician                   |
+| `strategy.multi_agent.diagnostician.max_tokens`   | integer     | `1024`                            | Max tokens for Diagnostician responses                   |
+| `strategy.multi_agent.diagnostician.steps_limit`  | integer     | inherits shared                   | Max reasoning steps for Diagnostician                    |
+| `strategy.multi_agent.diagnostician.tools`        | array       | all built-in tools                | Available tools for Diagnostician                        |
+| `strategy.multi_agent.diagnostician.resilience.*` | object      | inherits shared                   | Per-agent LLM resilience override                        |
+| `strategy.multi_agent.planner`                    | object      | -                                 | Per-agent override for Planner role                      |
+| `strategy.multi_agent.planner.provider`           | string      | inherits shared                   | LLM provider for the Planner agent                       |
+| `strategy.multi_agent.planner.temperature`        | float       | inherits shared                   | Sampling temperature for the Planner agent               |
+| `strategy.multi_agent.planner.system_prompt`      | string      | built-in                          | Custom system prompt for Planner                         |
+| `strategy.multi_agent.planner.max_tokens`         | integer     | `1500`                            | Max tokens for Planner responses                         |
+| `strategy.multi_agent.planner.steps_limit`        | integer     | inherits shared                   | Max reasoning steps for Planner                          |
+| `strategy.multi_agent.planner.tools`              | array       | all built-in tools                | Available tools for Planner                              |
+| `strategy.multi_agent.planner.resilience.*`       | object      | inherits shared                   | Per-agent LLM resilience override                        |
+| `strategy.multi_agent.validator`                  | object      | -                                 | Per-agent override for SafetyValidator role              |
+| `strategy.multi_agent.validator.provider`         | string      | inherits shared                   | LLM provider for the SafetyValidator agent               |
+| `strategy.multi_agent.validator.temperature`      | float       | inherits shared                   | Sampling temperature for the SafetyValidator agent       |
+| `strategy.multi_agent.validator.system_prompt`    | string      | built-in                          | Custom system prompt for SafetyValidator                 |
+| `strategy.multi_agent.validator.max_tokens`       | integer     | `1500`                            | Max tokens for SafetyValidator responses                 |
+| `strategy.multi_agent.validator.steps_limit`      | integer     | inherits shared                   | Max reasoning steps for SafetyValidator                  |
+| `strategy.multi_agent.validator.tools`            | array       | all built-in tools                | Available tools for SafetyValidator                      |
+| `strategy.multi_agent.validator.resilience.*`     | object      | inherits shared                   | Per-agent LLM resilience override                        |
+| `strategy.multi_agent.agent_prompts`              | object      | -                                 | Shorthand dict for per-role system prompts               |
 
 ### World Model & Knowledge Store
 

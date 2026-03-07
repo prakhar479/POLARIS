@@ -55,7 +55,7 @@ Polaris includes built-in connectors for common exemplar systems:
 
 - **SWIM**: Connects to SWIM (Simulated Web Infrastructure Manager) via TCP.
 - **Wildfire**: Connects to the WildFire multi-UAV fire suppression simulation via REST API.
-- **Kubernetes**: Connects to Kubernetes clusters (natively or via kubeconfig) to monitor pods and scale deployments.
+- **Kubernetes**: Connects to Kubernetes clusters (natively or via kubeconfig) to monitor pods and scale deployments. Requires `pip install kubernetes`.
 
 See [CONFIGURATION.md](./CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
 
@@ -146,12 +146,39 @@ CLI options override config file settings.
 
 Polaris supports multiple LLM-powered strategies:
 
-- `llm_reasoning`: single-shot LLM decision-making
-- `agentic_llm`: iterative tool-using loop with the LLM calling safe tools
-- `multi_agent`: advanced multi-agent committee (Diagnostician -> Planner -> Validator)
-- `hybrid`: combine strategies, including LLM-based ones
+- `llm_reasoning`: Single-shot LLM decision-making with reasoning
+- `agentic_llm`: Iterative tool-using loop where the LLM calls built-in tools (metrics, history, predictions)
+- `multi_agent`: Committee of three specialized agents (Diagnostician → Planner → SafetyValidator); each agent can use its own LLM provider, temperature, and prompt
+- `hybrid`: Combine any strategies (including LLM-based ones) with configurable selection mode
 
 You can choose the LLM provider per strategy. Supported providers: `google` (Gemini, default) and `openai`.
+
+Example (multi-agent strategy with per-agent LLM config):
+
+```yaml
+strategy:
+  type: multi_agent
+  multi_agent:
+    provider: google           # Shared/fallback provider
+    temperature: 0.1
+    steps_limit: 3             # Max reasoning steps per agent (new)
+    system_description: "SWIM web application server pool"
+    diagnostician:
+      temperature: 0.0         # Deterministic detection
+      steps_limit: 5           # More steps for deep diagnosis
+    planner:
+      provider: openai         # Stronger model for planning
+      temperature: 0.2
+      tools:                   # Task-specific tool restriction
+        - predict_outcome
+        - get_action_history
+    validator:
+      temperature: 0.0         # Conservative safety check
+    resilience:
+      rps: 1
+      burst: 2
+      max_retries: 4
+```
 
 Example (agentic LLM strategy):
 
@@ -179,7 +206,7 @@ strategy:
       max_backoff_ms: 4000
 ```
 
-For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `hybrid`, each `llm_reasoning` sub-strategy can specify its own provider under its block.
+For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `hybrid`, each sub-strategy can specify its own provider. The `multi_agent` strategy also supports `hybrid` as a container.
 
 The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
 

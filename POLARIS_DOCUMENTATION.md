@@ -289,6 +289,7 @@ polaris = Polaris(
 - **Metrics-First**: Comprehensive metrics collection throughout
 
 ### Typical Development Flow
+
 1. Implement required interfaces for your use case
 2. Create configuration file defining systems and strategy
 3. Initialize Polaris with custom components
@@ -296,14 +297,23 @@ polaris = Polaris(
 5. Monitor via logs, metrics, or dashboard
 
 ### Built-in Implementations
+
 - **ThresholdReactiveStrategy**: Triggers adaptations when metrics cross thresholds
+- **LLMReasoningStrategy**: Single-shot LLM-based decision making with system description and goals
+- **AgenticLLMStrategy**: Tool-using iterative LLM loop (6 built-in tools: metrics, history, predictions, connector-aware action discovery)
+- **MultiAgentStrategy**: Committee of Diagnostician → Planner → SafetyValidator agents. Uses iterative tool-using loops for each stage; each agent independently configurable (provider, temperature, prompt, tools, reasoning steps, resilience).
+- **HybridStrategy**: Combine any strategies with `first`, `priority`, or `confidence` selection
 - **SWIMConnector**: Connects to SWIM exemplar system
-- **StatisticalWorldModel**: Uses mean/std for simple predictions and, when enabled via configuration, adds lightweight Kalman-style smoothing and simple regime tracking ("low", "normal", "high") with uncertainty-aware reasoning.
+- **WildfireConnector**: Connects to WildFire UAV/fire simulation REST API
+- **KubernetesConnector**: Connects to Kubernetes clusters; monitors pods and scales deployments
+- **StatisticalWorldModel**: Uses mean/std for simple predictions; optionally adds Kalman-style smoothing and regime tracking ("low", "normal", "high") with uncertainty-aware reasoning
 - **InMemoryKnowledgeStore**: Non-persistent storage for testing
-- **StatisticalMetaLearner**: Intelligent parameter optimization using Bayesian optimization with Gaussian Processes. Learns from historical data to suggest optimal parameter configurations, with fallback to rule-based heuristics when insufficient data is available. Integrates world model insights for uncertainty-aware confidence adjustment.
-- **LLMMetaLearner**: LLM-powered optimization
+- **SQLiteKnowledgeStore**: Persistent SQLite-backed knowledge store
+- **StatisticalMetaLearner**: Bayesian optimization with Gaussian Processes; integrates world model insights for uncertainty-aware confidence adjustment; falls back to rule-based heuristics
+- **LLMMetaLearner**: LLM-powered optimization with per-system prompt overrides
 
 ### Extension Points Summary
+
 - **Connector**: Integrate new managed systems
 - **Strategy**: Implement custom adaptation logic
 - **WorldModel**: Add advanced behavior modeling (ML, etc.)

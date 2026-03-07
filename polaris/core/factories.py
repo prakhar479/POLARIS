@@ -297,6 +297,55 @@ def _register_default_strategy_factories() -> None:
                 )
                 sub_strategies.append((sub_agent, priority))
 
+            elif s_type == "multi_agent":
+                from polaris.strategies.multi_agent import AgentConfig
+
+                ma_cfg = s.get("multi_agent", {}) or {}
+                ma_provider = ma_cfg.get("provider", "google")
+                ma_shared_llm = _llm.create_llm_client(
+                    ma_provider, resilience=ma_cfg.get("resilience")
+                )
+
+                def _build_agent_cfg_hybrid(
+                    role_cfg: Optional[dict], ma_provider: str = ma_provider
+                ) -> Optional[AgentConfig]:
+                    if not isinstance(role_cfg, dict) or not role_cfg:
+                        return None
+                    rp = role_cfg.get("provider")
+                    rr = role_cfg.get("resilience")
+                    rc = None
+                    if rp:
+                        rc = _llm.create_llm_client(rp, resilience=rr)
+                    elif rr:
+                        rc = _llm.create_llm_client(ma_provider, resilience=rr)
+                    return AgentConfig(
+                        llm_client=rc,
+                        temperature=role_cfg.get("temperature"),
+                        system_prompt=role_cfg.get("system_prompt"),
+                        max_tokens=role_cfg.get("max_tokens"),
+                        steps_limit=role_cfg.get("steps_limit"),
+                        allowed_tools=role_cfg.get("tools"),
+                    )
+
+                sub_ma = MultiAgentStrategy(
+                    llm_client=ma_shared_llm,
+                    knowledge_store=knowledge_store,
+                    world_model=world_model,
+                    temperature=float(ma_cfg.get("temperature", 0.1)),
+                    system_description=ma_cfg.get(
+                        "system_description", "A generic managed cloud system"
+                    ),
+                    steps_limit=int(ma_cfg.get("steps_limit", 3)),
+                    allowed_tools=ma_cfg.get("tools"),
+                    diagnostician_config=_build_agent_cfg_hybrid(ma_cfg.get("diagnostician")),
+                    planner_config=_build_agent_cfg_hybrid(ma_cfg.get("planner")),
+                    validator_config=_build_agent_cfg_hybrid(ma_cfg.get("validator")),
+                    agent_prompts=ma_cfg.get("agent_prompts"),
+                    logger=logger,
+                    metrics=metrics,
+                )
+                sub_strategies.append((sub_ma, priority))
+
             else:
                 # Fallback to threshold for unknown types
                 sub = ThresholdReactiveStrategy(logger=logger, metrics=metrics)
@@ -359,19 +408,55 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
+        from polaris.strategies.multi_agent import AgentConfig
+
         agent_conf = strategy_cfg.multi_agent or {}
         temperature = float(agent_conf.get("temperature", 0.1))
         system_description = agent_conf.get("system_description", "A generic managed cloud system")
 
         provider = agent_conf.get("provider", "google")
-        llm_client = _llm.create_llm_client(provider, resilience=agent_conf.get("resilience"))
+        shared_llm = _llm.create_llm_client(provider, resilience=agent_conf.get("resilience"))
+
+        def _build_agent_config(role_cfg: Optional[dict]) -> Optional[AgentConfig]:
+            """Build an AgentConfig from a per-agent config dict."""
+            if not isinstance(role_cfg, dict) or not role_cfg:
+                return None
+            role_provider = role_cfg.get("provider")
+            role_resilience = role_cfg.get("resilience")
+            role_client = None
+            if role_provider:
+                role_client = _llm.create_llm_client(role_provider, resilience=role_resilience)
+            elif role_resilience:
+                # Same provider as shared but different resilience
+                role_client = _llm.create_llm_client(provider, resilience=role_resilience)
+            return AgentConfig(
+                llm_client=role_client,
+                temperature=role_cfg.get("temperature"),
+                system_prompt=role_cfg.get("system_prompt"),
+                max_tokens=role_cfg.get("max_tokens"),
+                steps_limit=role_cfg.get("steps_limit"),
+                allowed_tools=role_cfg.get("tools"),
+            )
+
+        diagnostician_config = _build_agent_config(agent_conf.get("diagnostician"))
+        planner_config = _build_agent_config(agent_conf.get("planner"))
+        validator_config = _build_agent_config(agent_conf.get("validator"))
+
+        # Top-level agent_prompts dict alternative (shorthand)
+        agent_prompts: Optional[Dict[str, str]] = agent_conf.get("agent_prompts")
 
         return MultiAgentStrategy(
-            llm_client=llm_client,
+            llm_client=shared_llm,
             knowledge_store=knowledge_store,
             world_model=world_model,
             temperature=temperature,
             system_description=system_description,
+            steps_limit=int(agent_conf.get("steps_limit", 3)),
+            allowed_tools=agent_conf.get("tools"),
+            diagnostician_config=diagnostician_config,
+            planner_config=planner_config,
+            validator_config=validator_config,
+            agent_prompts=agent_prompts,
             logger=logger,
             metrics=metrics,
         )
