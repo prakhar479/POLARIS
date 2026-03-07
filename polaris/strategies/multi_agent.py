@@ -35,6 +35,10 @@ from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.abstractions.world_model import WorldModel
 from polaris.core.models import AdaptationAction, SystemState
+from polaris.infrastructure.constants import (
+    DEFAULT_MAX_TOKENS_DIAGNOSTICIAN,
+    DEFAULT_MAX_TOKENS_PLANNER,
+)
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 from polaris.tools import ToolDependencies, ToolRegistry, get_builtin_tools
@@ -629,7 +633,11 @@ class MultiAgentStrategy(AdaptationStrategy):
         llm = self._agent_llm(cfg)
         temp = self._agent_temperature(cfg)
         prompt = self._agent_prompt(cfg, default_prompt_tmpl)
-        max_tokens = cfg.max_tokens or (1024 if role == "diagnostician" else 1500)
+        max_tokens = cfg.max_tokens or (
+            DEFAULT_MAX_TOKENS_DIAGNOSTICIAN
+            if role == "diagnostician"
+            else DEFAULT_MAX_TOKENS_PLANNER
+        )
         steps_limit = self._agent_steps_limit(cfg)
         allowed_tools = self._agent_allowed_tools(cfg)
 

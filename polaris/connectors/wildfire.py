@@ -14,6 +14,13 @@ from polaris.core.models import (
     MetricValue,
     SystemState,
 )
+from polaris.infrastructure.constants import (
+    DEFAULT_CONNECTOR_TIMEOUT,
+    DEFAULT_WILDFIRE_PORT,
+    HTTP_STATUS_MAX_SUCCESS,
+    HTTP_STATUS_MIN_SUCCESS,
+    MILLISECONDS_PER_SECOND,
+)
 
 if TYPE_CHECKING:
     import httpx
@@ -31,9 +38,9 @@ class WildfireConnector(Connector):
 
     def __init__(
         self,
-        base_url: str = "http://localhost:5000",
+        base_url: str = f"http://localhost:{DEFAULT_WILDFIRE_PORT}",
         system_id: str = "wildfire",
-        timeout: float = 10.0,
+        timeout: float = DEFAULT_CONNECTOR_TIMEOUT,
         session_id: Optional[str] = None,
         auto_create_session: bool = True,
         logger: Optional[Logger] = None,
@@ -250,20 +257,24 @@ class WildfireConnector(Connector):
             client = await self._ensure_client()
             action_type = action.action_type.lower()
 
-            if action_type == "wildfire_reset":
-                resp = await client.post("/api/v1/sim/reset")
-            elif action_type == "wildfire_pause":
-                resp = await client.post("/api/v1/sim/pause")
-            elif action_type == "wildfire_resume":
-                resp = await client.post("/api/v1/sim/resume")
-            elif action_type == "wildfire_step":
-                resp = await client.post("/api/v1/sim/step")
-            elif action_type == "wildfire_move":
-                actions_payload = (action.parameters or {}).get("actions", [])
-                resp = await client.post("/api/v1/sim/action", json=actions_payload)
-            elif action_type == "wildfire_batch_actions":
-                payload = {"actions": (action.parameters or {}).get("actions", [])}
-                resp = await client.post("/api/v1/sim/batch-actions", json=payload)
+            # Action handlers mapping
+            action_handlers = {
+                "wildfire_reset": lambda: client.post("/api/v1/sim/reset"),
+                "wildfire_pause": lambda: client.post("/api/v1/sim/pause"),
+                "wildfire_resume": lambda: client.post("/api/v1/sim/resume"),
+                "wildfire_step": lambda: client.post("/api/v1/sim/step"),
+                "wildfire_move": lambda: client.post(
+                    "/api/v1/sim/action", json=(action.parameters or {}).get("actions", [])
+                ),
+                "wildfire_batch_actions": lambda: client.post(
+                    "/api/v1/sim/batch-actions",
+                    json={"actions": (action.parameters or {}).get("actions", [])},
+                ),
+            }
+
+            handler = action_handlers.get(action_type)
+            if handler:
+                resp = await handler()
             else:
                 if self._metrics:
                     self._metrics.increment("polaris.connector.wildfire.actions_unsupported")
@@ -274,7 +285,7 @@ class WildfireConnector(Connector):
                     error_message=f"Unsupported action type: {action.action_type}",
                 )
 
-            status_success = 200 <= resp.status_code < 300
+            status_success = HTTP_STATUS_MIN_SUCCESS <= resp.status_code < HTTP_STATUS_MAX_SUCCESS
             response_data: Dict[str, Any] = {}
             try:
                 response_data = resp.json()
@@ -286,7 +297,7 @@ class WildfireConnector(Connector):
                 None if status_success else response_data.get("error") or f"HTTP {resp.status_code}"
             )
 
-            duration_ms = int((time.monotonic() - start) * 1000)
+            duration_ms = int((time.monotonic() - start) * MILLISECONDS_PER_SECOND)
             if self._metrics:
                 self._metrics.histogram(
                     "polaris.connector.wildfire.action_execution_duration_ms",
@@ -313,7 +324,7 @@ class WildfireConnector(Connector):
                 execution_time_ms=duration_ms,
             )
         except Exception as exc:
-            duration_ms = int((time.monotonic() - start) * 1000)
+            duration_ms = int((time.monotonic() - start) * MILLISECONDS_PER_SECOND)
             if self._metrics:
                 self._metrics.histogram(
                     "polaris.connector.wildfire.action_execution_duration_ms",

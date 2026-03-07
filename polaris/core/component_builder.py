@@ -7,6 +7,11 @@ components without instantiating the full framework.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
+from polaris.infrastructure.constants import (
+    DEFAULT_MAX_STATES_PER_SYSTEM,
+    DEFAULT_MONITORING_INTERVAL,
+)
+
 if TYPE_CHECKING:
     from polaris.abstractions import (
         AdaptationStrategy,
@@ -181,7 +186,10 @@ class ComponentBuilder:
             sqlite_cfg = ks_cfg.get("sqlite", {}) if isinstance(ks_cfg.get("sqlite"), dict) else {}
             db_path = sqlite_cfg.get("db_path") or ks_cfg.get("db_path")
             max_states = int(
-                sqlite_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 5000))
+                sqlite_cfg.get(
+                    "max_states_per_system",
+                    ks_cfg.get("max_states_per_system", DEFAULT_MAX_STATES_PER_SYSTEM),
+                )
             )
         else:
             if ks_type != "memory":
@@ -531,7 +539,7 @@ class ComponentBuilder:
         logger: "Logger",
     ) -> float:
         """Return the validated monitoring interval in seconds."""
-        interval: float = 30.0
+        interval: float = DEFAULT_MONITORING_INTERVAL
 
         if hasattr(config, "monitoring") and config.monitoring:
             interval = config.monitoring.get("interval_seconds", interval)
@@ -541,13 +549,15 @@ class ComponentBuilder:
         try:
             interval = float(interval)
         except Exception:
-            logger.warning(f"Invalid monitoring interval {interval}, falling back to 30 seconds")
-            interval = 30.0
+            logger.warning(
+                f"Invalid monitoring interval {interval}, falling back to {DEFAULT_MONITORING_INTERVAL} seconds"
+            )
+            interval = DEFAULT_MONITORING_INTERVAL
 
         if interval <= 0:
             logger.warning(
-                f"Non-positive monitoring interval {interval}, falling back to 30 seconds"
+                f"Non-positive monitoring interval {interval}, falling back to {DEFAULT_MONITORING_INTERVAL} seconds"
             )
-            interval = 30.0
+            interval = DEFAULT_MONITORING_INTERVAL
 
         return interval

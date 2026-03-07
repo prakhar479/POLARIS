@@ -14,6 +14,8 @@ from datetime import datetime
 from io import StringIO
 from typing import Any, Deque, Dict, List, Optional, cast
 
+from polaris.infrastructure.constants import DEFAULT_JSON_INDENT
+
 try:
     from rich.console import Console
     from rich.layout import Layout
@@ -63,7 +65,7 @@ class _EmbeddedInteractiveCLI:
     def _print_json(self, data: Any) -> None:
         import json
 
-        self._append(json.dumps(data, indent=2, default=str))
+        self._append(json.dumps(data, indent=DEFAULT_JSON_INDENT, default=str))
 
     def do_clear(self, arg: str) -> None:
         _ = arg

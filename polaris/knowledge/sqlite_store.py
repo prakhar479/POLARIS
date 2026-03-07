@@ -27,6 +27,7 @@ from polaris.core.models import (
     MetricValue,
     SystemState,
 )
+from polaris.infrastructure.constants import DEFAULT_MAX_STATES_PER_SYSTEM
 
 # SQL DDL ──────────────────────────────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ class SQLiteKnowledgeStore(KnowledgeStore):
     def __init__(
         self,
         db_path: str = "./polaris_data.db",
-        max_states_per_system: int = 5000,
+        max_states_per_system: int = DEFAULT_MAX_STATES_PER_SYSTEM,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ) -> None:

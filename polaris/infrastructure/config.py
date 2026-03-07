@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from polaris.core.factories import registered_connector_types, registered_strategy_types
 
+from .constants import DEFAULT_COOLDOWN_SECONDS, MAX_PORT, MIN_PORT
+
 
 class SystemConfig(BaseModel):
     """Configuration for a managed system."""
@@ -19,6 +21,16 @@ class SystemConfig(BaseModel):
     enabled: bool = True
     connection: Dict[str, Any] = Field(default_factory=dict)
     monitoring: Dict[str, Any] = Field(default_factory=dict)
+
+    @staticmethod
+    def _validate_port(port: Any, connector_name: str) -> None:
+        """Validate port number for a connector."""
+        if not isinstance(port, int):
+            raise ValueError(f"{connector_name} connection port must be an integer")
+        if not (MIN_PORT <= port <= MAX_PORT):
+            raise ValueError(
+                f"{connector_name} connection port must be between {MIN_PORT} and {MAX_PORT}"
+            )
 
     @model_validator(mode="after")
     def validate_system(self) -> "SystemConfig":
@@ -32,10 +44,7 @@ class SystemConfig(BaseModel):
         if self.connector_type == "swim" and self.connection:
             port = self.connection.get("port")
             if port is not None:
-                if not isinstance(port, int):
-                    raise ValueError("SWIM connection port must be an integer")
-                if not (1 <= port <= 65535):
-                    raise ValueError("SWIM connection port must be between 1 and 65535")
+                self._validate_port(port, "SWIM")
 
         if self.connector_type == "wildfire" and self.connection:
             base_url = self.connection.get("base_url")
@@ -43,10 +52,7 @@ class SystemConfig(BaseModel):
                 raise ValueError("Wildfire base_url must be a string")
             port = self.connection.get("port")
             if port is not None:
-                if not isinstance(port, int):
-                    raise ValueError("Wildfire connection port must be an integer")
-                if not (1 <= port <= 65535):
-                    raise ValueError("Wildfire connection port must be between 1 and 65535")
+                self._validate_port(port, "Wildfire")
 
         return self
 
@@ -60,6 +66,19 @@ class StrategyConfig(BaseModel):
     hybrid: Optional[Dict[str, Any]] = None
     agentic_llm: Optional[Dict[str, Any]] = None
     multi_agent: Optional[Dict[str, Any]] = None
+
+    def _validate_strategy_config_block(
+        self, strategy_type: str, config_attr: str, config_block: Optional[Dict[str, Any]]
+    ) -> None:
+        """Validate strategy configuration block."""
+        strategy_name = strategy_type.replace("_", " ").title()
+
+        if config_block is None:
+            setattr(self, config_attr, {})
+        elif not isinstance(config_block, dict):
+            raise ValueError(
+                f"{strategy_name} strategy requires '{config_attr}' configuration block to be a dict"
+            )
 
     @model_validator(mode="after")
     def validate_strategy(self) -> "StrategyConfig":
@@ -80,7 +99,7 @@ class StrategyConfig(BaseModel):
                         raise ValueError(
                             f"High threshold must be greater than low threshold for '{metric}'"
                         )
-            cooldown = self.threshold.get("cooldown_seconds", 60)
+            cooldown = self.threshold.get("cooldown_seconds", DEFAULT_COOLDOWN_SECONDS)
             if not isinstance(cooldown, (int, float)) or cooldown < 0:
                 raise ValueError("cooldown_seconds must be a non-negative number")
 
@@ -115,29 +134,16 @@ class StrategyConfig(BaseModel):
                             f"Hybrid.strategies[{idx}].priority must be a number if provided"
                         )
 
-        if self.type == "llm_reasoning":
-            if self.llm_reasoning is None:
-                self.llm_reasoning = {}
-            elif not isinstance(self.llm_reasoning, dict):
-                raise ValueError(
-                    "LLM reasoning strategy requires 'llm_reasoning' configuration block to be a dict"
-                )
+        # Validate strategy-specific configuration blocks
+        strategy_validations = {
+            "llm_reasoning": (self.llm_reasoning, "llm_reasoning"),
+            "agentic_llm": (self.agentic_llm, "agentic_llm"),
+            "multi_agent": (self.multi_agent, "multi_agent"),
+        }
 
-        if self.type == "agentic_llm":
-            if self.agentic_llm is None:
-                self.agentic_llm = {}
-            elif not isinstance(self.agentic_llm, dict):
-                raise ValueError(
-                    "Agentic LLM strategy requires 'agentic_llm' configuration block to be a dict"
-                )
-
-        if self.type == "multi_agent":
-            if self.multi_agent is None:
-                self.multi_agent = {}
-            elif not isinstance(self.multi_agent, dict):
-                raise ValueError(
-                    "Multi-agent strategy requires 'multi_agent' configuration block to be a dict"
-                )
+        if self.type in strategy_validations:
+            config_block, config_attr = strategy_validations[self.type]
+            self._validate_strategy_config_block(self.type, config_attr, config_block)
 
         return self
 

@@ -27,6 +27,7 @@ from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.abstractions.world_model import WorldModel
 from polaris.core.models import AdaptationAction, SystemState
+from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 from polaris.tools import ToolRegistry, get_builtin_tools
@@ -198,7 +199,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 response = await self.llm.generate(
                     messages,
                     temperature=self.temperature,
-                    max_tokens=2048,
+                    max_tokens=DEFAULT_MAX_TOKENS_REASONING,
                     response_schema=AgenticResponseSchema,
                 )
                 self.metrics.histogram(

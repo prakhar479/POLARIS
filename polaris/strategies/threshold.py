@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.infrastructure.constants import DEFAULT_COOLDOWN_SECONDS
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
@@ -20,7 +21,7 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
     def __init__(
         self,
         thresholds: Optional[Dict[str, Dict[str, float]]] = None,
-        cooldown_seconds: int = 60,
+        cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):

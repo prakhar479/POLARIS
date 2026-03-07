@@ -19,6 +19,7 @@ from polaris.core.models import (
     MetricValue,
     SystemState,
 )
+from polaris.infrastructure.constants import DEFAULT_SWIM_TIMEOUT
 
 if TYPE_CHECKING:
     pass
@@ -43,7 +44,7 @@ class SWIMConnector(Connector):
         self,
         host: str = "localhost",
         port: int = 4242,
-        timeout: float = 30.0,
+        timeout: float = DEFAULT_SWIM_TIMEOUT,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ) -> None:

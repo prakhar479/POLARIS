@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from difflib import get_close_matches
 from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional
 
+from polaris.infrastructure.constants import DEFAULT_JSON_INDENT
+
 if TYPE_CHECKING:
     from polaris.core.polaris import Polaris
 
@@ -90,7 +92,7 @@ class PolarisInteractiveCLI(cmd.Cmd):
 
     def _print_json(self, data: Any) -> None:
         """Print JSON with syntax highlighting if available."""
-        json_str = json.dumps(data, indent=2, default=str)
+        json_str = json.dumps(data, indent=DEFAULT_JSON_INDENT, default=str)
         if self.console:
             syntax = Syntax(json_str, "json", theme="monokai", line_numbers=True)
             self.console.print(syntax)

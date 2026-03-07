@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
 from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.infrastructure.constants import DEFAULT_JSON_INDENT, DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
@@ -104,7 +105,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
 
             llm_start = datetime.now(timezone.utc)
             response = await self.llm.generate(
-                messages, temperature=self.temperature, max_tokens=2048
+                messages, temperature=self.temperature, max_tokens=DEFAULT_MAX_TOKENS_REASONING
             )
             llm_duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
 
@@ -133,7 +134,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     for action in actions:
                         self.logger.info(f"[LLM Reasoner] Action type: {action.action_type}")
                         self.logger.debug(
-                            f"[LLM Reasoner] Action parameters: {json.dumps(action.parameters, indent=2)}"
+                            f"[LLM Reasoner] Action parameters: {json.dumps(action.parameters, indent=DEFAULT_JSON_INDENT)}"
                         )
                 for action in actions:
                     self.metrics.increment(
@@ -226,7 +227,7 @@ Be conservative - only adapt when there's a clear need. Consider:
         insights_str = ""
         if context.world_model_insights:
             insights_str = "\nWorld Model Insights:\n" + json.dumps(
-                context.world_model_insights, indent=2
+                context.world_model_insights, indent=DEFAULT_JSON_INDENT
             )
 
         return f"""Current System State:
@@ -322,7 +323,7 @@ Should this system be adapted right now? Analyze the state and provide your deci
             if self.logger:
                 self.logger.debug("[LLM Reasoner] Successfully parsed JSON structure")
                 self.logger.debug(
-                    f"[LLM Reasoner] Parsed JSON structure: {json.dumps(data, indent=2)}"
+                    f"[LLM Reasoner] Parsed JSON structure: {json.dumps(data, indent=DEFAULT_JSON_INDENT)}"
                 )
 
             # Validate response structure

@@ -14,6 +14,7 @@ from polaris.abstractions.meta_learner import (
 )
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationStrategy, ParameterSpec
+from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
@@ -120,7 +121,7 @@ class LLMMetaLearner(MetaLearner):
 
             llm_start = datetime.now(timezone.utc)
             response = await self.llm.generate(
-                messages, temperature=self.temperature, max_tokens=1024
+                messages, temperature=self.temperature, max_tokens=DEFAULT_MAX_TOKENS
             )
 
             duration = (datetime.now(timezone.utc) - llm_start).total_seconds()
@@ -200,7 +201,7 @@ class LLMMetaLearner(MetaLearner):
             ]
 
             response = await self.llm.generate(
-                messages, temperature=self.temperature, max_tokens=1024
+                messages, temperature=self.temperature, max_tokens=DEFAULT_MAX_TOKENS
             )
 
             # Parse proposals

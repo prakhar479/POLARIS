@@ -16,6 +16,10 @@ from polaris.abstractions.meta_learner import (
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationStrategy, ParameterSpec
 from polaris.core.models import AdaptationAction, ExecutionResult
+from polaris.infrastructure.constants import (
+    DEFAULT_EXECUTION_TIME_NORMALIZATION,
+    DEFAULT_STD_DEVIATION_THRESHOLD,
+)
 from polaris.meta_learner.bayesian_optimizer import (
     AcquisitionFunction,
     GaussianProcessOptimizer,
@@ -206,7 +210,7 @@ class StatisticalMetaLearner(MetaLearner):
                     # Adjust confidence based on world model uncertainty
                     wm_unc = analysis.insights.get("world_model_uncertainty", {})
                     avg_std = wm_unc.get("avg_metric_std", 0.0) if isinstance(wm_unc, dict) else 0.0
-                    if avg_std > 10.0:
+                    if avg_std > DEFAULT_STD_DEVIATION_THRESHOLD:
                         confidence = max(
                             0.3, base_confidence - 0.2
                         )  # More cautious with high uncertainty
@@ -275,7 +279,7 @@ class StatisticalMetaLearner(MetaLearner):
                     wm_unc = analysis.insights.get("world_model_uncertainty", {})
                     avg_std = wm_unc.get("avg_metric_std", 0.0) if isinstance(wm_unc, dict) else 0.0
                     # If world model suggests high variability, be slightly more cautious
-                    if avg_std > 10.0:
+                    if avg_std > DEFAULT_STD_DEVIATION_THRESHOLD:
                         confidence = max(0.4, base_confidence - 0.1)
                     else:
                         confidence = base_confidence
@@ -468,7 +472,9 @@ class StatisticalMetaLearner(MetaLearner):
                 # Faster execution = better performance
                 execution_time = context.get("execution_time")
                 if execution_time and isinstance(execution_time, (int, float)):
-                    time_bonus = max(0, 1.0 - execution_time / 10.0)  # Normalize to 0-1
+                    time_bonus = max(
+                        0, 1.0 - execution_time / DEFAULT_EXECUTION_TIME_NORMALIZATION
+                    )  # Normalize to 0-1
                     base_performance += 0.1 * time_bonus
 
         return float(np.clip(base_performance, 0.0, 1.0))

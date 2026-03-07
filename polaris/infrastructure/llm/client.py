@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS
+
 
 @dataclass
 class LLMMessage:
@@ -41,7 +43,7 @@ class LLMClient(ABC):
         self,
         messages: List[LLMMessage],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate a response from the LLM."""
@@ -78,7 +80,7 @@ class GoogleGeminiClient(LLMClient):
         self,
         messages: List[LLMMessage],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using Google Gemini with error handling."""
@@ -157,7 +159,7 @@ class OpenAIClient(LLMClient):
         self,
         messages: List[LLMMessage],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using OpenAI with error handling."""
@@ -219,7 +221,7 @@ class GroqClient(LLMClient):
         self,
         messages: List[LLMMessage],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using Groq with error handling."""
@@ -382,7 +384,7 @@ class ResilientLLMClient(LLMClient):
         self,
         messages: List[LLMMessage],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using resilient LLM client with retry logic."""

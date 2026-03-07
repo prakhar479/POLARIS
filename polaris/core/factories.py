@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     )
 
 from polaris.core.registry import ConnectorRegistry
+from polaris.infrastructure.constants import DEFAULT_CONNECTOR_TIMEOUT, DEFAULT_WILDFIRE_PORT
 
 # Type aliases for factory callables. We intentionally keep the
 # config parameters typed as Any to avoid import cycles with the
@@ -116,13 +117,13 @@ def _register_default_connector_factories() -> None:
         base_url = system_cfg.connection.get("base_url")
         if not base_url:
             host = system_cfg.connection.get("host", "localhost")
-            port = system_cfg.connection.get("port", 5000)
+            port = system_cfg.connection.get("port", DEFAULT_WILDFIRE_PORT)
             base_url = f"http://{host}:{port}"
 
         return WildfireConnector(
             base_url=base_url,
             system_id=system_cfg.id,
-            timeout=system_cfg.connection.get("timeout", 10.0),
+            timeout=system_cfg.connection.get("timeout", DEFAULT_CONNECTOR_TIMEOUT),
             session_id=system_cfg.connection.get("session_id"),
             logger=logger,
             metrics=metrics,
