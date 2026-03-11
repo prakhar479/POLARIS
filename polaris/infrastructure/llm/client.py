@@ -53,9 +53,8 @@ class LLMClient(ABC):
 class GoogleGeminiClient(LLMClient):
     """Google Gemini LLM client."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-3-flash-preview"):
         """Initialize Google Gemini client with API key and model."""
-        # Support both GOOGLE_API_KEY and GEMINI_API_KEY for compatibility
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.model = model
 
@@ -76,6 +75,76 @@ class GoogleGeminiClient(LLMClient):
                 "Install with: pip install google-generativeai"
             )
 
+    @staticmethod
+    def _clean_schema_for_gemini(schema: Any) -> Any:
+        """Convert Pydantic model schema to Gemini-compatible format.
+
+        Gemini API has stricter schema requirements and doesn't accept:
+        - "default" fields
+        - "examples" fields
+        - Other Pydantic-specific metadata
+
+        This function extracts only the core schema structure that Gemini accepts.
+
+        Args:
+            schema: A Pydantic BaseModel class or already-extracted dict schema
+
+        Returns:
+            A cleaned schema dict compatible with Gemini API
+        """
+        if hasattr(schema, "model_json_schema"):
+            schema_dict = schema.model_json_schema()
+        elif isinstance(schema, dict):
+            schema_dict = schema
+        else:
+            return schema
+
+        defs = schema_dict.get("$defs", {})
+        if defs:
+            schema_dict = GoogleGeminiClient._inline_refs(schema_dict, defs)
+
+        return GoogleGeminiClient._recursively_clean_schema(schema_dict)
+
+    @staticmethod
+    def _inline_refs(obj: Any, defs: Dict[str, Any]) -> Any:
+        """Replace $ref pointers with the referenced schema inline."""
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                ref_path = obj["$ref"]
+                ref_name = ref_path.split("/")[-1]
+                if ref_name in defs:
+                    return GoogleGeminiClient._inline_refs(defs[ref_name], defs)
+                return obj  # Leave as-is if ref not found
+            return {k: GoogleGeminiClient._inline_refs(v, defs) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [GoogleGeminiClient._inline_refs(item, defs) for item in obj]
+        return obj
+
+    @staticmethod
+    def _recursively_clean_schema(obj: Any) -> Any:
+        """Recursively remove unsupported fields from schema.
+
+        Removes Pydantic-specific fields like "default", "examples", etc.
+        that Gemini API doesn't accept.
+
+        Args:
+            obj: Schema object (dict, list, or scalar)
+
+        Returns:
+            Cleaned schema object
+        """
+        if isinstance(obj, dict):
+            cleaned = {}
+            for key, value in obj.items():
+                if key in {"default", "examples", "title", "anyOf", "allOf", "$defs", "$ref"}:
+                    continue
+                cleaned[key] = GoogleGeminiClient._recursively_clean_schema(value)
+            return cleaned
+        elif isinstance(obj, list):
+            return [GoogleGeminiClient._recursively_clean_schema(item) for item in obj]
+        else:
+            return obj
+
     async def generate(
         self,
         messages: List[LLMMessage],
@@ -95,7 +164,8 @@ class GoogleGeminiClient(LLMClient):
                 elif msg.role == "assistant":
                     prompt_parts.append(f"Assistant: {msg.content}\n")
 
-            prompt = "\n".join(prompt_parts)
+            prompt = "".join(prompt_parts)
+
             gen_config: Dict[str, Any] = {
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
@@ -107,22 +177,46 @@ class GoogleGeminiClient(LLMClient):
                 # The callers all parse the JSON response themselves, so the schema
                 # type constraint is not needed at the API level.
                 gen_config["response_mime_type"] = "application/json"
+                gen_config["response_schema"] = self._clean_schema_for_gemini(response_schema)
 
-            # generate_content() is synchronous — run in a thread-pool executor
-            # so we don't block the asyncio event loop (P0 fix).
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: self.client.generate_content(prompt, generation_config=gen_config),
+                lambda: self.client.generate_content(prompt, generation_config=gen_config),  # type: ignore[arg-type]
             )
 
-            if not response.text:
+            if not response.candidates:
+                raise ValueError(
+                    "Gemini API returned no candidates (possible safety block or empty response)"
+                )
+
+            candidate = response.candidates[0]
+
+            # Extract finish reason before touching .text
+            finish_reason = None
+            try:
+                finish_reason = candidate.finish_reason.name
+            except (AttributeError, IndexError):
+                finish_reason = "UNKNOWN"
+
+            # Check for safety/recitation blocks — these are not retryable
+            non_stop_reasons = {"SAFETY", "RECITATION", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT"}
+            if finish_reason in non_stop_reasons:
+                raise ValueError(
+                    f"Gemini API blocked response: finish_reason={finish_reason}. "
+                    "This is not a transient error; do not retry."
+                )
+
+            # Now it is safe to access .text
+            try:
+                text = response.text
+            except ValueError as ve:
+                raise ValueError(f"Gemini API response text unavailable: {ve}") from ve
+
+            if not text:
                 raise ValueError("Empty response from Gemini API")
 
-            finish_reason = (
-                response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN"
-            )
-            return LLMResponse(content=response.text, model=self.model, finish_reason=finish_reason)
+            return LLMResponse(content=text, model=self.model, finish_reason=finish_reason)
 
         except ImportError:
             raise ImportError(
@@ -130,6 +224,8 @@ class GoogleGeminiClient(LLMClient):
                 "Install with: pip install google-generativeai"
             )
         except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise
             raise RuntimeError(f"Gemini API error: {e}") from e
 
 
@@ -152,7 +248,7 @@ class OpenAIClient(LLMClient):
 
             self.client = openai.AsyncOpenAI(api_key=self.api_key)
         except ImportError:
-            raise ImportError("openai package not installed. " "Install with: pip install openai")
+            raise ImportError("openai package not installed. Install with: pip install openai")
 
     async def generate(
         self,
@@ -163,7 +259,6 @@ class OpenAIClient(LLMClient):
     ) -> LLMResponse:
         """Generate response using OpenAI with error handling."""
         try:
-            # Convert to OpenAI format
             openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
             kwargs: Dict[str, Any] = {
@@ -172,9 +267,13 @@ class OpenAIClient(LLMClient):
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-            if response_schema:
-                # Basic support if user passes pydantic model in future
-                pass
+
+            if response_schema is not None:
+                logging.getLogger("polaris.llm").warning(
+                    "OpenAIClient.generate: response_schema was provided but is not yet "
+                    "implemented for OpenAI. The response will be unstructured text. "
+                    "Pass a JSON-mode system prompt or use the structured-outputs API manually."
+                )
 
             response = await self.client.chat.completions.create(**kwargs)
 
@@ -189,16 +288,22 @@ class OpenAIClient(LLMClient):
             )
 
         except ImportError:
-            raise ImportError("openai package not installed. " "Install with: pip install openai")
+            raise ImportError("openai package not installed. Install with: pip install openai")
         except Exception as e:
-            # Wrap API errors with more context
+            if isinstance(e, RuntimeError):
+                raise
+
             raise RuntimeError(f"OpenAI API error: {e}") from e
 
 
 class GroqClient(LLMClient):
     """Groq LLM client."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-oss-120b"):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "openai/gpt-oss-120b",
+    ):
         """Initialize Groq client with API key and model."""
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
         self.model = model
@@ -214,7 +319,7 @@ class GroqClient(LLMClient):
 
             self.client = Groq(api_key=self.api_key)
         except ImportError:
-            raise ImportError("groq package not installed. " "Install with: pip install groq")
+            raise ImportError("groq package not installed. Install with: pip install groq")
 
     async def generate(
         self,
@@ -225,10 +330,8 @@ class GroqClient(LLMClient):
     ) -> LLMResponse:
         """Generate response using Groq with error handling."""
         try:
-            # Convert to Groq format (same as OpenAI)
             groq_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
-            # Run sync client in thread pool to make it async
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
@@ -238,7 +341,7 @@ class GroqClient(LLMClient):
                     temperature=temperature,
                     max_completion_tokens=max_tokens,
                     top_p=1,
-                    stream=False,  # Use non-streaming for simplicity
+                    stream=False,
                     stop=None,
                 ),
             )
@@ -254,9 +357,10 @@ class GroqClient(LLMClient):
             )
 
         except ImportError:
-            raise ImportError("groq package not installed. " "Install with: pip install groq")
+            raise ImportError("groq package not installed. Install with: pip install groq")
         except Exception as e:
-            # Wrap API errors with more context
+            if isinstance(e, RuntimeError):
+                raise
             raise RuntimeError(f"Groq API error: {e}") from e
 
 
@@ -284,11 +388,13 @@ class ResilientLLMClient(LLMClient):
         self.max_backoff_ms = int(self.resilience.get("max_backoff_ms", 4000))
 
         self._semaphore = asyncio.Semaphore(concurrency)
-        # token bucket
+
+        # Token bucket state
         self._capacity = max(1, burst)
         self._tokens = float(self._capacity)
         self._refill_rate = float(rps)
         self._last_refill = time.monotonic()
+        self._token_lock: asyncio.Lock = asyncio.Lock()
 
         # Build inner clients per API key (if provided)
         self._clients: List[LLMClient] = []
@@ -305,47 +411,47 @@ class ResilientLLMClient(LLMClient):
                 keys = [k.strip() for k in os.getenv("GROQ_API_KEYS", "").split(",") if k.strip()]
 
         if not keys:
-            # Single client fallback using default env
             self._clients.append(self._create_provider_client())
         else:
             for key in keys:
-                client = self._create_provider_client(api_key=key)
-                self._clients.append(client)
+                self._clients.append(self._create_provider_client(api_key=key))
 
         self._client_idx = 0
-
-        # Setup logging to a dedicated file for LLM debugging
-        log_dir = Path(self.resilience.get("log_dir", "./logs"))
+        log_dir = Path(self.resilience.get("log_dir", "./logs")).resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
         self._logger = logging.getLogger("polaris.llm")
         self._logger.setLevel(logging.INFO)
-        log_path = log_dir / "llm_debug.log"
+        log_path = str(log_dir / "llm_debug.log")
         if not any(
-            isinstance(h, logging.FileHandler)
-            and getattr(h, "baseFilename", "").endswith(str(log_path))
+            isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == log_path
             for h in self._logger.handlers
         ):
-            fh = logging.FileHandler(str(log_path))
+            fh = logging.FileHandler(log_path)
             fh.setLevel(logging.INFO)
-            formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-            fh.setFormatter(formatter)
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
             self._logger.addHandler(fh)
 
     def _create_provider_client(self, api_key: Optional[str] = None) -> LLMClient:
         if self.provider == "openai":
             return OpenAIClient(
-                api_key=api_key, model=str(self.model or self.inner_kwargs.get("model", "gpt-4"))
+                api_key=api_key,
+                model=str(self.model or self.inner_kwargs.get("model", "gpt-4")),
             )
         elif self.provider == "groq":
             return GroqClient(
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", "openai/gpt-oss-120b")),
             )
-        # default to google
-        return GoogleGeminiClient(
-            api_key=api_key,
-            model=str(self.model or self.inner_kwargs.get("model", "gemini-2.5-flash")),
-        )
+        elif self.provider in ("google", "gemini"):
+            return GoogleGeminiClient(
+                api_key=api_key,
+                model=str(self.model or self.inner_kwargs.get("model", "gemini-3-flash-preview")),
+            )
+        else:
+            raise ValueError(
+                f"Unknown LLM provider: '{self.provider}'. "
+                "Supported values are: 'openai', 'groq', 'google', 'gemini'."
+            )
 
     def _current_client(self) -> LLMClient:
         return self._clients[self._client_idx % len(self._clients)]
@@ -354,10 +460,7 @@ class ResilientLLMClient(LLMClient):
         self._client_idx = (self._client_idx + 1) % len(self._clients)
 
     async def _acquire_token(self) -> None:
-        """Acquire one token from the rate-limit bucket (thread-safe via asyncio.Lock)."""
-        if not hasattr(self, "_token_lock"):
-            # Lazily create the lock the first time (safe: single-threaded asyncio).
-            self._token_lock: asyncio.Lock = asyncio.Lock()
+        """Acquire one token from the rate-limit bucket."""
         while True:
             async with self._token_lock:
                 now = time.monotonic()
@@ -372,10 +475,19 @@ class ResilientLLMClient(LLMClient):
 
     def _classify_retryable(self, err: Exception) -> Tuple[bool, bool, str]:
         msg = str(err).lower()
-        is_rate = any(x in msg for x in ["rate limit", "429", "too many requests", "quota"])
+        cause_msg = str(err.__cause__).lower() if err.__cause__ else ""
+        combined = msg + " " + cause_msg
+
+        is_rate = any(x in combined for x in ["rate limit", "429", "too many requests", "quota"])
         is_retryable = is_rate or any(
-            x in msg for x in ["timeout", "timed out", "connection reset", "503", "502", "500"]
+            x in combined for x in ["timeout", "timed out", "connection reset", "503", "502", "500"]
         )
+        # Safety-blocked responses should never be retried
+        is_blocked = any(x in combined for x in ["safety", "blocked response", "recitation"])
+        if is_blocked:
+            is_retryable = False
+            is_rate = False
+
         etype = "rate_limited" if is_rate else ("retryable" if is_retryable else "fatal")
         return is_retryable, is_rate, etype
 
@@ -387,12 +499,14 @@ class ResilientLLMClient(LLMClient):
         response_schema: Optional[Any] = None,
     ) -> LLMResponse:
         """Generate response using resilient LLM client with retry logic."""
-        await self._semaphore.acquire()
+        semaphore = self._semaphore
+        await semaphore.acquire()
         try:
-            await self._acquire_token()
             attempt = 0
             while True:
                 attempt += 1
+                await self._acquire_token()
+
                 start = time.monotonic()
                 try:
                     resp = await self._current_client().generate(
@@ -409,13 +523,13 @@ class ResilientLLMClient(LLMClient):
                         latency_ms,
                         getattr(resp, "tokens_used", None),
                     )
-                    # Also write response content for debugging
                     try:
                         preview = resp.content if len(resp.content) <= 2000 else resp.content[:2000]
                         self._logger.info("response_preview=%s", preview)
                     except Exception:
                         pass
                     return resp
+
                 except Exception as e:
                     latency_ms = int((time.monotonic() - start) * 1000)
                     is_retryable, is_rate, etype = self._classify_retryable(e)
@@ -437,19 +551,28 @@ class ResilientLLMClient(LLMClient):
                         )
                     if not is_retryable or attempt > self.max_retries:
                         raise
-                    backoff = min(self.max_backoff_ms, self.base_backoff_ms * (2 ** (attempt - 1)))
-                    backoff = backoff * (0.5 + random.random())
+
+                    raw_backoff = self.base_backoff_ms * (2 ** (attempt - 1))
+                    jittered = raw_backoff * (0.5 + random.random())
+                    backoff = min(self.max_backoff_ms, jittered)
                     await asyncio.sleep(backoff / 1000.0)
         finally:
-            self._semaphore.release()
+            semaphore.release()
 
     def update_resilience(self, new_resilience: Dict[str, Any]) -> None:
         """Hot-update resilience parameters at runtime.
 
-        Safe to call while requests are in-flight. New settings apply to subsequent calls.
+        Safe to call while requests are in-flight. New settings apply to
+        subsequent calls.
+
+        Note on concurrency: when the concurrency limit is changed, in-flight
+        requests hold a reference to the old Semaphore and will release it
+        correctly.  New requests will acquire the new
+        Semaphore.  There is a brief window where both old and new semaphores
+        are live; this is intentional and safe.
         """
         self.resilience.update(new_resilience)
-        # Update rate limiter
+
         if "burst" in new_resilience:
             try:
                 new_cap = max(1, int(new_resilience["burst"]))
@@ -457,25 +580,25 @@ class ResilientLLMClient(LLMClient):
                 self._tokens = min(self._tokens, float(self._capacity))
             except Exception:
                 pass
+
         if "rps" in new_resilience:
             try:
                 self._refill_rate = float(new_resilience["rps"])
             except Exception:
                 pass
-        # Update retries/backoff
+
         for k in ("max_retries", "base_backoff_ms", "max_backoff_ms"):
             if k in new_resilience:
                 try:
                     setattr(self, k, int(new_resilience[k]))
                 except Exception:
                     pass
-        # Update concurrency by swapping semaphore
+
         if "concurrency" in new_resilience:
             try:
                 new_conc = int(new_resilience["concurrency"])
                 if new_conc > 0:
                     self._semaphore = asyncio.Semaphore(new_conc)
-                # else ignore invalid
             except Exception:
                 pass
 
@@ -497,7 +620,6 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     resilience: Optional[Dict[str, Any]] = kwargs.pop("resilience", None)
     model = kwargs.get("model")
 
-    # If resilience is explicitly provided or env enables it, wrap with ResilientLLMClient
     enabled_env = os.getenv("LLM_RESILIENCE_ENABLED", "0").lower() in ("1", "true", "yes")
     has_multi_keys = (
         (provider_norm == "openai" and os.getenv("OPENAI_API_KEYS"))

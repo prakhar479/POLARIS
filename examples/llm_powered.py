@@ -25,7 +25,7 @@ async def main():
         return
 
     # Create LLM client
-    llm_client = create_llm_client("google", api_key=api_key, model="gemini-2.5-flash")
+    llm_client = create_llm_client("google", api_key=api_key, model="gemini-3-flash-preview")
 
     # Create LLM-powered strategy
     strategy = LLMReasoningStrategy(

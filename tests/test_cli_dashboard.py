@@ -71,6 +71,12 @@ class _FakeLive:
         _ = exc_type, exc, tb
         return False
 
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
     def update(self, renderable):
         self.updated.append(renderable)
 

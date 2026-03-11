@@ -106,8 +106,8 @@ class Dashboard:
         self._started_at = datetime.now()
 
         # Event tracking
-        self.recent_events: List[Dict[str, Any]] = []
-        self.max_events = 10
+        self.recent_events: Deque[Dict[str, Any]] = deque(maxlen=10)
+        self.max_events = 10  # kept for public interface compatibility
         self.metric_history: Dict[str, List[Any]] = defaultdict(list)
         self.max_history = 50
         self._cached_perf_metrics: Dict[str, Any] = {}
@@ -125,7 +125,6 @@ class Dashboard:
         from polaris.core.events import AdaptationEvent, TelemetryEvent
 
         self.polaris.event_bus.subscribe(TelemetryEvent, self._on_telemetry)
-
         self.polaris.event_bus.subscribe(AdaptationEvent, self._on_adaptation)
 
     def _setup_log_capture(self) -> None:
@@ -139,7 +138,11 @@ class Dashboard:
 
         class _DashboardLogHandler(logging.Handler):
             def __init__(self, buffer: Deque[Dict[str, str]]):
-                super().__init__(level=logging.NOTSET)
+                # Use WARNING as the default floor so the handler only
+                # captures meaningful operational messages by default.  Callers
+                # that need DEBUG-level dashboard output can lower this via the
+                # standard logging.setLevel() API on the "polaris" logger.
+                super().__init__(level=logging.WARNING)
                 self._buffer = buffer
 
             def emit(self, record: logging.LogRecord) -> None:
@@ -166,7 +169,6 @@ class Dashboard:
 
     def _on_telemetry(self, event: Any) -> None:
         """Handle telemetry events."""
-        # Track metrics
         for metric_name, metric in event.state.metrics.items():
             self.metric_history[metric_name].append((event.timestamp, metric.value))
             # Keep only recent history
@@ -177,6 +179,10 @@ class Dashboard:
 
     def _on_adaptation(self, event: Any) -> None:
         """Handle adaptation events."""
+        # Update deque maxlen if max_events changed
+        if self.recent_events.maxlen != self.max_events:
+            self.recent_events = deque(self.recent_events, maxlen=self.max_events)
+
         self.recent_events.append(
             {
                 "time": event.timestamp,
@@ -186,10 +192,6 @@ class Dashboard:
                 "system": event.action.target_system,
             }
         )
-
-        # Keep only recent events
-        if len(self.recent_events) > self.max_events:
-            self.recent_events = self.recent_events[-self.max_events :]
 
     def _build_layout(self) -> Layout:
         """Build dashboard layout."""
@@ -218,6 +220,16 @@ class Dashboard:
         """Render current dashboard state."""
         layout = self._build_layout()
 
+        # --- Snapshot shared state once -------------------------------------------
+        # Both recent_events and metric_history may be written by event callbacks
+        # that fire from a different coroutine or thread.  Taking local copies
+        # here means the rest of _render works on stable data.
+        recent_events_snapshot: List[Dict[str, Any]] = list(self.recent_events)
+        metric_history_snapshot: Dict[str, List[Any]] = {
+            k: list(v) for k, v in self.metric_history.items()
+        }
+        # --------------------------------------------------------------------------
+
         # Header
         header_text = Text()
         header_text.append("POLARIS", style="bold cyan")
@@ -229,7 +241,7 @@ class Dashboard:
         header_text.append("  |  ", style="dim")
         header_text.append(f"Systems: {len(self.polaris.registry.system_ids())}", style="white")
         header_text.append("  |  ", style="dim")
-        header_text.append(f"Events: {len(self.recent_events)}", style="white")
+        header_text.append(f"Events: {len(recent_events_snapshot)}", style="white")
         layout["header"].update(Panel(header_text, border_style="cyan"))
 
         # Systems panel
@@ -250,7 +262,7 @@ class Dashboard:
         metrics_table.add_column("Value", style="white")
         metrics_table.add_column("Trend", style="dim")
 
-        metric_items = sorted(self.metric_history.items(), key=lambda item: item[0])[:30]
+        metric_items = sorted(metric_history_snapshot.items(), key=lambda item: item[0])[:30]
         if not metric_items:
             metrics_table.add_row("No telemetry yet", "—", "—")
 
@@ -268,10 +280,10 @@ class Dashboard:
         events_table.add_column("Event", style="white")
         events_table.add_column("Status", style="green")
 
-        if not self.recent_events:
+        if not recent_events_snapshot:
             events_table.add_row("—", "No events yet", "—")
 
-        for event in self.recent_events[-10:]:
+        for event in recent_events_snapshot[-10:]:
             time_str = event["time"].strftime("%H:%M:%S")
             event_str = f"{event['action']} on {event['system']}"
             status_ok = event["status"] == "success"
@@ -318,11 +330,10 @@ class Dashboard:
                 ),
             )
 
-            # Use cached performance metrics
             if hasattr(self, "_cached_perf_metrics") and self._cached_perf_metrics:
                 perf = self._cached_perf_metrics
                 if "success_rate" in perf:
-                    strategy_info.add_row("Success Rate", f"{perf['success_rate']: .1%}")
+                    strategy_info.add_row("Success Rate", f"{perf['success_rate']:.1%}")
                 if "total_adaptations" in perf:
                     strategy_info.add_row("Total Adaptations", str(int(perf["total_adaptations"])))
 
@@ -334,12 +345,10 @@ class Dashboard:
         system_metrics_table.add_column("Metric", style="yellow")
         system_metrics_table.add_column("Value", style="white")
 
-        # Get system metrics from Polaris metrics collector
         if self.polaris.metrics:
             try:
                 metrics_summary = self.polaris.metrics.get_summary()
 
-                # Display key system metrics
                 counters = metrics_summary.get("counters", {})
                 gauges = metrics_summary.get("gauges", {})
                 histograms = metrics_summary.get("histograms", {})
@@ -354,54 +363,58 @@ class Dashboard:
                     system_metrics_table.add_row(component, name, value)
                     rows_added += 1
 
-                # Show monitoring metrics
                 for metric_name, value in counters.items():
                     if "polaris.monitoring" in metric_name:
-                        component = "Monitoring"
-                        clean_name = metric_name.replace("polaris.monitoring.", "")
-                        add_row(component, clean_name, str(int(value)))
+                        add_row(
+                            "Monitoring",
+                            metric_name.replace("polaris.monitoring.", ""),
+                            str(int(value)),
+                        )
 
-                # Show telemetry metrics
                 for metric_name, value in counters.items():
                     if "polaris.telemetry" in metric_name:
-                        component = "Telemetry"
-                        clean_name = metric_name.replace("polaris.telemetry.", "")
-                        add_row(component, clean_name, str(int(value)))
+                        add_row(
+                            "Telemetry",
+                            metric_name.replace("polaris.telemetry.", ""),
+                            str(int(value)),
+                        )
 
-                # Show adaptation metrics
                 for metric_name, value in counters.items():
                     if "polaris.adaptations" in metric_name:
-                        component = "Adaptations"
-                        clean_name = metric_name.replace("polaris.adaptations.", "")
-                        add_row(component, clean_name, str(int(value)))
+                        add_row(
+                            "Adaptations",
+                            metric_name.replace("polaris.adaptations.", ""),
+                            str(int(value)),
+                        )
 
-                # Show knowledge store metrics
                 for metric_name, value in counters.items():
                     if "polaris.knowledge" in metric_name:
-                        component = "Knowledge"
-                        clean_name = metric_name.replace("polaris.knowledge.", "")
-                        add_row(component, clean_name, str(int(value)))
+                        add_row(
+                            "Knowledge",
+                            metric_name.replace("polaris.knowledge.", ""),
+                            str(int(value)),
+                        )
 
-                # Show world model metrics
                 for metric_name, value in counters.items():
                     if "polaris.world_model" in metric_name:
-                        component = "World Model"
-                        clean_name = metric_name.replace("polaris.world_model.", "")
-                        add_row(component, clean_name, str(int(value)))
+                        add_row(
+                            "World Model",
+                            metric_name.replace("polaris.world_model.", ""),
+                            str(int(value)),
+                        )
 
-                # Show gauge metrics (current values)
                 for metric_name, value in gauges.items():
                     if "polaris.monitoring" in metric_name:
-                        component = "Monitoring"
-                        clean_name = metric_name.replace("polaris.monitoring.", "")
-                        add_row(component, clean_name, str(int(value)))
+                        add_row(
+                            "Monitoring",
+                            metric_name.replace("polaris.monitoring.", ""),
+                            str(int(value)),
+                        )
 
-                # Show histogram averages for performance metrics
                 for metric_name, hist_data in histograms.items():
                     if "polaris.monitoring.loop_duration" in metric_name:
-                        component = "Performance"
                         avg_duration = hist_data.get("avg", 0)
-                        add_row(component, "Avg Loop Duration", f"{avg_duration: .2f}s")
+                        add_row("Performance", "Avg Loop Duration", f"{avg_duration:.2f}s")
 
                 if rows_added == 0:
                     system_metrics_table.add_row("—", "No system metrics yet", "—")
@@ -416,13 +429,14 @@ class Dashboard:
         # Footer
         footer_text = Text()
         footer_text.append("Status: ", style="dim")
-        status = "Running" if self.polaris.is_running() else "Stopped"
-        footer_text.append(status, style="green bold" if self.polaris.is_running() else "red bold")
+        footer_status = "Running" if self.polaris.is_running() else "Stopped"
+        footer_text.append(
+            footer_status, style="green bold" if self.polaris.is_running() else "red bold"
+        )
         footer_text.append(f" | Uptime: {self._format_uptime()}", style="dim")
         footer_text.append(f" | Time: {datetime.now().strftime('%H:%M:%S')}", style="dim")
-        footer_text.append(f" | Metrics tracked: {len(self.metric_history)}", style="dim")
+        footer_text.append(f" | Metrics tracked: {len(metric_history_snapshot)}", style="dim")
 
-        # Add system component status
         if self.polaris.metrics:
             try:
                 summary = self.polaris.metrics.get_summary()
@@ -445,8 +459,8 @@ class Dashboard:
         if abs(numeric) >= 1000:
             return f"{numeric:,.0f}"
         if abs(numeric) >= 10:
-            return f"{numeric:,.2f}"
-        return f"{numeric:,.3f}"
+            return f"{numeric:.2f}"
+        return f"{numeric:.3f}"
 
     def _format_uptime(self) -> str:
         elapsed = datetime.now() - self._started_at
@@ -460,7 +474,7 @@ class Dashboard:
         return f"{secs}s"
 
     def _calculate_trend(self, history: list) -> str:
-        """Calculate simple trend indicator."""
+        """Calculate simple trend indicator. Returns "↑", "↓", "→", or "—" if not enough data or non-numeric."""
         if len(history) < 2:
             return "—"
 
@@ -468,12 +482,15 @@ class Dashboard:
         try:
             recent_floats = [float(v) for v in recent]
             if len(recent_floats) < 2:
+                # Not enough numeric data points for a meaningful trend
                 return "—"
 
-            avg_first = sum(recent_floats[: len(recent_floats) // 2]) / (len(recent_floats) // 2)
-            avg_last = sum(recent_floats[len(recent_floats) // 2 :]) / (
-                len(recent_floats) - len(recent_floats) // 2
-            )
+            half = len(recent_floats) // 2
+            if half == 0:
+                return "—"
+
+            avg_first = sum(recent_floats[:half]) / half
+            avg_last = sum(recent_floats[half:]) / (len(recent_floats) - half)
 
             if avg_last > avg_first * 1.05:
                 return "↑"
@@ -498,16 +515,125 @@ class Dashboard:
         fd = sys.stdin.fileno()
         old_attrs = termios.tcgetattr(fd)
         old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+
+        stdout_fd = sys.stdout.fileno()
+        stderr_fd = sys.stderr.fileno()
+        old_stdout_flags = fcntl.fcntl(stdout_fd, fcntl.F_GETFL)
+        old_stderr_flags = fcntl.fcntl(stderr_fd, fcntl.F_GETFL)
+
+        # Track which descriptors we actually modified so the finally block
+        # can restore only those, regardless of where an exception may occur.
+        stdin_nonblocking_set = False
+        stdout_blocking_forced = False
+        stderr_blocking_forced = False
+
         try:
             tty.setcbreak(fd)
+
+            # Set stdin non-blocking for key polling
             fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+            stdin_nonblocking_set = True
+
+            # Ensure stdout/stderr stay blocking so Rich can write freely
+            if old_stdout_flags & os.O_NONBLOCK:
+                fcntl.fcntl(stdout_fd, fcntl.F_SETFL, old_stdout_flags & ~os.O_NONBLOCK)
+                stdout_blocking_forced = True
+
+            if old_stderr_flags & os.O_NONBLOCK:
+                fcntl.fcntl(stderr_fd, fcntl.F_SETFL, old_stderr_flags & ~os.O_NONBLOCK)
+                stderr_blocking_forced = True
+
             yield
         finally:
+            # Always restore terminal attributes for stdin
             termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
-            fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
+
+            # Restore stdin flags only if we actually changed them
+            if stdin_nonblocking_set:
+                fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
+
+            # Restore stdout/stderr only if we forced them to blocking
+            if stdout_blocking_forced:
+                fcntl.fcntl(stdout_fd, fcntl.F_SETFL, old_stdout_flags)
+            if stderr_blocking_forced:
+                fcntl.fcntl(stderr_fd, fcntl.F_SETFL, old_stderr_flags)
+
+    @contextmanager
+    def _live_display_safe(self, renderable: Any, refresh_per_second: int) -> Any:
+        """Safely create and manage a Rich Live display context."""
+        live = None
+        try:
+            try:
+                live = Live(
+                    renderable,
+                    console=self.console,
+                    refresh_per_second=refresh_per_second,
+                )
+                live.start()
+            except BlockingIOError:
+                # Terminal FD may be in an inconsistent non-blocking state.
+                # Attempt to coerce stdout/stderr back to blocking before retry.
+                try:
+                    import fcntl as _fcntl
+
+                    for _fd in (sys.stdout.fileno(), sys.stderr.fileno()):
+                        _flags = _fcntl.fcntl(_fd, _fcntl.F_GETFL)
+                        if _flags & os.O_NONBLOCK:
+                            _fcntl.fcntl(_fd, _fcntl.F_SETFL, _flags & ~os.O_NONBLOCK)
+                except Exception:
+                    pass
+
+                # Retry once after fixing FD state
+                live = Live(
+                    renderable,
+                    console=self.console,
+                    refresh_per_second=refresh_per_second,
+                )
+                live.start()
+            yield live
+
+        finally:
+            if live is not None:
+                try:
+                    live.stop()
+                except BlockingIOError:
+                    try:
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+    def _safe_live_update(self, live: Any, renderable: Any, max_retries: int = 3) -> None:
+        """Safely update Live display, handling BlockingIOError gracefully."""
+        for attempt in range(max_retries):
+            try:
+                live.update(renderable)
+                return
+            except BlockingIOError:
+                if attempt < max_retries - 1:
+                    import time
+
+                    time.sleep(0.001)
+                else:
+                    try:
+                        logging.getLogger("polaris.dashboard").debug(
+                            "BlockingIOError in Live update after retries, skipping frame"
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    logging.getLogger("polaris.dashboard").debug(
+                        "Error updating Live display: %s", str(e)
+                    )
+                except Exception:
+                    pass
+                return
 
     def _read_key_nonblocking(self) -> Optional[str]:
-        """Read one key from stdin without blocking."""
+        """Read one key from stdin without blocking. Returns None if no key is available or on error."""
         if os.name == "nt":
             try:
                 import msvcrt
@@ -539,24 +665,50 @@ class Dashboard:
         if not ch:
             return None
 
-        # Ignore escape sequences (arrow keys, etc.)
         if ch == "\x1b":
-            try:
-                bracket = sys.stdin.read(1)
-                code = sys.stdin.read(1)
-                if bracket == "[":
-                    unix_arrow_map: Dict[str, str] = {
-                        "A": "<UP>",
-                        "B": "<DOWN>",
-                        "C": "<RIGHT>",
-                        "D": "<LEFT>",
-                    }
-                    return unix_arrow_map.get(code)
-            except Exception:
-                pass
+            bracket = self._read_nonblocking_byte_with_retry()
+            if bracket is None:
+                return None  # Lone ESC — discard
+
+            code_str = self._read_nonblocking_byte_with_retry()
+            if code_str is None:
+                return None
+
+            if bracket == "[":
+                unix_arrow_map: Dict[str, str] = {
+                    "A": "<UP>",
+                    "B": "<DOWN>",
+                    "C": "<RIGHT>",
+                    "D": "<LEFT>",
+                }
+                return unix_arrow_map.get(code_str)
             return None
 
         return ch
+
+    @staticmethod
+    def _read_nonblocking_byte_with_retry(
+        max_attempts: int = 20, sleep_s: float = 0.001
+    ) -> Optional[str]:
+        """Read exactly one byte from non-blocking stdin, retrying briefly.
+
+        Used when consuming the 2nd/3rd bytes of a multi-byte escape sequence
+        where the kernel may not have buffered the remaining bytes yet.
+
+        Returns the character, or None if it did not arrive within the retry
+        window.
+        """
+        import time
+
+        for _ in range(max_attempts):
+            try:
+                byte = sys.stdin.read(1)
+                if byte:
+                    return byte
+            except OSError:
+                pass
+            time.sleep(sleep_s)
+        return None
 
     def _render_with_interactive(
         self,
@@ -606,13 +758,27 @@ class Dashboard:
                         await self.polaris.strategy.get_performance_metrics()
                     )
             except Exception as e:
-                # Log error but continue running (to framework logger, not stdout)
                 try:
-                    logger = logging.getLogger("polaris.dashboard")
-                    logger.error("Error updating dashboard metrics cache: %s", str(e))
+                    logging.getLogger("polaris.dashboard").error(
+                        "Error updating dashboard metrics cache: %s", str(e)
+                    )
                 except Exception:
                     pass
-            await asyncio.sleep(5)  # Update every 5 seconds
+            await asyncio.sleep(5)
+
+    def _detach_log_handler(self) -> None:
+        """Remove the dashboard log handler from the root logger.
+
+        Centralised teardown that nulls out self._log_handler after
+        removal so idempotent calls (e.g. both run() and run_with_interactive_cli()
+        reaching their finally blocks) do not attempt a second removeHandler.
+        """
+        if self._log_handler is not None:
+            try:
+                logging.getLogger("polaris").removeHandler(self._log_handler)
+            except Exception:
+                pass
+            self._log_handler = None
 
     async def run(self, refresh_rate: float = 1.0) -> None:
         """
@@ -622,17 +788,15 @@ class Dashboard:
             refresh_rate: Update frequency in seconds
         """
         self.running = True
-
-        # Start background metrics update task
         metrics_task = asyncio.create_task(self._update_metrics_cache())
 
-        with Live(
-            self._render(), console=self.console, refresh_per_second=1 / refresh_rate
+        with self._live_display_safe(
+            self._render(), refresh_per_second=int(1 / refresh_rate)
         ) as live:
             try:
                 while self.running and self.polaris.is_running():
                     await asyncio.sleep(refresh_rate)
-                    live.update(self._render())
+                    self._safe_live_update(live, self._render())
             except KeyboardInterrupt:
                 pass
             finally:
@@ -642,14 +806,7 @@ class Dashboard:
                     await metrics_task
                 except asyncio.CancelledError:
                     pass
-
-                # Detach dashboard log handler on exit to avoid leaks
-                if self._log_handler is not None:
-                    try:
-                        root_logger = logging.getLogger("polaris")
-                        root_logger.removeHandler(self._log_handler)
-                    except Exception:
-                        pass
+                self._detach_log_handler()
 
     async def run_with_interactive_cli(self, refresh_rate: float = 0.2) -> None:
         """Run split-screen dashboard + interactive command mode."""
@@ -668,25 +825,28 @@ class Dashboard:
         output_lines.append("Type a command and press Enter (help, status, systems, metrics, ...).")
 
         with self._raw_terminal_input():
-            with Live(
+            with self._live_display_safe(
                 self._render_with_interactive(
                     input_buffer=input_buffer,
                     output_lines=output_lines,
                     command_running=False,
                 ),
-                console=self.console,
                 refresh_per_second=max(1, int(1.0 / refresh_rate)),
             ) as live:
                 try:
                     while self.running and self.polaris.is_running():
                         if command_task is not None and command_task.done():
+                            should_exit = False
                             try:
                                 should_exit = bool(command_task.result())
-                                if should_exit:
-                                    break
+                            except asyncio.CancelledError:
+                                # Task was cancelled externally — treat as no-exit
+                                pass
                             except Exception as exc:
                                 output_lines.append(f"Command failed: {exc}")
                             command_task = None
+                            if should_exit:
+                                break
 
                         while True:
                             ch = self._read_key_nonblocking()
@@ -744,12 +904,13 @@ class Dashboard:
                                 input_buffer += ch
                                 history_cursor = len(command_history)
 
-                        live.update(
+                        self._safe_live_update(
+                            live,
                             self._render_with_interactive(
                                 input_buffer=input_buffer,
                                 output_lines=output_lines,
                                 command_running=command_task is not None,
-                            )
+                            ),
                         )
                         await asyncio.sleep(refresh_rate)
 
@@ -766,9 +927,4 @@ class Dashboard:
                     if command_task is not None and not command_task.done():
                         command_task.cancel()
 
-                    if self._log_handler is not None:
-                        try:
-                            root_logger = logging.getLogger("polaris")
-                            root_logger.removeHandler(self._log_handler)
-                        except Exception:
-                            pass
+                    self._detach_log_handler()
