@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.meta_learner import (
+    AppliedUpdate,
     MetaLearner,
     ParameterProposal,
     PerformanceAnalysis,
@@ -298,6 +299,53 @@ class LLMMetaLearner(MetaLearner):
         )
 
         return validated
+
+    async def apply_proposals(
+        self, strategy: AdaptationStrategy, proposals: List[ParameterProposal]
+    ) -> List[AppliedUpdate]:
+        """Apply approved proposals, gated by the ``auto_apply`` flag.
+
+        When ``auto_apply=False`` (the default) no updates are written to
+        the live strategy — proposals are recorded for transparency only.
+        When ``auto_apply=True`` each approved proposal is forwarded to
+        ``strategy.update_parameter``.
+        """
+        if not self.auto_apply:
+            self.logger.info(
+                "Meta-learner auto_apply is disabled — skipping parameter application",
+                proposals=len(proposals),
+            )
+            return []
+
+        results: List[AppliedUpdate] = []
+        for proposal in proposals:
+            if proposal.status != ProposalStatus.APPROVED:
+                continue
+            try:
+                success = await strategy.update_parameter(
+                    proposal.parameter_path, proposal.proposed_value
+                )
+                results.append(AppliedUpdate(proposal_id=proposal.proposal_id, success=success))
+                self.logger.info(
+                    "Meta-learner applied parameter update",
+                    parameter=proposal.parameter_path,
+                    proposed_value=proposal.proposed_value,
+                    success=success,
+                )
+            except Exception as e:
+                self.logger.error(
+                    "Meta-learner failed to apply parameter update",
+                    parameter=proposal.parameter_path,
+                    error=str(e),
+                )
+                results.append(
+                    AppliedUpdate(
+                        proposal_id=proposal.proposal_id,
+                        success=False,
+                        error_message=str(e),
+                    )
+                )
+        return results
 
     def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
         """System prompt for performance analysis, with optional system-specific overrides."""

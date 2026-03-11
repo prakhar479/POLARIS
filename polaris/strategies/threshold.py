@@ -235,20 +235,22 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         # Threshold values
         for metric, thresholds in self.thresholds.items():
             if "high" in thresholds:
+                current_high = thresholds["high"]
                 params[f"thresholds.{metric}.high"] = ParameterSpec(
-                    current_value=thresholds["high"],
+                    current_value=current_high,
                     type=float,
-                    min_value=50.0,
-                    max_value=95.0,
+                    min_value=max(0.0, round(current_high * 0.25, 6)),
+                    max_value=round(current_high * 1.75, 6),
                     description=f"High threshold for {metric}",
                     kind="threshold_high",
                 )
             if "low" in thresholds:
+                current_low = thresholds["low"]
                 params[f"thresholds.{metric}.low"] = ParameterSpec(
-                    current_value=thresholds["low"],
+                    current_value=current_low,
                     type=float,
-                    min_value=5.0,
-                    max_value=50.0,
+                    min_value=max(0.0, round(current_low * 0.25, 6)),
+                    max_value=round(current_low * 1.75, 6),
                     description=f"Low threshold for {metric}",
                     kind="threshold_low",
                 )

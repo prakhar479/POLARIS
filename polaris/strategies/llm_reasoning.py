@@ -199,7 +199,7 @@ IMPORTANT: You can propose MULTIPLE actions in the "actions" list if a compound 
 Respond in JSON format:{{
     "needs_adaptation": "true" or "false",
     "reasoning": "explanation of your decision",
-    "actions":[  # provide a list of actions; can contain multiple elements
+    "actions":[  # provide a list of actions - can contain multiple elements
         {{
             "type": "scale_up" or "scale_down" or "adjust_qos",
             "parameters":{{"key": "value"}}

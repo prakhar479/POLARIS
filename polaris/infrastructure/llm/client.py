@@ -85,9 +85,6 @@ class GoogleGeminiClient(LLMClient):
     ) -> LLMResponse:
         """Generate response using Google Gemini with error handling."""
         try:
-            # import GenerationConfig
-            from google.ai.generativelanguage_v1beta import GenerationConfig
-
             # Convert messages to Gemini format
             prompt_parts = []
             for msg in messages:
@@ -104,17 +101,19 @@ class GoogleGeminiClient(LLMClient):
                 "max_output_tokens": max_tokens,
             }
             if response_schema:
+                # Only constrain output to JSON; do NOT forward the schema itself.
+                # Gemini's Schema type doesn't support $defs produced by Pydantic's
+                # model_json_schema(), so passing it causes an "Unknown field" error.
+                # The callers all parse the JSON response themselves, so the schema
+                # type constraint is not needed at the API level.
                 gen_config["response_mime_type"] = "application/json"
-                gen_config["response_schema"] = response_schema
 
             # generate_content() is synchronous — run in a thread-pool executor
             # so we don't block the asyncio event loop (P0 fix).
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: self.client.generate_content(
-                    prompt, generation_config=GenerationConfig(**gen_config)
-                ),
+                lambda: self.client.generate_content(prompt, generation_config=gen_config),
             )
 
             if not response.text:

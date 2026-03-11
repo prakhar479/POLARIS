@@ -24,6 +24,7 @@ class HybridStrategy(AdaptationStrategy):
         strategies: List[Tuple[AdaptationStrategy, float]],
         selection_mode: str = "confidence",
         min_confidence: float = 0.7,
+        cooldown_seconds: int = 0,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -37,10 +38,16 @@ class HybridStrategy(AdaptationStrategy):
                 - 'priority': Use highest priority strategy
                 - 'confidence': Use highest confidence action
             min_confidence: Minimum confidence threshold
+            cooldown_seconds: Minimum seconds between any selected actions.
+                When > 0 the entire assess() is skipped (returning []) if the
+                cooldown has not elapsed since the last selected action.
+                Default 0 means no cooldown.
         """
         self.strategies = sorted(strategies, key=lambda x: x[1], reverse=True)
         self.selection_mode = selection_mode
         self.min_confidence = min_confidence
+        self.cooldown_seconds = cooldown_seconds
+        self._last_action_time: Optional[datetime] = None
         self._adaptation_count = 0
         self._success_count = 0
         self._strategy_usage = dict.fromkeys(range(len(strategies)), 0)
@@ -73,40 +80,91 @@ class HybridStrategy(AdaptationStrategy):
             tags={"system_id": state.system_id, "selection_mode": self.selection_mode},
         )
 
-        assess_start = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        assess_start = now
 
-        # Query all strategies concurrently
-        tasks = []
-        for strategy, _priority in self.strategies:
-            tasks.append(strategy.assess(state, context))
+        def _agentic_in_cooldown() -> bool:
+            """Return True if the agentic (non-threshold) cooldown is still active."""
+            if self.cooldown_seconds <= 0 or self._last_action_time is None:
+                return False
+            elapsed = (now - self._last_action_time).total_seconds()
+            if elapsed < self.cooldown_seconds:
+                remaining = self.cooldown_seconds - elapsed
+                if self._logger:
+                    self._logger.debug(
+                        "HybridStrategy agentic cooldown active — skipping LLM strategies",
+                        system_id=state.system_id,
+                        remaining_seconds=round(remaining, 1),
+                    )
+                self._metrics.increment(
+                    "polaris.strategy.hybrid.cooldown_skips",
+                    tags={"system_id": state.system_id},
+                )
+                return True
+            return False
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Collect valid proposals
         proposals = []
-        confidence_tasks = []
-        valid_indices = []
-        for i, (result, (strategy, priority)) in enumerate(zip(results, self.strategies)):
-            if isinstance(result, Exception):
-                continue
-            if isinstance(result, list) and result:
-                # Estimate confidence asynchronously using the first action as representative
-                confidence_tasks.append(self._estimate_confidence(strategy, result[0], state))
-                valid_indices.append((i, priority, result, strategy))
 
-        confidences: List[Union[float, BaseException]] = []
-        if confidence_tasks:
-            confidences = await asyncio.gather(*confidence_tasks, return_exceptions=True)
+        if self.selection_mode == "first":
+            # Sequential short-circuit: evaluate strategies in priority order and stop
+            # as soon as one produces actions. Threshold (index 0) always runs; LLM
+            # strategies (index > 0) are skipped while their cooldown is active.
+            for i, (strategy, priority) in enumerate(self.strategies):
+                if i > 0 and _agentic_in_cooldown():
+                    break  # cooldown active — don't run any remaining LLM strategies
+                try:
+                    result = await strategy.assess(state, context)
+                except Exception:
+                    continue
+                if isinstance(result, list) and result:
+                    try:
+                        conf_val = float(
+                            await self._estimate_confidence(strategy, result[0], state)
+                        )
+                    except Exception:
+                        conf_val = 0.7
+                    proposals.append((result, conf_val, priority, i))
+                    break  # first match wins; skip remaining strategies
+        else:
+            # Concurrent evaluation for priority/confidence modes.
+            # Threshold (index 0) always runs; LLM strategies (index > 0) are skipped
+            # while their cooldown is active.
+            in_cooldown = _agentic_in_cooldown()
+            tasks = []
+            task_indices: List[int] = []
+            for i, (strategy, _priority) in enumerate(self.strategies):
+                if i > 0 and in_cooldown:
+                    continue
+                tasks.append(strategy.assess(state, context))
+                task_indices.append(i)
 
-        for (i, priority, action_list, _strategy), conf in zip(valid_indices, confidences):
-            # Handle any exceptions during confidence estimation
-            if isinstance(conf, Exception):
-                conf_val = 0.7  # fallback default
-            elif isinstance(conf, (int, float)):
-                conf_val = float(conf)
-            else:
-                conf_val = 0.7  # fallback for any other type
-            proposals.append((action_list, conf_val, priority, i))
+            results: List[Union[List[AdaptationAction], BaseException]] = await asyncio.gather(
+                *tasks, return_exceptions=True
+            )
+
+            confidence_tasks = []
+            valid_indices = []
+            for task_pos, result in enumerate(results):  # type: ignore[assignment]
+                i = task_indices[task_pos]
+                strategy, priority = self.strategies[i]
+                if isinstance(result, Exception):  # type: ignore[unreachable]
+                    continue  # type: ignore[unreachable]
+                if isinstance(result, list) and result:
+                    confidence_tasks.append(self._estimate_confidence(strategy, result[0], state))
+                    valid_indices.append((i, priority, result, strategy))
+
+            confidences: List[Union[float, BaseException]] = []
+            if confidence_tasks:
+                confidences = await asyncio.gather(*confidence_tasks, return_exceptions=True)
+
+            for (i, priority, action_list, _strategy), conf in zip(valid_indices, confidences):
+                if isinstance(conf, Exception):
+                    conf_val = 0.7
+                elif isinstance(conf, (int, float)):
+                    conf_val = float(conf)
+                else:
+                    conf_val = 0.7
+                proposals.append((action_list, conf_val, priority, i))
 
         if not proposals:
             if self._logger:
@@ -152,9 +210,12 @@ class HybridStrategy(AdaptationStrategy):
                 selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
                 best_idx = selected_idx
 
-        # Track which strategy was used
+        # Track which strategy was used.
+        # Only update the agentic cooldown timer when a non-threshold (index > 0) strategy fires.
         if selected and selected_idx is not None:
             self._strategy_usage[selected_idx] += 1
+            if selected_idx > 0:
+                self._last_action_time = datetime.now(timezone.utc)
 
         self._metrics.histogram(
             "polaris.strategy.hybrid.assess_duration_seconds",
@@ -241,6 +302,14 @@ class HybridStrategy(AdaptationStrategy):
             description="Minimum confidence threshold for action selection",
             kind="confidence_threshold",
         )
+        params["cooldown_seconds"] = ParameterSpec(
+            current_value=self.cooldown_seconds,
+            type=int,
+            min_value=0,
+            max_value=3600,
+            description="Minimum seconds between any selected hybrid actions",
+            kind="cooldown",
+        )
 
         return params
 
@@ -264,6 +333,10 @@ class HybridStrategy(AdaptationStrategy):
             self.min_confidence = float(new_value)
             return True
 
+        elif parameter_path == "cooldown_seconds":
+            self.cooldown_seconds = int(new_value)
+            return True
+
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
@@ -272,6 +345,8 @@ class HybridStrategy(AdaptationStrategy):
             await self.update_parameter("selection_mode", config["selection_mode"])
         if "min_confidence" in config:
             await self.update_parameter("min_confidence", config["min_confidence"])
+        if "cooldown_seconds" in config:
+            await self.update_parameter("cooldown_seconds", config["cooldown_seconds"])
 
         new_subs = config.get("strategies", [])
         if isinstance(new_subs, list) and len(new_subs) == len(self.strategies):

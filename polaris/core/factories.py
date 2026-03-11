@@ -356,10 +356,13 @@ def _register_default_strategy_factories() -> None:
             # Safety fallback
             return ThresholdReactiveStrategy(logger=logger, metrics=metrics)
 
+        cooldown_seconds = int(hybrid_conf.get("cooldown_seconds", 0))
+
         return HybridStrategy(
             strategies=sub_strategies,
             selection_mode=selection_mode,
             min_confidence=min_confidence,
+            cooldown_seconds=cooldown_seconds,
             logger=logger,
             metrics=metrics,
         )
