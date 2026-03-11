@@ -1,0 +1,577 @@
+################################################################################
+# Polaris Configuration for Wildfire UAV Fire Simulation System
+################################################################################
+#
+# This configuration manages the Wildfire fire spread simulation with UAV agents
+# using automated adaptation strategies to:
+# 1. Minimize fire spread (keep fire_cells_burning_ratio low)
+# 2. Maximize agent effectiveness (maintain high mr1_avg)
+# 3. Optimize resource allocation (balance num_agents vs containment success)
+#
+# System: Wildfire UAV simulation with forest fire dynamics and agent swarms
+# Adapter: WildfireConnector via Flask REST API at http://localhost:5000
+# Update: March 2026
+#
+################################################################################
+
+################################################################################
+# 1. MANAGED SYSTEMS - WILDFIRE FIRE SIMULATION
+################################################################################
+#
+# Configures the Wildfire system connector and monitoring parameters.
+# The system simulates fire spread dynamics with UAV agents attempting
+# to contain and extinguish fires across a forest grid.
+#
+
+systems:
+  - id: "wildfire"
+    connector_type: "wildfire"
+    enabled: true
+    description: "UAV-based wildfire containment simulation"
+
+    connection:
+      # Flask adapter server endpoint
+      base_url: "http://localhost:5000"
+      timeout: 10.0              # Request timeout for API calls
+      session_id: null           # Auto-created on first connection
+      auto_create_session: true  # Create session if none exists
+
+    monitoring:
+      # Collect telemetry every 3 seconds for responsive adaptation
+      # Wildfire dynamics change quickly, so frequent sampling is critical
+      collection_interval: 3
+
+################################################################################
+# 2. MONITORING CONFIGURATION
+################################################################################
+#
+# Controls adaptation loop frequency.
+# Set appropriately for fire spread urgency (faster than slow infrastructure systems)
+#
+
+monitoring:
+  # Adapt every 5 seconds - fire spread is dynamic and requires quick response
+  # Faster than typical web app systems (which use 10-30s intervals)
+  interval_seconds: 5
+
+################################################################################
+# 3. ADAPTATION STRATEGY - AGENTIC LLM
+################################################################################
+#
+# Uses an LLM-based agent with tool access for intelligent adaptation decisions.
+#
+# Why Agentic LLM (vs Threshold):
+# - Fire containment is complex: trade-offs between agent placement, timing, resources
+# - System dynamics are non-linear: metric trends matter as much as absolute values
+# - Multi-step planning needed: coordinate agent movements, anticipate fire behavior
+# - Threshold-based rules insufficient for dynamic forest fire scenarios
+#
+# The agent can:
+# - Analyze current fire spread trends
+# - Predict fire behavior using world model
+# - Plan coordinated agent movements
+# - Execute batch actions with reasoning
+#
+
+strategy:
+  type: "agentic_llm"
+
+  agentic_llm:
+    # Use Google's models (fast, cost-effective for real-time control)
+    provider: google
+
+    # System description: helps LLM understand the domain
+    system_description: |
+      Wildfire UAV Containment Simulation: A dynamic system where autonomous UAV agents
+      attempt to extinguish and contain spreading wildfires across a forest grid. Fire
+      spreads based on wind, vegetation density, and moisture. UAVs can move to new
+      positions and perform containment actions. Success requires balancing agent
+      deployment, anticipating fire spread patterns, and resource constraints.
+
+    adaptation_goals: |
+      PRIMARY: Minimize fire_cells_burning_ratio - keep fires contained below 20%.
+      SECONDARY: Maintain agent effectiveness (mr1_avg > 0.6) and operational count.
+      TERTIARY: Learn from past actions to improve future containment speed and efficiency.
+
+    # Temperature: 0.0 = deterministic, 1.0 = creative
+    temperature: 0.3
+
+    # Max sub-goals the agent can pursue per adaptation cycle
+    steps_limit: 8
+
+    # Custom system prompt with concrete action specifications
+    system_prompt: |
+      You are a wildfire containment agent. Make decisions based on fire spread and UAV effectiveness.
+
+      OBJECTIVES:
+      - PRIMARY: Keep fire_cells_burning_ratio below 20%
+      - SECONDARY: Maintain mr1_avg above 0.6
+
+      DECISION PROCESS:
+      1. Get current state with get_recent_states
+      2. If fire_cells_burning_ratio > 20%: Use predict_outcome, then move agents
+      3. If fire_cells_burning_ratio < 15%: Use wildfire_step
+      4. If mr1_avg < 0.6: Reposition agents
+
+      ACTIONS (use exact format):
+      - wildfire_step: {"type": "wildfire_step", "parameters": {}}
+      - wildfire_move: {"type": "wildfire_move", "parameters": {"actions": [{"uav": 0, "move": "north"}]}}
+      - wildfire_batch_actions: {"type": "wildfire_batch_actions", "parameters": {"actions": [{"uav": 0, "move": "north"}]}}
+      - wildfire_pause: {"type": "wildfire_pause", "parameters": {}}
+      - wildfire_resume: {"type": "wildfire_resume", "parameters": {}}
+      - wildfire_reset: {"type": "wildfire_reset", "parameters": {}}
+
+      RESPONSE FORMAT:
+      {
+        "final": {
+          "needs_adaptation": true,
+          "reasoning": "What you observed and why action is needed",
+          "actions": [{"type": "action_name", "parameters": {}}]
+        }
+      }
+
+      CRITICAL: NEVER put action names as strings in actions array.
+      ALWAYS use objects with "type" and "parameters" fields.
+      WRONG: "actions": ["wildfire_step"]
+      CORRECT: "actions": [{"type": "wildfire_step", "parameters": {}}]
+
+    # Tools the agent can use for better decisions
+    tools:
+      enabled:
+        - get_recent_states          # Check current system state (use first)
+        - predict_outcome            # Evaluate if action will help (use second)
+        - summarize_metric_trends    # Optional: analyze trends if needed
+        - get_world_model_insights   # Optional: get predictive insights
+        - get_action_history         # Optional: learn from past actions
+        # Note: list_supported_actions removed - actions explicitly listed in prompt
+
+    # Resilience settings for robust LLM API interactions
+    resilience:
+      rps: 3                    # 3 requests/second (faster for quick decisions)
+      burst: 6                  # Allow up to 6 concurrent requests
+      concurrency: 4            # Parallel LLM calls when needed
+      max_retries: 3            # Retry failed requests up to 3 times
+      base_backoff_ms: 100      # Start with faster 100ms retry delay
+      max_backoff_ms: 2000      # Cap retry delay at 2 seconds
+
+################################################################################
+# 4. WORLD MODEL - STATISTICAL PREDICTION
+################################################################################
+#
+# Provides trend analysis and fire spread predictions to guide adaptation.
+# Essential for anticipating fire spread behavior.
+#
+# The statistical world model:
+# - Tracks metric trends over time (windowed approach)
+# - Estimates metric velocity (how fast they're changing)
+# - Predicts regime changes (normal -> high fire activity)
+# - Provides confidence intervals for predictions
+#
+
+world_model:
+  type: "statistical"
+  description: "Fire spread trend analysis and prediction engine"
+
+  statistical:
+    # Keep 150 recent samples per metric for trend analysis
+    # Wildfire dynamics change rapidly, so we need recent history
+    # At 3s collection interval: 150 samples = 7.5 min history
+    window_size: 150
+
+    # Enable Kalman-style filtering for smoother trend estimates
+    # Helps distinguish fire spread signal from sensor noise
+    use_kalman: true
+
+################################################################################
+# 5. KNOWLEDGE STORE - ADAPTATION HISTORY
+################################################################################
+#
+# Persists system states and adaptation history.
+# Used by meta-learner to identify patterns and optimize over time.
+#
+
+knowledge_store:
+  type: "memory"
+  description: "In-memory store of states and adaptation decisions"
+
+  memory:
+    # Keep last 2000 states per system (about 2.8 hours at 3s intervals)
+    # Sufficient for meta-learning to identify daily patterns
+    max_states_per_system: 2000
+
+################################################################################
+# 6. META-LEARNER - CONTINUOUS OPTIMIZATION
+################################################################################
+#
+# Continuously analyzes adaptation effectiveness and recommends improvements.
+# For wildfire, this means learning which agent strategies work best for
+# different fire spread patterns and environmental conditions.
+#
+# LLM-based meta-learner provides:
+# - Root cause analysis of adaptation failures
+# - Recommendation proposals for parameter tuning
+# - Learning from simulation runs across multiple sessions
+#
+
+meta_learner:
+  enabled: true
+  description: "Learns optimal adaptation strategies from historical runs"
+
+  type: "llm"  # LLM-based meta-learning
+
+  # Analyze strategy effectiveness every 3 hours
+  # Wildfire simulations might run for 1-2 hours before reset,
+  # so 3-hour intervals allow multiple runs of data accumulation
+  analysis_interval_hours: 3.0
+
+  # Transparency ledger: track all meta-learning recommendations
+  transparency:
+    enabled: true
+    output_path: "./logs/wildfire_meta_learning_updates.jsonl"
+
+  llm:
+    provider: google
+    temperature: 0.1  # Deterministic analysis for consistency
+
+    # Don't auto-apply proposals - review critical fire containment changes
+    auto_apply: false
+
+    # Custom analysis prompt for wildfire domain
+    analysis_system_prompt: |
+      You are an expert analyst for autonomous wildfire containment systems.
+
+      Analyze the provided adaptation history and metrics to identify:
+      1. Which agent coordination patterns were most effective?
+      2. How did fire spread rates vary with different strategies?
+      3. Were agent placements optimally timed?
+      4. What environmental conditions (wind, vegetation) affected outcomes?
+      5. Are there learnable patterns to improve next simulation run?
+
+      Provide actionable insights about strategy effectiveness.
+
+    optimization_system_prompt: |
+      You are an expert parameter optimizer for autonomous adaptation systems.
+
+      Based on the analysis provided, recommend specific improvements:
+      1. Should we adjust LLM temperature for more/less aggressive adaptation?
+      2. Should monitoring interval be faster/slower?
+      3. Are there patterns in successful agent actions to emphasize?
+      4. Should we modify the adaptation goals or constraints?
+      5. What threshold values would improve contingency response?
+
+      Provide specific, testable recommendations with rationale.
+
+    # Per-system customization
+    per_system_prompts:
+      wildfire:
+        analysis_system_prompt: |
+          You are an expert in wildfire containment strategy analysis.
+
+          Examine the run history to understand:
+          1. Fire spread dynamics: Did fires spread faster/slower than anticipated?
+          2. Agent effectiveness: Which UAV placement strategies worked best?
+          3. Containment success: What fire_cells_burning_ratio was achievable?
+          4. Agent utilization: Was num_agents optimal or could we use fewer?
+          5. Temporal patterns: Did time-of-day (simulation time) affect outcomes?
+
+          Provide findings that help optimize the next simulation run.
+
+        optimization_system_prompt: |
+          You are optimizing a wildfire containment system based on learned patterns.
+
+          Recommend parameter adjustments:
+          1. LLM temperature: Should we be more risk-taking or conservative?
+          2. Monitoring frequency: 5-second interval appropriate or adjust?
+          3. Tool usage: Should we predict outcomes more frequently?
+          4. Agent coordination: Batch actions vs individual movements?
+          5. Fire spread assumptions: Update model based on observations?
+
+          Each recommendation should reference specific failure modes observed.
+
+    resilience:
+      rps: 1
+      burst: 2
+      concurrency: 2
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+
+################################################################################
+# 7. OBSERVABILITY - LOGGING & METRICS
+################################################################################
+#
+# Comprehensive logging and metrics collection for monitoring adaptation quality
+# and system health. Critical for understanding why adaptations succeed/fail.
+#
+
+observability:
+  ###########################################################################
+  # LOGGING CONFIGURATION
+  ###########################################################################
+  #
+  # Structure: Human-readable format for debugging, detailed DEBUG logging
+  # to understand adaptation decision-making at each step.
+  #
+
+  logging:
+    type: "human"              # Human-readable (vs structured JSON)
+    level: "DEBUG"             # Verbose logging for analysis
+    console: true              # Output to terminal
+    file: true                 # Also save to log file
+    file_path: "./logs/wildfire_polaris.log"
+    use_colors: true           # Color-coded output
+
+  ###########################################################################
+  # METRICS COLLECTION
+  ###########################################################################
+  #
+  # Collect detailed metrics on:
+  # - System adaptation effectiveness
+  # - Connector performance
+  # - Strategy decision quality
+  # - World model prediction accuracy
+  # - Meta-learner analysis results
+  #
+
+  metrics:
+    enabled: true
+    collector_type: "simple"   # In-memory metrics (no external dependency)
+
+    export:
+      enabled: true            # Export collected metrics
+      formats:
+        - json                 # JSON export for analysis
+        - csv                  # CSV export for graphing
+      output_dir: "./metrics/wildfire"
+      auto_export_interval_minutes: 5  # Export every 5 minutes
+      experiment_name: "wildfire_containment_run"
+      include_timestamp: true
+
+    simple:
+      # Store up to 2000 histogram values per metric
+      # At 3s intervals: 100 minutes of fine-grained data
+      histogram_max_values: 2000
+
+    components:
+      # Enable all component metrics for comprehensive visibility
+      core_framework: true           # Framework lifecycle
+      monitoring_loop: true          # Monitoring loop timing
+      event_bus: true                # Event system
+      registry: true                 # Component registry
+      strategy: true                 # Strategy decisions
+      connectors: true               # Connector health/performance
+      world_model: true              # Prediction accuracy
+      knowledge_store: true          # State persistence
+      meta_learner: true             # Learning analytics
+
+# 8. ACTION SCHEMA REFERENCE
+################################################################################
+#
+# Complete action schema for the agent - use these exact parameter formats
+# when generating adaptation actions.
+#
+# SCHEMA TEMPLATE:
+# {
+#   "type": "<action_type>",
+#   "parameters": { ... }
+# }
+#
+# ------------------------------------------------------------------------------
+# ACTION: wildfire_step
+# ------------------------------------------------------------------------------
+# Purpose: Advance simulation by one timestep
+# When to use: Default action when fire_cells_burning_ratio < 15% (stable)
+# Parameters: {} (empty object required)
+#
+# Example:
+# {
+#   "type": "wildfire_step",
+#   "parameters": {}
+# }
+#
+# ------------------------------------------------------------------------------
+# ACTION: wildfire_pause
+# ------------------------------------------------------------------------------
+# Purpose: Temporarily pause wildfire spread
+# When to use: EMERGENCY when fire_cells_burning_ratio > 30%
+# Parameters: {} (empty object required)
+#
+# Example:
+# {
+#   "type": "wildfire_pause",
+#   "parameters": {}
+# }
+#
+# ------------------------------------------------------------------------------
+# ACTION: wildfire_resume
+# ------------------------------------------------------------------------------
+# Purpose: Resume wildfire spread after pause
+# When to use: After pause when containment forces are in position
+# Parameters: {} (empty object required)
+#
+# Example:
+# {
+#   "type": "wildfire_resume",
+#   "parameters": {}
+# }
+#
+# ------------------------------------------------------------------------------
+# ACTION: wildfire_move
+# ------------------------------------------------------------------------------
+# Purpose: Move single UAV agent to new position
+# When to use: When specific agent needs repositioning
+# Parameters: {
+#   "actions": [
+#     {"uav": <agent_id>, "move": "north|south|east|west|hold"}
+#   ]
+# }
+#
+# Example:
+# {
+#   "type": "wildfire_move",
+#   "parameters": {
+#     "actions": [
+#       {"uav": 0, "move": "north"},
+#       {"uav": 1, "move": "hold"}
+#     ]
+#   }
+# }
+#
+# ------------------------------------------------------------------------------
+# ACTION: wildfire_batch_actions
+# ------------------------------------------------------------------------------
+# Purpose: Execute multiple UAV movements in single step (more efficient)
+# When to use: When multiple agents need repositioning simultaneously
+# Parameters: {
+#   "actions": [
+#     {"uav": <agent_id>, "move": "north|south|east|west|hold"},
+#     ...
+#   ]
+# }
+#
+# Example:
+# {
+#   "type": "wildfire_batch_actions",
+#   "parameters": {
+#     "actions": [
+#       {"uav": 0, "move": "east"},
+#       {"uav": 1, "move": "north"},
+#       {"uav": 2, "move": "west"}
+#     ]
+#   }
+# }
+#
+# ------------------------------------------------------------------------------
+# ACTION: wildfire_reset
+# ------------------------------------------------------------------------------
+# Purpose: Restart simulation from beginning
+# When to use: When containment failed (ratio > 50%) and restart is best option
+# Parameters: {} (empty object required)
+#
+# Example:
+# {
+#   "type": "wildfire_reset",
+#   "parameters": {}
+# }
+#
+# ------------------------------------------------------------------------------
+# DECISION FLOWCHART
+# ------------------------------------------------------------------------------
+#
+#   START
+#     |
+#     v
+#   Get current state (get_recent_states)
+#     |
+#     v
+#   fire_cells_burning_ratio > 30%? ----YES----> EMERGENCY: pause, then batch move
+#     |
+#     NO
+#     v
+#   fire_cells_burning_ratio > 20%? ----YES----> CRITICAL: predict, then batch move
+#     |
+#     NO
+#     v
+#   fire_cells_burning_ratio > 15%? ----YES----> WARNING: predict, then single move
+#     |
+#     NO
+#     v
+#   STABLE: step forward, maintain positions
+#
+# ------------------------------------------------------------------------------
+# METRIC THRESHOLDS SUMMARY
+# ------------------------------------------------------------------------------
+#
+# fire_cells_burning_ratio:
+#   - > 30%: EMERGENCY - pause + aggressive containment
+#   - 20-30%: CRITICAL - batch agent repositioning
+#   - 15-20%: WARNING - single agent repositioning
+#   - < 15%: STABLE - step forward
+#
+# mr1_avg (agent effectiveness):
+#   - < 0.5: LOW - reposition to better zones
+#   - 0.5-0.6: MARGINAL - consider optimization
+#   - 0.6-0.8: GOOD - maintain current strategy
+#   - > 0.8: EXCELLENT - current approach working
+#
+################################################################################
+
+################################################################################
+# 9. KEY METRICS REFERENCE
+################################################################################
+#
+# Metrics available from the Wildfire system for monitoring and adaptation:
+#
+# PRIMARY METRICS (watched most closely):
+#   - fire_cells_burning_ratio: % of grid burning (TARGET: < 20%)
+#   - fire_cells_burning: absolute count of burning cells
+#   - mr1_avg: agent effectiveness score (TARGET: > 0.6)
+#
+# SECONDARY METRICS:
+#   - num_agents: current active UAVs
+#   - timestep: simulation step counter
+#   - mr1_values: individual agent scores (list)
+#   - mr2_value: aggregate performance metric
+#
+# Adaptation Actions:
+#   - wildfire_reset: restart simulation
+#   - wildfire_pause: pause fire spread
+#   - wildfire_resume: resume simulation
+#   - wildfire_step: advance one timestep
+#   - wildfire_move: reposition single agent
+#   - wildfire_batch_actions: execute multiple agent actions
+#
+################################################################################
+
+################################################################################
+# 10. DEPLOYMENT NOTES
+################################################################################
+#
+# Before running Polaris with this configuration:
+#
+# 1. Start the Wildfire adapter server:
+#    cd /path/to/wildfire
+#    python3 adapter.py
+#    (Should listen on http://localhost:5000)
+#
+# 2. Verify adapter health:
+#    curl http://localhost:5000/health
+#
+# 3. Create logs/metrics directories:
+#    mkdir -p logs metrics/wildfire
+#
+# 4. Set LLM API keys (Google or OpenAI):
+#    export GOOGLE_API_KEY=your_key
+#    # or
+#    export OPENAI_API_KEY=your_key
+#
+# 5. Run Polaris with this config:
+#    python -m polaris.cli run --config config/wildfire.yaml
+#
+# 6. Monitor logs:
+#    tail -f logs/wildfire_polaris.log
+#
+# 7. Review metrics:
+#    Check metrics/wildfire/ directory for JSON/CSV exports
+#
+################################################################################
