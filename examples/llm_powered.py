@@ -9,6 +9,7 @@ import os
 
 from polaris import Polaris
 from polaris.connectors import SWIMConnector
+from polaris.infrastructure.constants import DEFAULT_GOOGLE_MODEL
 from polaris.infrastructure.llm import create_llm_client
 from polaris.infrastructure.observability import StructuredLogger
 from polaris.meta_learner import LLMMetaLearner
@@ -25,7 +26,7 @@ async def main():
         return
 
     # Create LLM client
-    llm_client = create_llm_client("google", api_key=api_key, model="gemini-3-flash-preview")
+    llm_client = create_llm_client("google", api_key=api_key, model=DEFAULT_GOOGLE_MODEL)
 
     # Create LLM-powered strategy
     strategy = LLMReasoningStrategy(

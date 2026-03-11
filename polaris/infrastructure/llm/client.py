@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS
+from polaris.infrastructure.constants import DEFAULT_GOOGLE_MODEL, DEFAULT_MAX_TOKENS
 
 
 @dataclass
@@ -53,7 +53,7 @@ class LLMClient(ABC):
 class GoogleGeminiClient(LLMClient):
     """Google Gemini LLM client."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-3-flash-preview"):
+    def __init__(self, api_key: Optional[str] = None, model: str = DEFAULT_GOOGLE_MODEL):
         """Initialize Google Gemini client with API key and model."""
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.model = model
@@ -90,14 +90,17 @@ class GoogleGeminiClient(LLMClient):
             schema: A Pydantic BaseModel class or already-extracted dict schema
 
         Returns:
-            A cleaned schema dict compatible with Gemini API
+            A cleaned schema compatible with Gemini API (can be any type)
         """
         if hasattr(schema, "model_json_schema"):
-            schema_dict = schema.model_json_schema()
+            schema_dict: Dict[str, Any] = schema.model_json_schema()
         elif isinstance(schema, dict):
             schema_dict = schema
         else:
-            return schema
+            raise TypeError(
+                f"_clean_schema_for_gemini expects a Pydantic model class or a dict, "
+                f"got {type(schema)!r}"
+            )
 
         defs = schema_dict.get("$defs", {})
         if defs:
@@ -122,28 +125,112 @@ class GoogleGeminiClient(LLMClient):
 
     @staticmethod
     def _recursively_clean_schema(obj: Any) -> Any:
-        """Recursively remove unsupported fields from schema.
+        """Recursively convert Pydantic schema to Gemini-compatible format.
 
-        Removes Pydantic-specific fields like "default", "examples", etc.
-        that Gemini API doesn't accept.
+        Gemini API doesn't support:
+        - "default" fields
+        - "examples" fields
+        - "title" fields
+        - "anyOf" and "allOf" (needs flattening)
+        - "$defs" and "$ref" (should be inlined before this step)
+
+        This function converts the schema to be compatible with Gemini's limitations.
 
         Args:
             obj: Schema object (dict, list, or scalar)
 
         Returns:
-            Cleaned schema object
+            Gemini-compatible schema object
         """
         if isinstance(obj, dict):
-            cleaned = {}
+            cleaned: Dict[str, Any] = {}
             for key, value in obj.items():
-                if key in {"default", "examples", "title", "anyOf", "allOf", "$defs", "$ref"}:
+                if key in {"default", "examples", "title", "$defs", "$ref", "additionalProperties"}:
                     continue
-                cleaned[key] = GoogleGeminiClient._recursively_clean_schema(value)
+
+                if key == "anyOf":
+                    # Handle anyOf by finding the most specific non-null type
+                    cleaned.update(GoogleGeminiClient._flatten_anyof(value))
+                elif key == "allOf":
+                    # Handle allOf by merging schemas
+                    merged = GoogleGeminiClient._merge_allof(value)
+                    if merged:
+                        cleaned.update(merged)
+                else:
+                    cleaned[key] = GoogleGeminiClient._recursively_clean_schema(value)
             return cleaned
         elif isinstance(obj, list):
             return [GoogleGeminiClient._recursively_clean_schema(item) for item in obj]
         else:
             return obj
+
+    @staticmethod
+    def _flatten_anyof(anyof_list: List[Dict[str, Any]]) -> Any:
+        """Flatten anyOf to a single schema that Gemini understands.
+
+        For nullable fields (type + null), we use the non-null type.
+        For multiple object types, we merge their properties.
+
+        Returns:
+            Schema object (can be dict or empty)
+        """
+        if not anyof_list:
+            return {}
+
+        # Filter out null types and find the most specific type
+        non_null_options = [opt for opt in anyof_list if opt.get("type") != "null"]
+
+        if not non_null_options:
+            # All options are null, treat as optional
+            return {}
+
+        if len(non_null_options) == 1:
+            # Single non-null option, use it directly
+            return GoogleGeminiClient._recursively_clean_schema(non_null_options[0])
+
+        merged: Dict[str, Any] = {"type": "object", "properties": {}}
+        all_required: set = set()
+
+        for option in non_null_options:
+            cleaned_option = GoogleGeminiClient._recursively_clean_schema(option)
+            if cleaned_option.get("type") == "object" and "properties" in cleaned_option:
+                merged["properties"].update(cleaned_option["properties"])
+                if "required" in cleaned_option:
+                    all_required.update(cleaned_option["required"])
+            else:
+                # For non-object types, use the first one
+                return GoogleGeminiClient._recursively_clean_schema(non_null_options[0])
+
+        if all_required:
+            merged["required"] = list(all_required)
+
+        return merged
+
+    @staticmethod
+    def _merge_allof(allof_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge allOf schemas into a single schema."""
+        if not allof_list:
+            return {}
+
+        merged: Dict[str, Any] = {"type": "object", "properties": {}}
+        all_required: set = set()
+
+        for schema in allof_list:
+            cleaned_schema = GoogleGeminiClient._recursively_clean_schema(schema)
+            if cleaned_schema.get("type") == "object":
+                if "properties" in cleaned_schema:
+                    merged["properties"].update(cleaned_schema["properties"])
+                if "required" in cleaned_schema:
+                    all_required.update(cleaned_schema["required"])
+                # Copy other fields
+                for key, value in cleaned_schema.items():
+                    if key not in ("properties", "required", "type"):
+                        merged[key] = value
+
+        if all_required:
+            merged["required"] = list(all_required)
+
+        return merged
 
     async def generate(
         self,
@@ -173,11 +260,6 @@ class GoogleGeminiClient(LLMClient):
                 "max_output_tokens": max_tokens,
             }
             if response_schema:
-                # Only constrain output to JSON; do NOT forward the schema itself.
-                # Gemini's Schema type doesn't support $defs produced by Pydantic's
-                # model_json_schema(), so passing it causes an "Unknown field" error.
-                # The callers all parse the JSON response themselves, so the schema
-                # type constraint is not needed at the API level.
                 gen_config["response_mime_type"] = "application/json"
                 gen_config["response_schema"] = self._clean_schema_for_gemini(response_schema)
 
@@ -226,7 +308,7 @@ class GoogleGeminiClient(LLMClient):
                 "Install with: pip install google-generativeai"
             )
         except Exception as e:
-            if isinstance(e, RuntimeError):
+            if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"Gemini API error: {e}") from e
 
@@ -292,9 +374,8 @@ class OpenAIClient(LLMClient):
         except ImportError:
             raise ImportError("openai package not installed. Install with: pip install openai")
         except Exception as e:
-            if isinstance(e, RuntimeError):
+            if isinstance(e, (RuntimeError, ValueError)):
                 raise
-
             raise RuntimeError(f"OpenAI API error: {e}") from e
 
 
@@ -361,7 +442,7 @@ class GroqClient(LLMClient):
         except ImportError:
             raise ImportError("groq package not installed. Install with: pip install groq")
         except Exception as e:
-            if isinstance(e, RuntimeError):
+            if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"Groq API error: {e}") from e
 
@@ -447,7 +528,7 @@ class ResilientLLMClient(LLMClient):
         elif self.provider in ("google", "gemini"):
             return GoogleGeminiClient(
                 api_key=api_key,
-                model=str(self.model or self.inner_kwargs.get("model", "gemini-3-flash-preview")),
+                model=str(self.model or self.inner_kwargs.get("model", DEFAULT_GOOGLE_MODEL)),
             )
         else:
             raise ValueError(
