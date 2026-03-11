@@ -166,7 +166,9 @@ class GoogleGeminiClient(LLMClient):
 
             prompt = "".join(prompt_parts)
 
-            gen_config: Dict[str, Any] = {
+            from google.generativeai.types import generation_types
+
+            gen_config: generation_types.GenerationConfigDict = {
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
             }
@@ -182,7 +184,7 @@ class GoogleGeminiClient(LLMClient):
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: self.client.generate_content(prompt, generation_config=gen_config),  # type: ignore[arg-type]
+                lambda: self.client.generate_content(prompt, generation_config=gen_config),
             )
 
             if not response.candidates:
