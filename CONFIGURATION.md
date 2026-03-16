@@ -65,7 +65,7 @@ systems:
 strategy:
   type: "llm_reasoning"
   llm_reasoning:
-    provider: "openai"
+    provider: "openai" # or "openrouter"
     system_description: "SWIM web application server"
     adaptation_goals: "Maintain performance with minimal latency"
     temperature: 0.1
@@ -80,6 +80,39 @@ observability:
       enabled: true
       output_dir: "./metrics"
       auto_export_interval_minutes: 60
+```
+
+### Using OpenRouter (OpenAI-compatible gateway)
+
+Polaris supports OpenRouter via an OpenAI-compatible client.
+
+Required environment variable:
+
+- `OPENROUTER_API_KEY`
+
+Optional environment variables:
+
+- `OPENROUTER_BASE_URL` (default: `https://openrouter.ai/api/v1`)
+- `OPENROUTER_SITE_URL` (sent as `HTTP-Referer`, recommended by OpenRouter)
+- `OPENROUTER_APP_NAME` (sent as `X-Title`, recommended by OpenRouter)
+
+Example config:
+
+```yaml
+strategy:
+  type: "agentic_llm"
+  agentic_llm:
+    provider: "openrouter"
+    # Optional: override the OpenRouter model routing string
+    # model: "anthropic/claude-3.5-sonnet"
+    temperature: 0.3
+
+meta_learner:
+  enabled: true
+  type: "llm"
+  llm:
+    provider: "openrouter"
+    temperature: 0.1
 ```
 
 ---

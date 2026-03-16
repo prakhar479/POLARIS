@@ -20,6 +20,7 @@ different agents can use different models or providers optimised for their role
 """
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -764,19 +765,79 @@ class MultiAgentStrategy(AdaptationStrategy):
         return json.dumps(data)
 
     def _parse_json(self, content: str) -> Any:
-        s = content.strip()
-        if not s:
+        raw = (content or "").strip()
+        if not raw:
             return {}
-        if "```json" in s:
-            part = s.split("```json", 1)[1]
-            s = part.split("```", 1)[0].strip()
-        elif "```" in s:
-            part = s.split("```", 1)[1]
-            s = part.split("```", 1)[0].strip()
+
+        fence_match = re.search(
+            r"```(?:json)?\s*(?P<body>.*?)\s*```",
+            raw,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        candidates: List[str] = []
+        if fence_match:
+            candidates.append(fence_match.group("body").strip())
+        candidates.append(raw)
+
+        for cand in candidates:
+            parsed = self._extract_first_json_value(cand)
+            if parsed is not None:
+                return parsed
+
+        import logging
+
+        logging.getLogger(__name__).warning("LLM returned malformed JSON: %.500s", raw)
+        return {}
+
+    def _extract_first_json_value(self, text: str) -> Any:
+        s = (text or "").strip()
+        if not s:
+            return None
+
         try:
             return json.loads(s)
-        except json.JSONDecodeError:
-            import logging
+        except Exception:
+            pass
 
-            logging.getLogger(__name__).warning("LLM returned malformed JSON: %.500s", s)
-            return {}
+        start = None
+        for i, ch in enumerate(s):
+            if ch in "[{":
+                start = i
+                break
+        if start is None:
+            return None
+
+        opening = s[start]
+        closing = "]" if opening == "[" else "}"
+        depth = 0
+        in_str = False
+        escape = False
+        for j in range(start, len(s)):
+            ch = s[j]
+            if in_str:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+
+            if ch == opening:
+                depth += 1
+                continue
+            if ch == closing:
+                depth -= 1
+                if depth == 0:
+                    snippet = s[start : j + 1]
+                    try:
+                        return json.loads(snippet)
+                    except Exception:
+                        return None
+        return None

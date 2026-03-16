@@ -183,6 +183,62 @@ async def test_agentic_llm_malformed_json_response(strategy):
 
 
 @pytest.mark.asyncio
+async def test_agentic_llm_parses_fenced_json(strategy):
+    """AgenticLLMStrategy should parse JSON wrapped in code fences."""
+    final_response = {
+        "final": {
+            "needs_adaptation": True,
+            "reasoning": "move needed",
+            "actions": [{"type": "wildfire_move", "parameters": {"direction": "N"}}],
+        }
+    }
+    content = "Here you go:\n```json\n" + json.dumps(final_response) + "\n```\n"
+    strategy.llm.generate.return_value = MockLLMResponse(content)
+
+    state = SystemState(
+        system_id="wildfire",
+        timestamp=datetime.now(timezone.utc),
+        metrics={},
+        health_status=HealthStatus.HEALTHY,
+    )
+    context = AdaptationContext(system_id="wildfire", historical_states=[])
+
+    actions = await strategy.assess(state, context)
+    assert len(actions) == 1
+    assert actions[0].action_type == "wildfire_move"
+
+
+@pytest.mark.asyncio
+async def test_agentic_llm_extracts_json_from_mixed_text(strategy):
+    """AgenticLLMStrategy should extract the first JSON object from mixed text."""
+    final_response = {
+        "final": {
+            "needs_adaptation": True,
+            "reasoning": "mixed response",
+            "actions": [{"type": "wildfire_step", "parameters": {}}],
+        }
+    }
+    content = (
+        "Some analysis up top...\n"
+        + json.dumps(final_response)
+        + "\nAnd some trailing text that is not JSON."
+    )
+    strategy.llm.generate.return_value = MockLLMResponse(content)
+
+    state = SystemState(
+        system_id="wildfire",
+        timestamp=datetime.now(timezone.utc),
+        metrics={},
+        health_status=HealthStatus.HEALTHY,
+    )
+    context = AdaptationContext(system_id="wildfire", historical_states=[])
+
+    actions = await strategy.assess(state, context)
+    assert len(actions) == 1
+    assert actions[0].action_type == "wildfire_step"
+
+
+@pytest.mark.asyncio
 async def test_agentic_llm_invalid_schema_response(strategy):
     """Test behavior when LLM returns JSON that does not match schema."""
     # missing both tool and final

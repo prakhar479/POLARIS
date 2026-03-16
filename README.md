@@ -59,6 +59,25 @@ Polaris includes built-in connectors for common exemplar systems:
 
 See [CONFIGURATION.md](./CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
 
+## Wildfire simulation (quick run)
+
+1) Start the Wildfire adapter (Flask REST API) so `http://localhost:5000/health` is reachable.
+
+2) Run Polaris with the Wildfire config:
+
+```bash
+polaris --config config/wildfire.yaml
+```
+
+### Using OpenRouter for LLM strategies
+
+Polaris supports OpenRouter via an OpenAI-compatible client.
+
+- Set `OPENROUTER_API_KEY`
+- In YAML, set `provider: openrouter` under `strategy.*` and/or `meta_learner.llm`
+
+See [CONFIGURATION.md](./CONFIGURATION.md#using-openrouter-openai-compatible-gateway) for details.
+
 ## Factory-based Registration
 
 Polaris uses factory registries to map configuration type strings to concrete connector and strategy implementations.

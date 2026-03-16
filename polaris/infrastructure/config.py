@@ -159,6 +159,39 @@ class PolarisConfig(BaseModel):
     observability: Optional[Dict[str, Any]] = None
     monitoring: Optional[Dict[str, Any]] = None
     max_concurrent_connectors: int = Field(default=10, gt=0)
+    # Preserve unknown top-level config keys (e.g., custom connector-specific blocks like `wildfire:`)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_unknown_top_level_keys(cls, data: Any) -> Any:
+        """Preserve unknown top-level keys into `extra`.
+
+        Some configurations include connector-specific top-level blocks (for example
+        `wildfire:`) that aren't part of the strict PolarisConfig schema. We keep
+        them so core code can access them for optional behaviors.
+        """
+
+        if not isinstance(data, dict):
+            return data
+
+        known = {
+            "systems",
+            "strategy",
+            "world_model",
+            "knowledge_store",
+            "meta_learner",
+            "observability",
+            "monitoring",
+            "max_concurrent_connectors",
+            "extra",
+        }
+        extra = dict(data.get("extra") or {})
+        for k, v in list(data.items()):
+            if k not in known:
+                extra[k] = v
+        data["extra"] = extra
+        return data
 
     @model_validator(mode="before")
     @classmethod

@@ -55,6 +55,23 @@ monitoring:
   interval_seconds: 5
 
 ################################################################################
+# 2.1 WILDFIRE SIMULATION CLOCK
+################################################################################
+#
+# The Wildfire simulator can be step-driven (i.e., the timestep only advances
+# when /api/v1/sim/step is called). In such setups, Polaris must step the
+# simulation even when no adaptation is proposed.
+#
+# When enabled, Polaris will automatically call the connector action
+# `wildfire_step` whenever the strategy returns no actions.
+#
+wildfire:
+  auto_step_when_no_adaptation: true
+  # Option B: always advance the simulation clock once per cycle.
+  # This appends an additional `wildfire_step` after any proposed actions.
+  always_step_each_cycle: true
+
+################################################################################
 # 3. ADAPTATION STRATEGY - AGENTIC LLM
 ################################################################################
 #
@@ -78,7 +95,7 @@ strategy:
 
   agentic_llm:
     # Use Google's models (fast, cost-effective for real-time control)
-    provider: google
+    provider: openrouter
 
     # System description: helps LLM understand the domain
     system_description: |
@@ -101,17 +118,67 @@ strategy:
 
     # Custom system prompt with concrete action specifications
     system_prompt: |
-      You are a wildfire containment agent. Make decisions based on fire spread and UAV effectiveness.
+      You are an autonomous wildfire containment strategist controlling a fleet of UAVs.
 
-      OBJECTIVES:
-      - PRIMARY: Keep fire_cells_burning_ratio below 20%
-      - SECONDARY: Maintain mr1_avg above 0.6
+      Your goal is to contain wildfire spread while maximizing monitoring effectiveness.
 
-      DECISION PROCESS:
-      1. Get current state with get_recent_states
-      2. If fire_cells_burning_ratio > 20%: Use predict_outcome, then move agents
-      3. If fire_cells_burning_ratio < 15%: Use wildfire_step
-      4. If mr1_avg < 0.6: Reposition agents
+      ------------------------------------------------------------------------------
+      ADAPTIVE REASONING PROCESS
+      ------------------------------------------------------------------------------
+
+      At every cycle, follow this reasoning process:
+
+      1. SITUATIONAL AWARENESS
+        Retrieve the current system state using get_recent_states.
+        Understand:
+          - How large the fire currently is
+          - How quickly it is growing or shrinking
+          - Whether UAV coverage is effective
+          - Whether the system is stable or deteriorating
+
+      2. TREND INTERPRETATION
+        Examine recent metric trends to understand dynamics:
+          - Is fire_cells_burning_ratio increasing or decreasing?
+          - Is mr1_avg improving or deteriorating?
+          - Are UAV actions helping or failing?
+
+        Use summarize_metric_trends if necessary.
+
+      3. RISK ASSESSMENT
+        Determine the level of system risk:
+
+          LOW RISK
+          Fire stable or shrinking, UAV monitoring effective.
+
+          MODERATE RISK
+          Fire growing slowly or UAV coverage insufficient.
+
+          HIGH RISK
+          Fire expanding quickly or UAV coordination ineffective.
+
+          CRITICAL
+          Fire growth likely to exceed containment capacity.
+
+      4. INTERVENTION ANALYSIS
+        Consider available actions and evaluate their impact.
+
+        Use predict_outcome when evaluating possible interventions.
+
+        Possible responses include:
+          - advancing the simulation (wildfire_step)
+          - repositioning UAVs
+          - coordinating multiple UAV movements
+          - pausing simulation during critical containment
+
+      5. ACTION SELECTION
+        Choose actions that best improve containment probability.
+
+        Preferred strategies:
+          - reposition UAVs toward expanding fire fronts
+          - coordinate agents rather than moving individually
+          - avoid unnecessary actions when system is stable
+          - anticipate fire spread rather than reacting late
+
 
       ACTIONS (use exact format):
       - wildfire_step: {"type": "wildfire_step", "parameters": {}}
@@ -222,7 +289,7 @@ meta_learner:
   # Analyze strategy effectiveness every 3 hours
   # Wildfire simulations might run for 1-2 hours before reset,
   # so 3-hour intervals allow multiple runs of data accumulation
-  analysis_interval_hours: 3.0
+  analysis_interval_hours: 0.01
 
   # Transparency ledger: track all meta-learning recommendations
   transparency:
@@ -230,7 +297,7 @@ meta_learner:
     output_path: "./logs/wildfire_meta_learning_updates.jsonl"
 
   llm:
-    provider: google
+    provider: openrouter
     temperature: 0.1  # Deterministic analysis for consistency
 
     # Don't auto-apply proposals - review critical fire containment changes

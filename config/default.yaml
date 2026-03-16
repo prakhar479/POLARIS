@@ -196,7 +196,7 @@ strategy:
       - type: agentic_llm # Sub-strategy 2
         priority: 0.6
         agentic_llm:
-          provider: google # "google" or "openai" (default: google)
+          provider: google # "google", "openai", or "openrouter" (default: google)
           steps_limit: 3 # Max reasoning steps (default: 3)
           temperature: 0.1 # Model creativity (default: 0.1)
           # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
@@ -416,7 +416,7 @@ meta_learner:
 
   # For LLM-Based Meta-Learner
   llm:
-    provider: google # "google" or "openai" (default: google)
+    provider: google # "google", "openai", or "openrouter" (default: google)
     temperature: 0.1 # Model creativity (default: 0.1)
     auto_apply: true # Auto-apply approved proposals (default: false)
 

@@ -121,6 +121,27 @@ class MonitoringLoop:
         try:
             state = await connector.collect_telemetry()
             systems_processed = 1
+
+            # Log wildfire telemetry every iteration for observability.
+            # We keep this concise and only trigger for the wildfire system.
+            if state.system_id.lower() == "wildfire":
+                self._logger.info(
+                    "Wildfire telemetry",
+                    system_id=state.system_id,
+                    metrics={
+                        k: getattr(v, "value", v)
+                        for k, v in (state.metrics or {}).items()
+                        if k
+                        in {
+                            "timestep",
+                            "fire_cells_burning_ratio",
+                            "mr1_avg",
+                            "num_agents",
+                            "fire_contained",
+                            "burned_cells",
+                        }
+                    },
+                )
             self._emit_tagged(
                 "polaris.telemetry.collected",
                 state.system_id,

@@ -13,9 +13,10 @@ The strategy follows a step-by-step reasoning process:
 """
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from pydantic import BaseModel, Field
 
@@ -201,6 +202,14 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     temperature=self.temperature,
                     max_tokens=DEFAULT_MAX_TOKENS_REASONING,
                     response_schema=AgenticResponseSchema,
+                )
+
+                # Optional deep debug to help diagnose provider-specific formatting issues.
+                # Enabled via env var to avoid logging large model outputs by default.
+                self._maybe_log_llm_response(
+                    system_id=state.system_id,
+                    step=step + 1,
+                    content=getattr(response, "content", ""),
                 )
                 self.metrics.histogram(
                     "polaris.strategy.agentic.llm_call_duration_seconds",
@@ -537,24 +546,164 @@ class AgenticLLMStrategy(AdaptationStrategy):
         return json.dumps({"current_state": data})
 
     def _parse_json(self, content: str) -> Any:
-        s = content.strip()
-        if not s:
-            return {}
-        if "```json" in s:
-            part = s.split("```json", 1)[1]
-            s = part.split("```", 1)[0].strip()
-        elif "```" in s:
-            part = s.split("```", 1)[1]
-            s = part.split("```", 1)[0].strip()
-        try:
-            return json.loads(s)
-        except json.JSONDecodeError:
-            import logging
+        """Parse JSON from an LLM response.
 
-            logging.getLogger(__name__).warning(
-                "LLM returned malformed JSON (truncated to 500 chars): %.500s", s
-            )
+        Many providers (including OpenRouter) may return extra prose, wrap JSON in
+        code fences, or include trailing/leading text. We try hard to extract the
+        first valid JSON object/array from the content.
+        """
+
+        raw = (content or "").strip()
+        if not raw:
             return {}
+
+        # Prefer fenced JSON blocks when present.
+        fence_match = re.search(
+            r"```(?:json)?\s*(?P<body>.*?)\s*```",
+            raw,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        candidates: List[Tuple[str, str]] = []
+        if fence_match:
+            candidates.append(("fenced", fence_match.group("body").strip()))
+        candidates.append(("raw", raw))
+
+        for label, cand in candidates:
+            parsed, snippet = self._extract_first_json_value(cand)
+            if parsed is not None:
+                self._maybe_log_extracted_json(label=label, snippet=snippet)
+                return parsed
+
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "LLM returned malformed JSON (truncated to 500 chars): %.500s", raw
+        )
+        return {}
+
+    def _extract_first_json_value(self, text: str) -> Tuple[Optional[Any], Optional[str]]:
+        """Extract and parse the first JSON object/array found inside text.
+
+        Returns:
+            (parsed_value, extracted_snippet)
+        """
+
+        s = (text or "").strip()
+        if not s:
+            return None, None
+
+        # Fast path: whole string is JSON.
+        try:
+            return json.loads(s), s
+        except Exception:
+            pass
+
+        # Look for a JSON object/array start, then use a small state machine to
+        # find the matching end while respecting strings and escapes.
+        start = None
+        for i, ch in enumerate(s):
+            if ch in "[{":
+                start = i
+                break
+        if start is None:
+            return None, None
+
+        opening = s[start]
+        closing = "]" if opening == "[" else "}"
+        depth = 0
+        in_str = False
+        escape = False
+        for j in range(start, len(s)):
+            ch = s[j]
+            if in_str:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+
+            if ch == opening:
+                depth += 1
+                continue
+            if ch == closing:
+                depth -= 1
+                if depth == 0:
+                    snippet = s[start : j + 1]
+                    try:
+                        return json.loads(snippet), snippet
+                    except Exception:
+                        return None, snippet
+
+        return None, None
+
+    def _maybe_log_llm_response(self, system_id: str, step: int, content: str) -> None:
+        """Optionally log raw LLM output for debugging parsing issues.
+
+        Controlled by env:
+          - POLARIS_LOG_LLM_RAW=1 to enable
+          - POLARIS_LOG_LLM_RAW_MAX_CHARS (default 4000)
+        """
+
+        import os
+
+        if not self.logger:
+            return
+        if os.getenv("POLARIS_LOG_LLM_RAW", "").strip() not in {"1", "true", "TRUE", "yes", "YES"}:
+            return
+
+        try:
+            max_chars = int(os.getenv("POLARIS_LOG_LLM_RAW_MAX_CHARS", "4000"))
+        except Exception:
+            max_chars = 4000
+
+        safe = (content or "")
+        if len(safe) > max_chars:
+            safe = safe[:max_chars] + f"\n...<truncated {len(content) - max_chars} chars>"
+
+        self.logger.debug(
+            "LLM raw response",
+            system_id=system_id,
+            step=step,
+            llm_raw=safe,
+        )
+
+    def _maybe_log_extracted_json(self, label: str, snippet: Optional[str]) -> None:
+        """Optionally log the extracted JSON snippet used for parsing."""
+
+        import os
+
+        if not self.logger:
+            return
+        if os.getenv("POLARIS_LOG_LLM_EXTRACTED_JSON", "").strip() not in {
+            "1",
+            "true",
+            "TRUE",
+            "yes",
+            "YES",
+        }:
+            return
+
+        if not snippet:
+            return
+
+        try:
+            max_chars = int(os.getenv("POLARIS_LOG_LLM_RAW_MAX_CHARS", "4000"))
+        except Exception:
+            max_chars = 4000
+
+        s = snippet
+        if len(s) > max_chars:
+            s = s[:max_chars] + f"\n...<truncated {len(snippet) - max_chars} chars>"
+
+        self.logger.debug("LLM extracted JSON", extracted_from=label, extracted_json=s)
 
     def _get_tool_descriptions(self) -> str:
         """Get descriptions of available tools for the system prompt."""

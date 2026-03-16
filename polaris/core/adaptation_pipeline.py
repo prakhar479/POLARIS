@@ -109,6 +109,11 @@ class AdaptationPipeline:
             component="strategy",
         )
 
+        # Wildfire simulations are often step-driven: we may need to advance the
+        # simulation clock even when adaptations happen.
+        # This behavior is opt-in via config to avoid affecting other connectors.
+        actions = self._apply_wildfire_step_policy(state, actions)
+
         if not actions:
             return False
 
@@ -202,6 +207,69 @@ class AdaptationPipeline:
                 )
 
         return executed_any
+
+    def _apply_wildfire_step_policy(self, state: "SystemState", actions):
+        """Apply wildfire step policy.
+
+        Supported policies (wildfire config):
+          - always_step_each_cycle: when true, append wildfire_step every cycle
+          - auto_step_when_no_adaptation: when true, inject wildfire_step only when
+            strategy returned no actions (legacy behavior)
+        """
+
+        if state.system_id.lower() != "wildfire":
+            return actions
+
+        try:
+            wildfire_cfg = None
+            # PolarisConfig is a pydantic model; connector-specific blocks like `wildfire:`
+            # are preserved in config.extra.
+            extra = getattr(self._config, "extra", {})
+            if isinstance(extra, dict) and isinstance(extra.get("wildfire"), dict):
+                wildfire_cfg = extra.get("wildfire")
+            wildfire_cfg = wildfire_cfg or {}
+        except Exception:
+            wildfire_cfg = {}
+
+        always_step = bool(wildfire_cfg.get("always_step_each_cycle", False))
+        step_when_no_actions = bool(wildfire_cfg.get("auto_step_when_no_adaptation", False))
+
+        from polaris.core.models import AdaptationAction
+        import uuid
+
+        def make_step(reason: str) -> AdaptationAction:
+            return AdaptationAction(
+                action_id=str(uuid.uuid4()),
+                action_type="wildfire_step",
+                target_system=state.system_id,
+                parameters={"reason": reason},
+            )
+
+        if always_step:
+            if actions is None:
+                actions = []
+            if not isinstance(actions, list):
+                return actions
+            actions = list(actions)
+            step_action = make_step("always_step_each_cycle")
+            actions.append(step_action)
+            self._logger.info(
+                "Wildfire step appended",
+                system_id=state.system_id,
+                reason="always_step_each_cycle",
+                total_actions=len(actions),
+                actions=[a.action_type for a in actions if hasattr(a, "action_type")],
+            )
+            return actions
+
+        if not actions and step_when_no_actions:
+            self._logger.debug(
+                "Auto-stepping wildfire (no adaptation proposed)",
+                system_id=state.system_id,
+            )
+            return [make_step("auto_step_when_no_adaptation")]
+
+        return actions
 
     # ------------------------------------------------------------------
     # Internal helpers

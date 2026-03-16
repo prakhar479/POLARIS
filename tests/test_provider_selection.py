@@ -148,3 +148,45 @@ def test_gemini_alias_maps_to_google_client(monkeypatch):
     client = create_llm_client("gemini")
     assert isinstance(client, DummyGoogleClient)
     assert captured.get("called") is True
+
+
+def test_openrouter_provider_creates_openrouter_client(monkeypatch):
+    captured = {}
+
+    class DummyOpenRouterClient:
+        def __init__(self, **kwargs):
+            captured["called"] = True
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        "polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient
+    )
+    monkeypatch.delenv("LLM_RESILIENCE_ENABLED", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEYS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
+    monkeypatch.delenv("GROQ_API_KEYS", raising=False)
+
+    client = create_llm_client("openrouter")
+    assert isinstance(client, DummyOpenRouterClient)
+    assert captured.get("called") is True
+
+
+def test_openrouter_aliases_normalize(monkeypatch):
+    captured = {}
+
+    class DummyOpenRouterClient:
+        def __init__(self, **kwargs):
+            captured["called"] = True
+
+    monkeypatch.setattr(
+        "polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient
+    )
+    monkeypatch.delenv("LLM_RESILIENCE_ENABLED", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEYS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
+    monkeypatch.delenv("GROQ_API_KEYS", raising=False)
+
+    assert isinstance(create_llm_client("open-router"), DummyOpenRouterClient)
+    assert isinstance(create_llm_client("open_router"), DummyOpenRouterClient)

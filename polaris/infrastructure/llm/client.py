@@ -379,6 +379,100 @@ class OpenAIClient(LLMClient):
             raise RuntimeError(f"OpenAI API error: {e}") from e
 
 
+class OpenRouterClient(LLMClient):
+    """OpenRouter LLM client.
+
+    OpenRouter exposes an OpenAI-compatible Chat Completions API.
+    Docs: https://openrouter.ai/docs
+
+    Environment variables:
+      - OPENROUTER_API_KEY (required if api_key not passed)
+      - OPENROUTER_BASE_URL (optional, default: https://openrouter.ai/api/v1)
+      - OPENROUTER_SITE_URL (optional, sent as HTTP-Referer)
+      - OPENROUTER_APP_NAME (optional, sent as X-Title)
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "openai/gpt-4o-mini",
+        base_url: Optional[str] = None,
+        site_url: Optional[str] = None,
+        app_name: Optional[str] = None,
+    ) -> None:
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        self.model = model
+        self.base_url = base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        self.site_url = site_url or os.getenv("OPENROUTER_SITE_URL")
+        self.app_name = app_name or os.getenv("OPENROUTER_APP_NAME")
+
+        if not self.api_key:
+            raise ValueError(
+                "OpenRouter API key not provided. Set OPENROUTER_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
+
+        try:
+            import openai
+
+            default_headers: Dict[str, str] = {}
+            # Optional OpenRouter attribution headers (recommended)
+            if self.site_url:
+                default_headers["HTTP-Referer"] = self.site_url
+            if self.app_name:
+                default_headers["X-Title"] = self.app_name
+
+            self.client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                default_headers=default_headers or None,
+            )
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+    ) -> LLMResponse:
+        """Generate response using OpenRouter (OpenAI-compatible) with error handling."""
+        try:
+            openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": openai_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+
+            if response_schema is not None:
+                logging.getLogger("polaris.llm").warning(
+                    "OpenRouterClient.generate: response_schema was provided but is not yet "
+                    "implemented. The response will be unstructured text."
+                )
+
+            response = await self.client.chat.completions.create(**kwargs)
+
+            if not response.choices or not response.choices[0].message.content:
+                raise ValueError("Empty response from OpenRouter API")
+
+            return LLMResponse(
+                content=response.choices[0].message.content,
+                model=self.model,
+                tokens_used=response.usage.total_tokens if response.usage else None,
+                finish_reason=response.choices[0].finish_reason,
+            )
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"OpenRouter API error: {e}") from e
+
+
 class GroqClient(LLMClient):
     """Groq LLM client."""
 
@@ -520,6 +614,20 @@ class ResilientLLMClient(LLMClient):
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", "gpt-4")),
             )
+        elif self.provider == "openrouter":
+            return OpenRouterClient(
+                api_key=api_key,
+                model=str(self.model or self.inner_kwargs.get("model", "openai/gpt-4o-mini")),
+                base_url=str(self.inner_kwargs.get("base_url"))
+                if self.inner_kwargs.get("base_url")
+                else None,
+                site_url=str(self.inner_kwargs.get("site_url"))
+                if self.inner_kwargs.get("site_url")
+                else None,
+                app_name=str(self.inner_kwargs.get("app_name"))
+                if self.inner_kwargs.get("app_name")
+                else None,
+            )
         elif self.provider == "groq":
             return GroqClient(
                 api_key=api_key,
@@ -533,7 +641,7 @@ class ResilientLLMClient(LLMClient):
         else:
             raise ValueError(
                 f"Unknown LLM provider: '{self.provider}'. "
-                "Supported values are: 'openai', 'groq', 'google', 'gemini'."
+                "Supported values are: 'openai', 'openrouter', 'groq', 'google', 'gemini'."
             )
 
     def _current_client(self) -> LLMClient:
@@ -690,7 +798,7 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     """Create LLM client for specified provider.
 
     Args:
-        provider: 'google'/'gemini', 'openai', or 'groq'
+        provider: 'google'/'gemini', 'openai', 'openrouter', or 'groq'
         **kwargs: Additional arguments for the client
 
     Returns:
@@ -699,6 +807,8 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     provider_norm = provider.lower()
     if provider_norm == "gemini":
         provider_norm = "google"
+    if provider_norm in ("open-router", "open_router"):
+        provider_norm = "openrouter"
 
     resilience: Optional[Dict[str, Any]] = kwargs.pop("resilience", None)
     model = kwargs.get("model")
@@ -706,6 +816,7 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     enabled_env = os.getenv("LLM_RESILIENCE_ENABLED", "0").lower() in ("1", "true", "yes")
     has_multi_keys = (
         (provider_norm == "openai" and os.getenv("OPENAI_API_KEYS"))
+        or (provider_norm == "openrouter" and os.getenv("OPENROUTER_API_KEYS"))
         or (provider_norm == "google" and os.getenv("GEMINI_API_KEYS"))
         or (provider_norm == "groq" and os.getenv("GROQ_API_KEYS"))
     )
@@ -719,6 +830,8 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
         return GoogleGeminiClient(**kwargs)
     elif provider_norm == "openai":
         return OpenAIClient(**kwargs)
+    elif provider_norm == "openrouter":
+        return OpenRouterClient(**kwargs)
     elif provider_norm == "groq":
         return GroqClient(**kwargs)
     else:
