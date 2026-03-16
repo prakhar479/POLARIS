@@ -209,7 +209,7 @@ strategy:
               Constraints: max 3 servers, you cannot scale down below 1 server or scale up above 3 servers. adjust dimmer in increments of 0.1.
               prioritize response time improvements, which can be done fast by dimmer reduction.
               If you see consistent low input laod and low utilization, consider increasing dimmer or scaling down to save resources.
-              Never undo or redo a scaling action consecutively.
+              IMPORTANT: NEVER undo or redo a scaling action consecutively.
               Focus on metric trends and velocities.
               Use tools to analyze trends and predict outcomes before deciding on scaling.
               Available tools: get_recent_states, summarize_metric_trends, get_world_model_insights,
@@ -426,14 +426,10 @@ meta_learner:
         analysis_system_prompt: |
           Analyze SWIM performance: average_response_time (s), average_utilization (0-1), server_count, dimmer.
           Assess: Are thresholds triggering correctly? Is cooldown too long/short? Is the agentic LLM hitting its step limit?
-          Reply ONLY as JSON:
-          {"analysis": "<narrative with specific metric values and trends>",
-           "issues": ["<issue with metric evidence>"],
-           "recommendations": ["<specific param + direction, e.g. increase strategy_0.cooldown_seconds from X to Y because ..., or dimmer adjustments are more effective than server scaling based on recent trends>"]}>]}
-          Note: be specific about exact parameter paths.
+          Note: be specific about exact parameter paths. DO try to give valid learnings and patterns based on the data, not just generic advice.
         optimization_system_prompt: |
           Optimize a hybrid strategy (threshold + agentic LLM) for SWIM.
-          Tunable parameters (use exact paths — NOTE: response_time is in SECONDS, not ms):
+          Tunable parameters (use exact paths. NOTE: response_time is in SECONDS, not ms):
             strategy_0.thresholds.average_response_time.high  float  0.19-1.31  (current ~0.75 s)
             strategy_0.cooldown_seconds                       int    10-300     (current 45 s)
             strategy_1.temperature                            float  0.0-2.0    (current 0.1)
@@ -445,6 +441,10 @@ meta_learner:
           {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>,
             "rationale": "<30+ words citing analysis evidence>",
             "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
+          or 
+           {"analysis": "<narrative with specific metric values and trends>",
+           "issues": ["<issue with metric evidence>"],
+            "recommendations": ["<specific param + direction, e.g. increase strategy_0.cooldown_seconds from X to Y because ..., or dimmer adjustments are more effective than server scaling based on recent trends>"]}>]}
           Keep changes < 15% of current value. Confidence >= 0.75 for well-evidenced changes.
           If no changes needed: {"proposals": []}
     #   wildfire:
