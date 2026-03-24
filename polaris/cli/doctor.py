@@ -254,16 +254,20 @@ def _diagnose_dependencies(
     module_requirements = {
         "google": ["google.generativeai", "google.ai.generativelanguage_v1beta"],
         "openai": ["openai"],
+        "openrouter": ["openai"],
         "groq": ["groq"],
+        "ollama": ["openai"],
     }
     provider_single_key_env = {
         "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
         "openai": ["OPENAI_API_KEY"],
+        "openrouter": ["OPENROUTER_API_KEY"],
         "groq": ["GROQ_API_KEY"],
     }
     provider_multi_key_env = {
         "google": "GEMINI_API_KEYS",
         "openai": "OPENAI_API_KEYS",
+        "openrouter": "OPENROUTER_API_KEYS",
         "groq": "GROQ_API_KEYS",
     }
 
@@ -307,26 +311,36 @@ def _diagnose_dependencies(
             if isinstance(candidate, str) and candidate.strip():
                 keys_env_var = candidate.strip()
 
-        env_candidates = list(provider_single_key_env.get(provider, []))
-        env_candidates.append(keys_env_var or provider_multi_key_env.get(provider, ""))
-        env_candidates = [name for name in env_candidates if name]
-
-        if any(_is_set(name) for name in env_candidates):
+        # Ollama is commonly local and doesn't require credentials by default.
+        if provider == "ollama":
             diagnostics.append(
                 Diagnostic(
                     "OK",
                     "env",
-                    f"{path}: credentials detected ({', '.join(env_candidates)})",
+                    f"{path}: provider 'ollama' typically requires no API key (local endpoint)",
                 )
             )
         else:
-            diagnostics.append(
-                Diagnostic(
-                    "FAIL",
-                    "env",
-                    f"{path}: missing credentials. Set one of: {', '.join(env_candidates)}",
+            env_candidates = list(provider_single_key_env.get(provider, []))
+            env_candidates.append(keys_env_var or provider_multi_key_env.get(provider, ""))
+            env_candidates = [name for name in env_candidates if name]
+
+            if any(_is_set(name) for name in env_candidates):
+                diagnostics.append(
+                    Diagnostic(
+                        "OK",
+                        "env",
+                        f"{path}: credentials detected ({', '.join(env_candidates)})",
+                    )
                 )
-            )
+            else:
+                diagnostics.append(
+                    Diagnostic(
+                        "FAIL",
+                        "env",
+                        f"{path}: missing credentials. Set one of: {', '.join(env_candidates)}",
+                    )
+                )
 
 
 def run_doctor(config_path: str) -> List[Diagnostic]:

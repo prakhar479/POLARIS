@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from polaris.abstractions import AdaptationStrategy, Logger, MetricsCollector
+    from polaris.abstractions import MetaLearner
     from polaris.infrastructure.config import PolarisConfig
 
 
@@ -37,6 +38,7 @@ class ConfigReloader:
         self._logger = logger
         self._metrics = metrics
         self._config = config
+        self._meta_learner: Optional["MetaLearner"] = None
         self._config_mtime: Optional[float] = None
 
         if config_path:
@@ -48,6 +50,10 @@ class ConfigReloader:
     def update_strategy(self, strategy: Optional["AdaptationStrategy"]) -> None:
         """Update the strategy reference (called when Polaris swaps strategies)."""
         self._strategy = strategy
+
+    def update_meta_learner(self, meta_learner: Optional["MetaLearner"]) -> None:
+        """Update the meta-learner reference (called when Polaris builds one)."""
+        self._meta_learner = meta_learner
 
     async def maybe_reload(self) -> Optional["PolarisConfig"]:
         """Check for config changes and apply strategy/resilience updates.
@@ -73,6 +79,7 @@ class ConfigReloader:
 
             new_conf = load_config(self._config_path)
             await self._apply_strategy_hot_reload(new_conf.strategy)
+            await self._apply_meta_learner_hot_reload(getattr(new_conf, "meta_learner", None))
             self._config = new_conf
             self._config_mtime = mtime
             self._emit("polaris.config.hot_reload.success")
@@ -121,6 +128,62 @@ class ConfigReloader:
             await self._strategy.apply_config_update(config_payload)
         except Exception as e:
             self._logger.warning(f"Failed to apply strategy config update: {e}")
+
+    async def _apply_meta_learner_hot_reload(self, meta_config: Any) -> None:
+        """Apply meta-learner config updates (e.g., auto_apply, prompts, temperature).
+
+        Today we only support in-place updates for LLMMetaLearner instances.
+        Changing meta-learner type still requires a restart.
+        """
+        meta_learner = getattr(self, "_meta_learner", None)
+        if not meta_learner or not meta_config:
+            return
+
+        # meta_config is expected to be a dict-like structure from the YAML.
+        if not isinstance(meta_config, dict):
+            return
+
+        meta_type = meta_config.get("type")
+
+        # Only support LLM meta-learner in-place updates for now.
+        if type(meta_learner).__name__ != "LLMMetaLearner":
+            if meta_type == "llm":
+                self._logger.info(
+                    "Meta-learner config changed but current instance isn't LLM; restart required to apply."
+                )
+            return
+
+        if meta_type and meta_type != "llm":
+            self._logger.info("Meta-learner type changed in config; restart required to apply.")
+            return
+
+        llm_cfg = meta_config.get("llm") or {}
+        if not isinstance(llm_cfg, dict):
+            llm_cfg = {}
+
+        # Update supported fields in-place.
+        try:
+            if "auto_apply" in llm_cfg:
+                meta_learner.auto_apply = bool(llm_cfg.get("auto_apply"))
+            if "temperature" in llm_cfg:
+                meta_learner.temperature = float(llm_cfg.get("temperature"))
+            if "analysis_system_prompt" in llm_cfg:
+                meta_learner.analysis_system_prompt = llm_cfg.get("analysis_system_prompt")
+            if "optimization_system_prompt" in llm_cfg:
+                meta_learner.optimization_system_prompt = llm_cfg.get(
+                    "optimization_system_prompt"
+                )
+            if "per_system_prompts" in llm_cfg and isinstance(llm_cfg.get("per_system_prompts"), dict):
+                meta_learner._per_system_prompts = llm_cfg.get("per_system_prompts")  # type: ignore[attr-defined]
+
+            self._logger.info(
+                "Applied meta-learner hot-reload updates",
+                meta_type="llm",
+                auto_apply=getattr(meta_learner, "auto_apply", None),
+                temperature=getattr(meta_learner, "temperature", None),
+            )
+        except Exception as e:
+            self._logger.warning(f"Failed to apply meta-learner config update: {e}")
 
     def _emit(self, metric: str) -> None:
         """Increment a metric if metrics collection is enabled."""

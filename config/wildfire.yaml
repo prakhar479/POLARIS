@@ -95,23 +95,32 @@ strategy:
 
   agentic_llm:
     # Use Google's models (fast, cost-effective for real-time control)
-    provider: openrouter
+    provider: ollama 
+    base_url: "http://10.10.16.46:11435"  # Ollama local server
+    model: "qwen2.5:32b"                      
 
     # System description: helps LLM understand the domain
     system_description: |
-      Wildfire UAV Containment Simulation: A dynamic system where autonomous UAV agents
-      attempt to extinguish and contain spreading wildfires across a forest grid. Fire
-      spreads based on wind, vegetation density, and moisture. UAVs can move to new
-      positions and perform containment actions. Success requires balancing agent
-      deployment, anticipating fire spread patterns, and resource constraints.
+      Wildfire UAV Monitoring Simulation.
 
+      A team of UAVs observes a spreading wildfire over a forest grid.
+      UAVs cannot extinguish fire or change fire dynamics. The wildfire
+      evolves autonomously based on fuel, wind, and proximity to burning cells.
+
+      The UAV team's task is to maximize wildfire monitoring effectiveness.
+
+      Each UAV can move one cell per timestep in four directions:
+      north, south, east, west.
+
+      The objective is to maximize monitoring coverage of the fire front
+      while avoiding UAV collisions.
     adaptation_goals: |
-      PRIMARY: Minimize fire_cells_burning_ratio - keep fires contained below 20%.
-      SECONDARY: Maintain agent effectiveness (mr1_avg > 0.6) and operational count.
-      TERTIARY: Learn from past actions to improve future containment speed and efficiency.
+      PRIMARY: Maximize MR1 (fire monitoring effectiveness).
+      SECONDARY: Maintain safe UAV separation and avoid collisions.
+      TERTIARY: Track the fire front as it expands across the forest.
 
     # Temperature: 0.0 = deterministic, 1.0 = creative
-    temperature: 0.3
+    temperature: 0.7
 
     # Max sub-goals the agent can pursue per adaptation cycle
     steps_limit: 8
@@ -128,57 +137,59 @@ strategy:
 
       At every cycle, follow this reasoning process:
 
-      1. SITUATIONAL AWARENESS
-        Retrieve the current system state using get_recent_states.
-        Understand:
-          - How large the fire currently is
-          - How quickly it is growing or shrinking
-          - Whether UAV coverage is effective
-          - Whether the system is stable or deteriorating
+      ADAPTIVE DECISION PROCESS
 
-      2. TREND INTERPRETATION
-        Examine recent metric trends to understand dynamics:
-          - Is fire_cells_burning_ratio increasing or decreasing?
-          - Is mr1_avg improving or deteriorating?
-          - Are UAV actions helping or failing?
+      1. Observe the latest system state.
+      2. Determine whether the fire is expanding.
+      3. If fire is expanding, reposition UAVs to improve coverage.
+      4. If monitoring effectiveness is improving, continue stepping.
+      5. Avoid unnecessary movements if UAV coverage is already effective.
 
-        Use summarize_metric_trends if necessary.
+      Use tools for the same, but also for deeper analysis of trends and outcomes to inform your decisions.
+      For example - use get_recent_states to analyze the latest metrics, then summarize_metric_trends to understand if fire spread is accelerating or decelerating, and get_action_history to see if past movements improved MR1.
+      It is important to use get_action_history to learn from past actions and their outcomes. If certain movements consistently improve MR1, prioritize those strategies. If some actions lead to worse outcomes, avoid repeating them.
+      Use list_metric_fields to discover available numeric metrics, and compute_metric_math to analyze trends or compute ratios if needed. These metrics can provide critical insights into whether the fire is accelerating, if UAV movements are improving monitoring, and where the fire front is moving.
+      Always prioritize self reflection and critical thinking before deciding on actions. Consider the long-term impact of your decisions on fire containment, not just immediate metric changes.
 
-      3. RISK ASSESSMENT
-        Determine the level of system risk:
+      STRATEGIC UAV BEHAVIOR
 
-          LOW RISK
-          Fire stable or shrinking, UAV monitoring effective.
+      UAVs should prioritize monitoring the FIRE FRONT.
 
-          MODERATE RISK
-          Fire growing slowly or UAV coverage insufficient.
+      Effective strategies include:
 
-          HIGH RISK
-          Fire expanding quickly or UAV coordination ineffective.
+      1. PERIMETER TRACKING
+        Position UAVs along the boundary of the burning region.
 
-          CRITICAL
-          Fire growth likely to exceed containment capacity.
+      2. COVERAGE DISTRIBUTION
+        Spread UAVs across different fire fronts to maximize observation.
 
-      4. INTERVENTION ANALYSIS
-        Consider available actions and evaluate their impact.
+      3. FRONT FOLLOWING
+        Move UAVs toward newly burning areas.
 
-        Use predict_outcome when evaluating possible interventions.
+      4. AVOID CLUSTERING
+        UAVs should not move to the same location.
 
-        Possible responses include:
-          - advancing the simulation (wildfire_step)
-          - repositioning UAVs
-          - coordinating multiple UAV movements
-          - pausing simulation during critical containment
+      Avoid moving all UAVs in the same direction unless the fire front clearly moves that way.
+      Valid movements are north, south, east, west.
 
-      5. ACTION SELECTION
-        Choose actions that best improve containment probability.
 
-        Preferred strategies:
-          - reposition UAVs toward expanding fire fronts
-          - coordinate agents rather than moving individually
-          - avoid unnecessary actions when system is stable
-          - anticipate fire spread rather than reacting late
 
+      MOVEMENT POLICY
+
+
+
+      If fire_cells_burning_ratio increases:
+        reposition UAVs toward different directions to cover expansion.
+
+      Good MR1 values -> 20-30, below this is poor.
+
+      If MR1 improves:
+        maintain current configuration and advance simulation.
+
+      If MR1 decreases:
+        redistribute UAVs to cover new fire regions.
+
+      Just because fire isn't spreading at all, you dont stop improving coverage.
 
       ACTIONS (use exact format):
       - wildfire_step: {"type": "wildfire_step", "parameters": {}}
@@ -187,6 +198,33 @@ strategy:
       - wildfire_pause: {"type": "wildfire_pause", "parameters": {}}
       - wildfire_resume: {"type": "wildfire_resume", "parameters": {}}
       - wildfire_reset: {"type": "wildfire_reset", "parameters": {}}
+
+      Focus on metric trends and velocities.
+      Use tools to analyze trends and predict outcomes before deciding on scaling.
+      Tool descriptions (STRICT argument schemas — follow exactly):
+      - get_recent_states:
+        {"tool": "get_recent_states", "args": {"window_seconds": 600, "limit": 50}}
+      - summarize_metric_trends:
+        {"tool": "summarize_metric_trends", "args": {"metric": "<single_metric_name>", "window_seconds": 600}}
+        Notes:
+        - "metric" is REQUIRED and must be a single string (NOT a list).
+        - Use "window_seconds" (NOT window_size).
+        - Do NOT use keys: metrics_to_analyze, metrics, window_size.
+        - To analyze multiple metrics, make multiple tool calls, one per metric.
+        Example (two calls):
+        {"tool":"summarize_metric_trends","args":{"metric":"fire_cells_burning","window_seconds":15}}
+        {"tool":"summarize_metric_trends","args":{"metric":"mr1_avg","window_seconds":15}}
+      - get_action_history:
+        {"tool": "get_action_history", "args": {"window_seconds": 600, "limit": 50}}
+      - list_metric_fields:
+        {"tool": "list_metric_fields", "args": {"window_seconds": 600, "limit": 200, "numeric_only": true}}
+      - compute_metric_math:
+        {"tool": "compute_metric_math", "args": {"metric": "<metric_name>", "op": "latest|avg|min|max|std|delta|rate_per_s", "window_seconds": 600, "limit": 200}}
+
+      Available tools: get_recent_states, summarize_metric_trends, get_action_history, list_metric_fields, compute_metric_math
+      Reply ONLY as strict JSON — two forms:
+      1) {"tool": "name", "args": {...}}
+      2) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
 
       RESPONSE FORMAT:
       {
@@ -206,9 +244,11 @@ strategy:
     tools:
       enabled:
         - get_recent_states          # Check current system state (use first)
-        - predict_outcome            # Evaluate if action will help (use second)
+        # - predict_outcome            # Evaluate if action will help (use second)
         - summarize_metric_trends    # Optional: analyze trends if needed
-        - get_world_model_insights   # Optional: get predictive insights
+        - list_metric_fields         # Discover available numeric metric fields
+        - compute_metric_math        # Do math/stats on arbitrary numeric metric fields
+        # - get_world_model_insights   # Optional: get predictive insights
         - get_action_history         # Optional: learn from past actions
         # Note: list_supported_actions removed - actions explicitly listed in prompt
 
@@ -297,11 +337,14 @@ meta_learner:
     output_path: "./logs/wildfire_meta_learning_updates.jsonl"
 
   llm:
-    provider: openrouter
+    provider: ollama
+    base_url: "http://10.10.16.46:11435"
+    model: "qwen2.5:32b"
     temperature: 0.1  # Deterministic analysis for consistency
 
-    # Don't auto-apply proposals - review critical fire containment changes
-    auto_apply: false
+    # Auto-apply proposals so meta-learning can actually tune the live strategy.
+    # If you want “observe-only” mode, set this back to false.
+    auto_apply: true
 
     # Custom analysis prompt for wildfire domain
     analysis_system_prompt: |

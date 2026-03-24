@@ -196,9 +196,13 @@ def _register_default_strategy_factories() -> None:
         if not strategy_cfg.llm_reasoning:
             raise ValueError("LLM strategy requires 'llm_reasoning' configuration section")
 
-        resilience_cfg = strategy_cfg.llm_reasoning.get("resilience")
-        provider = strategy_cfg.llm_reasoning.get("provider", "google")
-        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg)
+        llm_reasoning_cfg = strategy_cfg.llm_reasoning or {}
+        provider = llm_reasoning_cfg.get("provider", "google")
+        resilience_cfg = llm_reasoning_cfg.get("resilience")
+        llm_kwargs = dict(llm_reasoning_cfg)
+        llm_kwargs.pop("provider", None)
+        llm_kwargs.pop("resilience", None)
+        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
         return LLMReasoningStrategy(
             llm_client=llm_client,
@@ -253,8 +257,16 @@ def _register_default_strategy_factories() -> None:
 
             elif s_type == "llm_reasoning":
                 llm_cfg = s.get("llm_reasoning", {}) or {}
+                resilience_cfg = llm_cfg.get("resilience")
                 provider = llm_cfg.get("provider", "google")
-                llm_client = _llm.create_llm_client(provider, resilience=llm_cfg.get("resilience"))
+                llm_kwargs = dict(llm_cfg)
+                llm_kwargs.pop("provider", None)
+                llm_kwargs.pop("resilience", None)
+                llm_client = _llm.create_llm_client(
+                    provider,
+                    resilience=resilience_cfg,
+                    **llm_kwargs,
+                )
                 sub_llm = LLMReasoningStrategy(
                     llm_client=llm_client,
                     system_description=llm_cfg.get("system_description", "Managed system"),
@@ -279,9 +291,11 @@ def _register_default_strategy_factories() -> None:
                     allowed_tools = tools_cfg.get("enabled")
 
                 provider = agent_cfg.get("provider", "google")
-                llm_client = _llm.create_llm_client(
-                    provider, resilience=agent_cfg.get("resilience")
-                )
+                resilience_cfg = agent_cfg.get("resilience")
+                llm_kwargs = dict(agent_cfg)
+                llm_kwargs.pop("provider", None)
+                llm_kwargs.pop("resilience", None)
+                llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
                 sub_agent = AgenticLLMStrategy(
                     llm_client=llm_client,
@@ -303,8 +317,14 @@ def _register_default_strategy_factories() -> None:
 
                 ma_cfg = s.get("multi_agent", {}) or {}
                 ma_provider = ma_cfg.get("provider", "google")
+                ma_resilience = ma_cfg.get("resilience")
+                ma_kwargs = dict(ma_cfg)
+                ma_kwargs.pop("provider", None)
+                ma_kwargs.pop("resilience", None)
                 ma_shared_llm = _llm.create_llm_client(
-                    ma_provider, resilience=ma_cfg.get("resilience")
+                    ma_provider,
+                    resilience=ma_resilience,
+                    **ma_kwargs,
                 )
 
                 def _build_agent_cfg_hybrid(
@@ -316,9 +336,12 @@ def _register_default_strategy_factories() -> None:
                     rr = role_cfg.get("resilience")
                     rc = None
                     if rp:
-                        rc = _llm.create_llm_client(rp, resilience=rr)
+                        role_kwargs = dict(role_cfg)
+                        role_kwargs.pop("provider", None)
+                        role_kwargs.pop("resilience", None)
+                        rc = _llm.create_llm_client(rp, resilience=rr, **role_kwargs)
                     elif rr:
-                        rc = _llm.create_llm_client(ma_provider, resilience=rr)
+                        rc = _llm.create_llm_client(ma_provider, resilience=rr, **ma_kwargs)
                     return AgentConfig(
                         llm_client=rc,
                         temperature=role_cfg.get("temperature"),
@@ -386,7 +409,11 @@ def _register_default_strategy_factories() -> None:
             allowed_tools = tools_cfg.get("enabled")
 
         provider = agent_conf.get("provider", "google")
-        llm_client = _llm.create_llm_client(provider, resilience=agent_conf.get("resilience"))
+        resilience_cfg = agent_conf.get("resilience")
+        llm_kwargs = dict(agent_conf)
+        llm_kwargs.pop("provider", None)
+        llm_kwargs.pop("resilience", None)
+        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
         return AgenticLLMStrategy(
             llm_client=llm_client,
@@ -419,7 +446,11 @@ def _register_default_strategy_factories() -> None:
         system_description = agent_conf.get("system_description", "A generic managed cloud system")
 
         provider = agent_conf.get("provider", "google")
-        shared_llm = _llm.create_llm_client(provider, resilience=agent_conf.get("resilience"))
+        resilience_cfg = agent_conf.get("resilience")
+        llm_kwargs = dict(agent_conf)
+        llm_kwargs.pop("provider", None)
+        llm_kwargs.pop("resilience", None)
+        shared_llm = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
         def _build_agent_config(role_cfg: Optional[dict]) -> Optional[AgentConfig]:
             """Build an AgentConfig from a per-agent config dict."""
@@ -429,10 +460,17 @@ def _register_default_strategy_factories() -> None:
             role_resilience = role_cfg.get("resilience")
             role_client = None
             if role_provider:
-                role_client = _llm.create_llm_client(role_provider, resilience=role_resilience)
+                role_kwargs = dict(role_cfg)
+                role_kwargs.pop("provider", None)
+                role_kwargs.pop("resilience", None)
+                role_client = _llm.create_llm_client(
+                    role_provider,
+                    resilience=role_resilience,
+                    **role_kwargs,
+                )
             elif role_resilience:
                 # Same provider as shared but different resilience
-                role_client = _llm.create_llm_client(provider, resilience=role_resilience)
+                role_client = _llm.create_llm_client(provider, resilience=role_resilience, **llm_kwargs)
             return AgentConfig(
                 llm_client=role_client,
                 temperature=role_cfg.get("temperature"),

@@ -179,6 +179,13 @@ class WildfireConnector(Connector):
                         unit="score",
                         timestamp=now,
                     )
+                    mr1_total = sum(mr1_floats)
+                    metrics["mr1_total"] = MetricValue(
+                        name="mr1_total",
+                        value=mr1_total,
+                        unit="score",
+                        timestamp=now,
+                    )
                 except (TypeError, ValueError):
                     pass
 

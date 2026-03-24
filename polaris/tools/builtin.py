@@ -6,7 +6,10 @@ hardcoded _execute_tool implementations.
 """
 
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List
+import ast
+import math
+import operator
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from polaris.core.models import AdaptationAction
 from polaris.tools.base import Tool, ToolDependencies, ToolError
@@ -157,6 +160,306 @@ class SummarizeMetricTrendsTool(Tool):
                 message=f"Failed to summarize trends: {str(e)}",
                 recoverable=True,
             ).to_dict()
+
+
+class ListMetricFieldsTool(Tool):
+    """Tool to discover metric fields (optionally numeric-only) from recent states.
+
+    This helps LLMs avoid guessing metric names. It returns the set of metric
+    keys observed in the queried window plus a "numeric" subset.
+    """
+
+    @property
+    def name(self) -> str:
+        return "list_metric_fields"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List metric field names seen in recent system states, and identify which are numeric. "
+            "Parameters: window_seconds (1-3600, default 600), limit (1-500, default 200), "
+            "numeric_only (bool, default false)."
+        )
+
+    async def execute(
+        self,
+        args: Dict[str, Any],
+        state: "SystemState",
+        context: "AdaptationContext",
+        deps: ToolDependencies,
+    ) -> Dict[str, Any]:
+        try:
+            limit = self._clamp_int(args.get("limit"), 1, 500, 200)
+            numeric_only = bool(args.get("numeric_only", False))
+            start, end = self._get_time_window(args, 600, 3600)
+
+            states = await deps.knowledge_store.query_states(state.system_id, start, end)
+            if states:
+                states = states[-limit:]
+
+            all_fields: set[str] = set()
+            numeric_fields: set[str] = set()
+            stats: Dict[str, Dict[str, float]] = {}
+
+            for s in states or []:
+                for k, mv in (getattr(s, "metrics", {}) or {}).items():
+                    all_fields.add(k)
+                    try:
+                        v = float(mv.value)
+                    except (TypeError, ValueError):
+                        continue
+                    numeric_fields.add(k)
+                    slot = stats.get(k)
+                    if slot is None:
+                        stats[k] = {"count": 1.0, "min": v, "max": v, "avg": v}
+                    else:
+                        c = slot["count"] + 1.0
+                        slot["count"] = c
+                        slot["min"] = min(slot["min"], v)
+                        slot["max"] = max(slot["max"], v)
+                        slot["avg"] = slot["avg"] + (v - slot["avg"]) / c
+
+            fields_out = sorted(numeric_fields if numeric_only else all_fields)
+            return {
+                "window_seconds": int((end - start).total_seconds()),
+                "count_states": len(states or []),
+                "fields": fields_out,
+                "numeric_fields": sorted(numeric_fields),
+                "numeric_field_stats": stats,
+            }
+
+        except Exception as e:
+            if deps.logger:
+                deps.logger.error("list_metric_fields failed", error=str(e))
+            return ToolError(
+                code="query_failed",
+                message=f"Failed to list metric fields: {str(e)}",
+                recoverable=True,
+            ).to_dict()
+
+
+class ComputeMetricMathTool(Tool):
+    """Tool to compute safe math/statistics over arbitrary numeric metric fields.
+
+    Supports two modes:
+    - Stats mode: Provide `metric` and `op`.
+    - Expression mode: Provide `expression` referencing metric names.
+
+    Examples:
+    - {"metric": "mr1_avg", "op": "avg", "window_seconds": 600}
+    - {"expression": "mr1_avg / max(fire_cells_burning_ratio, 1e-6)", "op": "avg"}
+    """
+
+    @property
+    def name(self) -> str:
+        return "compute_metric_math"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Compute math/stats on numeric metrics over a recent time window. "
+            "Parameters: window_seconds (1-3600, default 600), limit (1-500, default 200), "
+            "op (one of: count|min|max|avg|sum|std|latest|delta|rate_per_s, default avg), "
+            "metric (string) OR expression (string). Expression may reference metric names and "
+            "uses safe functions: abs, min, max, round, log, log10, exp, sqrt."
+        )
+
+    async def execute(
+        self,
+        args: Dict[str, Any],
+        state: "SystemState",
+        context: "AdaptationContext",
+        deps: ToolDependencies,
+    ) -> Dict[str, Any]:
+        try:
+            limit = self._clamp_int(args.get("limit"), 1, 500, 200)
+            op = str(args.get("op", "avg")).strip().lower()
+            metric = str(args.get("metric", "")).strip() or None
+            expression = args.get("expression")
+            if expression is not None:
+                expression = str(expression).strip()
+                if not expression:
+                    expression = None
+
+            if not metric and not expression:
+                return ToolError(
+                    code="missing_input",
+                    message="Provide either 'metric' or 'expression'",
+                    recoverable=True,
+                ).to_dict()
+
+            start, end = self._get_time_window(args, 600, 3600)
+            states = await deps.knowledge_store.query_states(state.system_id, start, end)
+            if states:
+                states = states[-limit:]
+
+            series: List[Tuple[float, float]] = []  # (t_seconds, value)
+            for s in states or []:
+                t = getattr(s, "timestamp", None)
+                if not t:
+                    continue
+                t_s = t.timestamp()
+                if expression:
+                    val = self._eval_expression_on_state(expression, s)
+                else:
+                    val = self._get_metric_value(s, metric)  # type: ignore[arg-type]
+                if val is None:
+                    continue
+                series.append((t_s, float(val)))
+
+            values = [v for _, v in series]
+
+            if op == "count":
+                return {"op": op, "count": len(values)}
+
+            if not values:
+                return {
+                    "op": op,
+                    "metric": metric,
+                    "expression": expression,
+                    "count": 0,
+                }
+
+            result: Dict[str, Any] = {
+                "op": op,
+                "metric": metric,
+                "expression": expression,
+                "count": len(values),
+                "window_seconds": int((end - start).total_seconds()),
+            }
+
+            if op == "min":
+                result["value"] = min(values)
+            elif op == "max":
+                result["value"] = max(values)
+            elif op == "sum":
+                result["value"] = float(sum(values))
+            elif op == "avg":
+                result["value"] = float(sum(values) / len(values))
+            elif op == "std":
+                mu = sum(values) / len(values)
+                var = sum((x - mu) ** 2 for x in values) / max(1, (len(values) - 1))
+                result["value"] = float(math.sqrt(var))
+            elif op == "latest":
+                result["value"] = float(series[-1][1])
+                result["timestamp"] = series[-1][0]
+            elif op == "delta":
+                result["value"] = float(series[-1][1] - series[0][1])
+                result["from"] = series[0][1]
+                result["to"] = series[-1][1]
+            elif op == "rate_per_s":
+                if len(series) < 2:
+                    result["value"] = 0.0
+                else:
+                    dt = series[-1][0] - series[0][0]
+                    result["value"] = float((series[-1][1] - series[0][1]) / dt) if dt else 0.0
+                    result["dt_s"] = float(dt)
+            else:
+                return ToolError(
+                    code="invalid_op",
+                    message=f"Unsupported op '{op}'",
+                    recoverable=True,
+                ).to_dict()
+
+            return result
+
+        except ToolError as te:
+            return te.to_dict()
+        except Exception as e:
+            if deps.logger:
+                deps.logger.error("compute_metric_math failed", error=str(e))
+            return ToolError(
+                code="execution_error",
+                message=f"Failed to compute metric math: {str(e)}",
+                recoverable=True,
+            ).to_dict()
+
+    def _get_metric_value(self, state_obj: Any, metric: str) -> Optional[float]:
+        metrics = getattr(state_obj, "metrics", {}) or {}
+        mv = metrics.get(metric)
+        if mv is None:
+            return None
+        try:
+            return float(getattr(mv, "value", mv))
+        except (TypeError, ValueError):
+            return None
+
+    def _eval_expression_on_state(self, expression: str, state_obj: Any) -> Optional[float]:
+        metrics = getattr(state_obj, "metrics", {}) or {}
+        env: Dict[str, float] = {}
+        for k, mv in metrics.items():
+            try:
+                env[k] = float(mv.value)
+            except (TypeError, ValueError):
+                continue
+
+        fn_env = {
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "round": round,
+            "log": math.log,
+            "log10": math.log10,
+            "exp": math.exp,
+            "sqrt": math.sqrt,
+        }
+
+        node = ast.parse(expression, mode="eval")
+        self._assert_safe_expr(node)
+        value = eval(
+            compile(node, "<metric_expr>", "eval"),
+            {"__builtins__": {}},
+            {**fn_env, **env},
+        )
+        return float(value)
+
+    def _assert_safe_expr(self, node: ast.AST) -> None:
+        allowed_nodes: Tuple[type, ...] = (
+            ast.Expression,
+            ast.BinOp,
+            ast.UnaryOp,
+            ast.Add,
+            ast.Sub,
+            ast.Mult,
+            ast.Div,
+            ast.Mod,
+            ast.Pow,
+            ast.USub,
+            ast.UAdd,
+            ast.Call,
+            ast.Load,
+            ast.Name,
+            ast.Constant,
+            ast.Compare,
+            ast.Gt,
+            ast.GtE,
+            ast.Lt,
+            ast.LtE,
+            ast.Eq,
+            ast.NotEq,
+            ast.IfExp,
+        )
+
+        for sub in ast.walk(node):
+            if not isinstance(sub, allowed_nodes):
+                raise ToolError(
+                    code="unsafe_expression",
+                    message=f"Expression contains unsupported syntax: {type(sub).__name__}",
+                    recoverable=True,
+                )
+            if isinstance(sub, ast.Call):
+                if not isinstance(sub.func, ast.Name):
+                    raise ToolError(
+                        code="unsafe_expression",
+                        message="Only simple function calls are allowed",
+                        recoverable=True,
+                    )
+                if sub.func.id not in {"abs", "min", "max", "round", "log", "log10", "exp", "sqrt"}:
+                    raise ToolError(
+                        code="unsafe_expression",
+                        message=f"Function '{sub.func.id}' is not allowed",
+                        recoverable=True,
+                    )
 
 
 class GetWorldModelInsightsTool(Tool):
@@ -461,6 +764,8 @@ def get_builtin_tools() -> List[Tool]:
     return [
         GetRecentStatesTool(),
         SummarizeMetricTrendsTool(),
+        ListMetricFieldsTool(),
+        ComputeMetricMathTool(),
         GetWorldModelInsightsTool(),
         PredictOutcomeTool(),
         GetActionHistoryTool(),

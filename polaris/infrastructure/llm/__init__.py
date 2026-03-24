@@ -5,6 +5,7 @@ from polaris.infrastructure.llm.client import (
     LLMClient,
     LLMMessage,
     LLMResponse,
+    OllamaClient,
     OpenAIClient,
     OpenRouterClient,
     create_llm_client,
@@ -17,5 +18,6 @@ __all__ = [
     "GoogleGeminiClient",
     "OpenAIClient",
     "OpenRouterClient",
+    "OllamaClient",
     "create_llm_client",
 ]

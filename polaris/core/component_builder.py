@@ -364,7 +364,10 @@ class ComponentBuilder:
                 llm_cfg = meta_config.get("llm", {}) or {}
                 provider = llm_cfg.get("provider", "google")
                 resilience_cfg = llm_cfg.get("resilience")
-                llm_client = create_llm_client(provider, resilience=resilience_cfg)
+                llm_kwargs = dict(llm_cfg)
+                llm_kwargs.pop("provider", None)
+                llm_kwargs.pop("resilience", None)
+                llm_client = create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
                 return LLMMetaLearner(
                     llm_client=llm_client,

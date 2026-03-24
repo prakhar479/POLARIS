@@ -227,6 +227,9 @@ class Polaris:
             config=self.config,
         )
 
+        # Allow hot-reload to update meta-learner settings (e.g., auto_apply).
+        config_reloader.update_meta_learner(self.meta_learner)
+
         if self.strategy is not None:
             pipeline = AdaptationPipeline(
                 strategy=self.strategy,

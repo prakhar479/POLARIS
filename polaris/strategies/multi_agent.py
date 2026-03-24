@@ -272,6 +272,8 @@ class MultiAgentStrategy(AdaptationStrategy):
         self.allowed_tools = allowed_tools or [
             "get_recent_states",
             "summarize_metric_trends",
+            "list_metric_fields",
+            "compute_metric_math",
             "get_world_model_insights",
             "predict_outcome",
             "get_action_history",
