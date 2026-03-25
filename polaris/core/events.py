@@ -85,8 +85,7 @@ class InMemoryEventBus(EventBus):
             self._metrics.increment("polaris.event_bus.stopped")
 
     async def publish(self, event: Any) -> None:
-        """
-        Publish an event to all subscribed handlers.
+        """Publish an event to all subscribed handlers.
 
         Args:
             event: Event to publish
@@ -159,8 +158,7 @@ class InMemoryEventBus(EventBus):
                 )
 
     def subscribe(self, event_type: Type, handler: Callable) -> str:
-        """
-        Subscribe to events of a specific type.
+        """Subscribe to events of a specific type.
 
         Args:
             event_type: Type of event to subscribe to

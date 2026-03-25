@@ -1,5 +1,4 @@
-"""
-Basic usage example for Polaris.
+"""Basic usage example for Polaris.
 
 Demonstrates simple integration with SWIM system.
 """

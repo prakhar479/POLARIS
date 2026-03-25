@@ -1,12 +1,11 @@
-"""
-Kubernetes system connector.
+"""Kubernetes system connector.
 
 Connects Polaris to a Kubernetes cluster for self-adaptation of cloud-native workloads.
 """
 
 import asyncio
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 from polaris.abstractions.connector import Connector
 from polaris.abstractions.observability import Logger, MetricsCollector
@@ -19,9 +18,6 @@ from polaris.core.models import (
     SystemState,
 )
 
-if TYPE_CHECKING:
-    pass
-
 
 # Use string-based import to avoid circular imports
 def _get_connector_class() -> type:
@@ -31,11 +27,10 @@ def _get_connector_class() -> type:
 
 
 class KubernetesConnector(Connector):
-    """
-    Connector for Kubernetes clusters.
+    """Connector for Kubernetes clusters.
 
-    Monitors pod/node states and executes actions like scaling deployments.
-    Requires the `kubernetes` python package.
+    Monitors pod/node states and executes actions like scaling deployments. Requires the
+    `kubernetes` python package.
     """
 
     def __init__(
@@ -49,9 +44,12 @@ class KubernetesConnector(Connector):
         """Initialize Kubernetes connector.
 
         Args:
-            kubeconfig_path: Path to kubeconfig file (if None, relies on default env vars).
+            kubeconfig_path: Path to kubeconfig file (if None, relies on default env
+                vars).
             in_cluster: Whether Polaris is running inside the K8s cluster.
             namespace: Default namespace to scope monitoring and actions.
+            logger: Optional logger for logging events.
+            metrics: Optional metrics collector for tracking performance.
         """
         self.kubeconfig_path = kubeconfig_path
         self.in_cluster = in_cluster

@@ -16,8 +16,7 @@ class ConnectorRegistry:
         self._metrics = metrics
 
     async def register(self, connector: "Connector") -> None:
-        """
-        Register a connector.
+        """Register a connector.
 
         Args:
             connector: Connector to register
@@ -32,8 +31,7 @@ class ConnectorRegistry:
             self._metrics.gauge("polaris.registry.total_connectors", len(self._connectors))
 
     def get(self, system_id: str) -> Optional["Connector"]:
-        """
-        Get a connector by system ID.
+        """Get a connector by system ID.
 
         Args:
             system_id: System ID
@@ -52,8 +50,7 @@ class ConnectorRegistry:
         return connector
 
     def all(self) -> List["Connector"]:
-        """
-        Get all registered connectors.
+        """Get all registered connectors.
 
         Returns:
             List of all connectors

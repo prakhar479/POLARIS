@@ -158,9 +158,7 @@ def test_openrouter_provider_creates_openrouter_client(monkeypatch):
             captured["called"] = True
             captured["kwargs"] = kwargs
 
-    monkeypatch.setattr(
-        "polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient
-    )
+    monkeypatch.setattr("polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient)
     monkeypatch.delenv("LLM_RESILIENCE_ENABLED", raising=False)
     monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEYS", raising=False)
@@ -179,9 +177,7 @@ def test_openrouter_aliases_normalize(monkeypatch):
         def __init__(self, **kwargs):
             captured["called"] = True
 
-    monkeypatch.setattr(
-        "polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient
-    )
+    monkeypatch.setattr("polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient)
     monkeypatch.delenv("LLM_RESILIENCE_ENABLED", raising=False)
     monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEYS", raising=False)

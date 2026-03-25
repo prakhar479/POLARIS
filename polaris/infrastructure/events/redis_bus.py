@@ -86,8 +86,7 @@ class RedisEventBus(EventBus):
             self._metrics.increment("polaris.event_bus.redis.stopped")
 
     async def publish(self, event: Any) -> None:
-        """
-        Publish an event to the Redis channel.
+        """Publish an event to the Redis channel.
 
         Args:
             event: Event to publish (must be pickleable)

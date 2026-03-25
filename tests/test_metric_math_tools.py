@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import asyncio
 
 import pytest
 
-from polaris.tools.builtin import ComputeMetricMathTool, ListMetricFieldsTool
 from polaris.tools.base import ToolDependencies
+from polaris.tools.builtin import ComputeMetricMathTool, ListMetricFieldsTool
 
 
 @dataclass
@@ -107,7 +107,11 @@ def test_compute_metric_math_rejects_unsafe_expression():
     # Attribute access should be rejected by safety checks.
     out = asyncio.run(
         tool.execute(
-            {"expression": "__import__('os').system('echo pwn')", "op": "avg", "window_seconds": 60},
+            {
+                "expression": "__import__('os').system('echo pwn')",
+                "op": "avg",
+                "window_seconds": 60,
+            },
             states[-1],
             None,
             deps,

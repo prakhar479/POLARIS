@@ -1,18 +1,18 @@
 """Built-in tools for POLARIS agentic strategies.
 
-This module implements the six core tools used by AgenticLLMStrategy
-and MultiAgentStrategy. Each tool is extracted from the original
-hardcoded _execute_tool implementations.
+This module implements the six core tools used by AgenticLLMStrategy and
+MultiAgentStrategy. Each tool is extracted from the original hardcoded _execute_tool
+implementations.
 """
 
-import uuid
 import ast
 import math
-import operator
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+import uuid
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from polaris.core.models import AdaptationAction
 from polaris.tools.base import Tool, ToolDependencies, ToolError
+from polaris.tools.utils import clamp_int, extract_metric_values, get_time_window
 
 if TYPE_CHECKING:
     from polaris.abstractions.strategy import AdaptationContext
@@ -29,6 +29,7 @@ class GetRecentStatesTool(Tool):
 
     @property
     def description(self) -> str:
+        """Get tool description."""
         """Get the description of the tool."""
         return (
             "Query recent system states from the knowledge store. "
@@ -46,10 +47,10 @@ class GetRecentStatesTool(Tool):
         """Execute get_recent_states tool."""
         try:
             # Parse and clamp parameters
-            limit = self._clamp_int(args.get("limit"), 1, 200, 50)
+            limit = clamp_int(args.get("limit"), 1, 200, 50)
 
             # Calculate time window
-            start, end = self._get_time_window(args, 600, 3600)
+            start, end = get_time_window(args, 600, 3600)
 
             # Query states from knowledge store
             states = await deps.knowledge_store.query_states(state.system_id, start, end)
@@ -124,13 +125,13 @@ class SummarizeMetricTrendsTool(Tool):
 
         try:
             # Calculate time window
-            start, end = self._get_time_window(args, 600, 3600)
+            start, end = get_time_window(args, 600, 3600)
 
             # Query states
             states = await deps.knowledge_store.query_states(state.system_id, start, end)
 
             # Extract metric values
-            vals = self._extract_metric_values(states, metric)
+            vals = extract_metric_values(states, metric)
 
             if not vals:
                 return {"count": 0, "metric": metric}
@@ -165,16 +166,18 @@ class SummarizeMetricTrendsTool(Tool):
 class ListMetricFieldsTool(Tool):
     """Tool to discover metric fields (optionally numeric-only) from recent states.
 
-    This helps LLMs avoid guessing metric names. It returns the set of metric
-    keys observed in the queried window plus a "numeric" subset.
+    This helps LLMs avoid guessing metric names. It returns the set of metric keys
+    observed in the queried window plus a "numeric" subset.
     """
 
     @property
     def name(self) -> str:
+        """Get tool name."""
         return "list_metric_fields"
 
     @property
     def description(self) -> str:
+        """Get tool description."""
         return (
             "List metric field names seen in recent system states, and identify which are numeric. "
             "Parameters: window_seconds (1-3600, default 600), limit (1-500, default 200), "
@@ -188,10 +191,11 @@ class ListMetricFieldsTool(Tool):
         context: "AdaptationContext",
         deps: ToolDependencies,
     ) -> Dict[str, Any]:
+        """Execute tool."""
         try:
-            limit = self._clamp_int(args.get("limit"), 1, 500, 200)
+            limit = clamp_int(args.get("limit"), 1, 500, 200)
             numeric_only = bool(args.get("numeric_only", False))
-            start, end = self._get_time_window(args, 600, 3600)
+            start, end = get_time_window(args, 600, 3600)
 
             states = await deps.knowledge_store.query_states(state.system_id, start, end)
             if states:
@@ -246,16 +250,20 @@ class ComputeMetricMathTool(Tool):
     - Expression mode: Provide `expression` referencing metric names.
 
     Examples:
-    - {"metric": "mr1_avg", "op": "avg", "window_seconds": 600}
-    - {"expression": "mr1_avg / max(fire_cells_burning_ratio, 1e-6)", "op": "avg"}
+        ```
+        - {"metric": "mr1_avg", "op": "avg", "window_seconds": 600}
+        - {"expression": "mr1_avg / max(fire_cells_burning_ratio, 1e-6)", "op": "avg"}
+        ```
     """
 
     @property
     def name(self) -> str:
+        """Get tool name."""
         return "compute_metric_math"
 
     @property
     def description(self) -> str:
+        """Get tool description."""
         return (
             "Compute math/stats on numeric metrics over a recent time window. "
             "Parameters: window_seconds (1-3600, default 600), limit (1-500, default 200), "
@@ -271,8 +279,9 @@ class ComputeMetricMathTool(Tool):
         context: "AdaptationContext",
         deps: ToolDependencies,
     ) -> Dict[str, Any]:
+        """Execute tool."""
         try:
-            limit = self._clamp_int(args.get("limit"), 1, 500, 200)
+            limit = clamp_int(args.get("limit"), 1, 500, 200)
             op = str(args.get("op", "avg")).strip().lower()
             metric = str(args.get("metric", "")).strip() or None
             expression = args.get("expression")
@@ -288,7 +297,7 @@ class ComputeMetricMathTool(Tool):
                     recoverable=True,
                 ).to_dict()
 
-            start, end = self._get_time_window(args, 600, 3600)
+            start, end = get_time_window(args, 600, 3600)
             states = await deps.knowledge_store.query_states(state.system_id, start, end)
             if states:
                 states = states[-limit:]
@@ -467,6 +476,7 @@ class GetWorldModelInsightsTool(Tool):
 
     @property
     def name(self) -> str:
+        """Get tool name."""
         """Get the name of the tool."""
         return "get_world_model_insights"
 
@@ -509,6 +519,7 @@ class PredictOutcomeTool(Tool):
 
     @property
     def name(self) -> str:
+        """Get tool name."""
         """Get the name of the tool."""
         return "predict_outcome"
 
@@ -587,6 +598,7 @@ class GetActionHistoryTool(Tool):
 
     @property
     def name(self) -> str:
+        """Get tool name."""
         """Get the name of the tool."""
         return "get_action_history"
 
@@ -608,10 +620,10 @@ class GetActionHistoryTool(Tool):
         """Execute get_action_history tool."""
         try:
             # Parse parameters with larger limits for historical data
-            window_seconds = self._clamp_int(
+            window_seconds = clamp_int(
                 args.get("window_seconds"), 1, 30 * 24 * 3600, 86400  # Max 30 days
             )
-            limit = self._clamp_int(args.get("limit"), 1, 500, 50)
+            limit = clamp_int(args.get("limit"), 1, 500, 50)
 
             # Calculate time window
             from datetime import datetime as dt
@@ -662,6 +674,7 @@ class ListSupportedActionsTool(Tool):
 
     @property
     def name(self) -> str:
+        """Get tool name."""
         """Get the name of the tool."""
         return "list_supported_actions"
 
@@ -716,7 +729,7 @@ class ListSupportedActionsTool(Tool):
 
         # Fallback: infer from historical actions
         try:
-            window_seconds = self._clamp_int(
+            window_seconds = clamp_int(
                 args.get("window_seconds"), 1, 365 * 24 * 3600, 30 * 24 * 3600  # Max 1 year
             )
 
@@ -755,6 +768,71 @@ class ListSupportedActionsTool(Tool):
             ).to_dict()
 
 
+class SleepTool(Tool):
+    """Tool to purposefully wait for a specified duration."""
+
+    @property
+    def name(self) -> str:
+        """Get tool name."""
+        return "sleep"
+
+    @property
+    def description(self) -> str:
+        """Get tool description."""
+        return "Wait for a specified number of seconds. Parameters: duration_seconds (1-300, default 5)"
+
+    async def execute(
+        self,
+        args: Dict[str, Any],
+        state: "SystemState",
+        context: "AdaptationContext",
+        deps: ToolDependencies,
+    ) -> Dict[str, Any]:
+        """Execute tool."""
+        import asyncio
+
+        duration = clamp_int(args.get("duration_seconds"), 1, 300, 5)
+        if deps.logger:
+            deps.logger.debug("sleep tool called", duration=duration)
+        await asyncio.sleep(duration)
+        return {"slept_for_seconds": duration}
+
+
+class GetSystemStatusTool(Tool):
+    """Tool to retrieve a quick snapshot of the instantaneous system state."""
+
+    @property
+    def name(self) -> str:
+        """Get tool name."""
+        return "get_system_status"
+
+    @property
+    def description(self) -> str:
+        """Get tool description."""
+        return "Retrieve the current instantaneous system state, including metrics, without querying historical data. No parameters."
+
+    async def execute(
+        self,
+        args: Dict[str, Any],
+        state: "SystemState",
+        context: "AdaptationContext",
+        deps: ToolDependencies,
+    ) -> Dict[str, Any]:
+        """Execute tool."""
+        metrics_dict = {}
+        for name, mv in state.metrics.items():
+            metrics_dict[name] = mv.value
+
+        return {
+            "system_id": state.system_id,
+            "timestamp": state.timestamp.isoformat(),
+            "metrics": metrics_dict,
+            "status": (
+                state.health_status.value if getattr(state, "health_status", None) else "UNKNOWN"
+            ),
+        }
+
+
 def get_builtin_tools() -> List[Tool]:
     """Get all built-in tools as a list.
 
@@ -770,4 +848,6 @@ def get_builtin_tools() -> List[Tool]:
         PredictOutcomeTool(),
         GetActionHistoryTool(),
         ListSupportedActionsTool(),
+        SleepTool(),
+        GetSystemStatusTool(),
     ]

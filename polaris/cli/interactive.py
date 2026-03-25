@@ -1,5 +1,4 @@
-"""
-Interactive CLI interface for querying Polaris components.
+"""Interactive CLI interface for querying Polaris components.
 
 Provides an interactive shell for querying knowledge base and world model.
 """
@@ -379,7 +378,10 @@ class PolarisInteractiveCLI(cmd.Cmd):
             self._print(f"Error querying world model: {e}", style="red")
 
     def do_predict(self, arg: str) -> None:
-        """Predict action outcome. Usage: predict <system_id> <action_type> [param=value ...]."""
+        """Predict action outcome.
+
+        Usage: predict <system_id> <action_type> [param=value...].
+        """
         if not self.polaris.world_model:
             self._print("World model is not available", style="red")
             return
@@ -566,8 +568,7 @@ class PolarisInteractiveCLI(cmd.Cmd):
 def run_interactive_cli_standalone(
     config_path: str, cli_overrides: Optional[Dict[str, Any]] = None
 ) -> None:
-    """
-    Backward-compatible helper to run interactive mode in a single process.
+    """Backward-compatible helper to run interactive mode in a single process.
 
     Args:
         config_path: Path to Polaris configuration
@@ -581,8 +582,7 @@ def run_interactive_cli_standalone(
 
 
 async def run_interactive_cli(polaris: "Polaris") -> None:
-    """
-    Run the interactive CLI interface in the same process.
+    """Run the interactive CLI interface in the same process.
 
     Args:
         polaris: Polaris instance to query

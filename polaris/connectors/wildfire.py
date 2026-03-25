@@ -172,7 +172,11 @@ class WildfireConnector(Connector):
             if isinstance(mr1_values, list) and mr1_values:
                 try:
                     mr1_floats = [float(v) for v in mr1_values]
-                    mr1_avg = sum(mr1_floats) / num_agents if num_agents > 0 else 0.0
+                    mr1_avg = (
+                        sum(mr1_floats) / num_agents
+                        if isinstance(num_agents, int) and num_agents > 0
+                        else 0.0
+                    )
                     metrics["mr1_avg"] = MetricValue(
                         name="mr1_avg",
                         value=mr1_avg,

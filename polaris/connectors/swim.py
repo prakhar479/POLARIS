@@ -1,5 +1,4 @@
-"""
-SWIM system connector.
+"""SWIM system connector.
 
 Connects Polaris to the SWIM exemplar system for self-adaptation.
 """
@@ -7,7 +6,7 @@ Connects Polaris to the SWIM exemplar system for self-adaptation.
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional
+from typing import List, Optional
 
 from polaris.abstractions.connector import Connector
 from polaris.abstractions.observability import Logger, MetricsCollector
@@ -21,9 +20,6 @@ from polaris.core.models import (
 )
 from polaris.infrastructure.constants import DEFAULT_SWIM_TIMEOUT
 
-if TYPE_CHECKING:
-    pass
-
 
 # Use string-based import to avoid circular imports
 def _get_connector_class() -> type:
@@ -33,11 +29,10 @@ def _get_connector_class() -> type:
 
 
 class SWIMConnector(Connector):
-    """
-    Connector for SWIM (Simulated Web Infrastructure Manager).
+    """Connector for SWIM (Simulated Web Infrastructure Manager).
 
-    SWIM is a reference implementation for self-adaptive systems research.
-    Communicates via TCP socket using line-based protocol.
+    SWIM is a reference implementation for self-adaptive systems research. Communicates
+    via TCP socket using line-based protocol.
     """
 
     def __init__(
@@ -244,9 +239,6 @@ class SWIMConnector(Connector):
                         timestamp=datetime.now(timezone.utc),
                     )
 
-            # Debug: metrics collected successfully
-            # print(f"Collected metrics: {metrics}")
-
             if self._metrics:
                 duration = time.monotonic() - start_time
                 self._metrics.histogram(
@@ -433,8 +425,7 @@ class SWIMConnector(Connector):
         ]
 
     async def _send_command(self, command: str) -> str:
-        """
-        Send command to SWIM via TCP and receive response.
+        """Send command to SWIM via TCP and receive response.
 
         Args:
             command: Command to send

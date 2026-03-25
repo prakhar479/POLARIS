@@ -21,11 +21,10 @@ from polaris.infrastructure.observability.null_metrics import NullMetricsCollect
 
 
 class LLMMetaLearner(MetaLearner):
-    """
-    LLM-powered meta-learner for intelligent strategy optimization.
+    """LLM-powered meta-learner for intelligent strategy optimization.
 
-    Uses an LLM to analyze system performance and propose parameter
-    updates using natural language reasoning and deep analysis.
+    Uses an LLM to analyze system performance and propose parameter updates using
+    natural language reasoning and deep analysis.
     """
 
     def __init__(
@@ -40,8 +39,7 @@ class LLMMetaLearner(MetaLearner):
         per_system_prompts: Optional[Dict[str, Dict[str, str]]] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        """
-        Initialize LLM meta-learner.
+        """Initialize LLM meta-learner.
 
         Args:
             llm_client: LLM client for reasoning
@@ -49,6 +47,10 @@ class LLMMetaLearner(MetaLearner):
             logger: Logger instance
             auto_apply: Whether to auto-apply approved changes
             temperature: LLM temperature (lower = more conservative)
+            analysis_system_prompt: Optional custom system prompt for analysis
+            optimization_system_prompt: Optional custom system prompt for optimization
+            per_system_prompts: Optional system-specific prompt overrides
+            metrics: Optional metrics collector for tracking performance
         """
         self.llm = llm_client
         self.knowledge_store = knowledge_store
@@ -305,9 +307,9 @@ class LLMMetaLearner(MetaLearner):
     ) -> List[AppliedUpdate]:
         """Apply approved proposals, gated by the ``auto_apply`` flag.
 
-        When ``auto_apply=False`` (the default) no updates are written to
-        the live strategy — proposals are recorded for transparency only.
-        When ``auto_apply=True`` each approved proposal is forwarded to
+        When ``auto_apply=False`` (the default) no updates are written to the live
+        strategy — proposals are recorded for transparency only. When
+        ``auto_apply=True`` each approved proposal is forwarded to
         ``strategy.update_parameter``.
         """
         if not self.auto_apply:

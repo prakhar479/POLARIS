@@ -1,5 +1,4 @@
-"""
-Example usage of Polaris CLI features.
+"""Example usage of Polaris CLI features.
 
 Demonstrates the enhanced dashboard and interactive CLI interface.
 """

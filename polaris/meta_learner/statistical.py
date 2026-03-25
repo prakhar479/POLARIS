@@ -30,11 +30,10 @@ from polaris.meta_learner.bayesian_optimizer import (
 
 
 class StatisticalMetaLearner(MetaLearner):
-    """
-    Statistical meta-learner using Bayesian optimization for intelligent parameter tuning.
+    """Statistical meta-learner using Bayesian optimization for intelligent parameter tuning.
 
-    Combines Gaussian Process-based optimization with world model uncertainty integration
-    for sophisticated parameter adaptation decisions.
+    Combines Gaussian Process-based optimization with world model uncertainty
+    integration for sophisticated parameter adaptation decisions.
     """
 
     def __init__(

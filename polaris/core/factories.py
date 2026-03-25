@@ -1,8 +1,8 @@
 """Factory registries for strategies and connectors.
 
-These registries decouple configuration/type strings from concrete
-implementations, and provide extension points for custom strategies
-and connectors without modifying the core orchestrator.
+These registries decouple configuration/type strings from concrete implementations, and
+provide extension points for custom strategies and connectors without modifying the core
+orchestrator.
 """
 
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -295,7 +295,9 @@ def _register_default_strategy_factories() -> None:
                 llm_kwargs = dict(agent_cfg)
                 llm_kwargs.pop("provider", None)
                 llm_kwargs.pop("resilience", None)
-                llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+                llm_client = _llm.create_llm_client(
+                    provider, resilience=resilience_cfg, **llm_kwargs
+                )
 
                 sub_agent = AgenticLLMStrategy(
                     llm_client=llm_client,
@@ -328,7 +330,9 @@ def _register_default_strategy_factories() -> None:
                 )
 
                 def _build_agent_cfg_hybrid(
-                    role_cfg: Optional[dict], ma_provider: str = ma_provider
+                    role_cfg: Optional[dict],
+                    ma_provider: str = ma_provider,
+                    ma_kwargs: dict = ma_kwargs,
                 ) -> Optional[AgentConfig]:
                     if not isinstance(role_cfg, dict) or not role_cfg:
                         return None
@@ -470,7 +474,9 @@ def _register_default_strategy_factories() -> None:
                 )
             elif role_resilience:
                 # Same provider as shared but different resilience
-                role_client = _llm.create_llm_client(provider, resilience=role_resilience, **llm_kwargs)
+                role_client = _llm.create_llm_client(
+                    provider, resilience=role_resilience, **llm_kwargs
+                )
             return AgentConfig(
                 llm_client=role_client,
                 temperature=role_cfg.get("temperature"),

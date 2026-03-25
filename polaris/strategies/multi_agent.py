@@ -1,22 +1,21 @@
 """Multi-agent LLM-based adaptation strategy for POLARIS.
 
-This module implements an advanced adaptation strategy that uses a committee
-of specialized Large Language Model (LLM) agents working together to make robust
-adaptation decisions.
+This module implements an advanced adaptation strategy that uses a committee of
+specialized Large Language Model (LLM) agents working together to make robust adaptation
+decisions.
 
 The decision process flows through three specialized agents:
 
-1. **Diagnostician** — Analyses current system metrics to detect anomalies,
-   identify root causes, and assign a severity level.
-2. **Planner** — Given the diagnosis, proposes a concrete sequence of
-   adaptation actions to resolve the identified issues.
-3. **SafetyValidator** — Reviews the plan for safety, approves or rejects it,
-   and may return a safer subset of actions.
+1. **Diagnostician** — Analyses current system metrics to detect anomalies, identify
+root causes, and assign a severity level. 2. **Planner** — Given the diagnosis, proposes
+a concrete sequence of adaptation actions to resolve the identified issues. 3.
+**SafetyValidator** — Reviews the plan for safety, approves or rejects it, and may
+return a safer subset of actions.
 
-Each agent can be independently configured with its own LLM client, temperature,
-and system-prompt override, enabling autonomous multi-agent setups where
-different agents can use different models or providers optimised for their role
-(e.g., a cheap fast model for diagnosis, a stronger model for validation).
+Each agent can be independently configured with its own LLM client, temperature, and
+system-prompt override, enabling autonomous multi-agent setups where different agents
+can use different models or providers optimised for their role (e.g., a cheap fast model
+for diagnosis, a stronger model for validation).
 """
 
 import json
@@ -96,8 +95,8 @@ class ValidatorOutput(BaseModel):
 class AgenticResponseBase(BaseModel):
     """Base class for all agentic response schemas.
 
-    Defines the common structure for tool-using agent responses: optional
-    tool call or final output.
+    Defines the common structure for tool-using agent responses: optional tool call or
+    final output.
     """
 
     tool: Optional[str] = Field(None, description="Name of the tool to call")
@@ -132,17 +131,17 @@ class ValidatorAgenticResponse(AgenticResponseBase):
 class AgentConfig:
     """Configuration for a single agent within the multi-agent committee.
 
-    Allows each agent (Diagnostician, Planner, SafetyValidator) to use a
-    different LLM client, temperature, and/or system prompt.  Any field
-    left as ``None`` falls back to the shared ``MultiAgentStrategy`` defaults.
+    Allows each agent (Diagnostician, Planner, SafetyValidator) to use a different LLM
+    client, temperature, and/or system prompt.  Any field left as ``None`` falls back to
+    the shared ``MultiAgentStrategy`` defaults.
 
     Attributes:
-        llm_client: LLM client to use for this agent. Falls back to the
-            strategy-level shared client when ``None``.
+        llm_client: LLM client to use for this agent. Falls back to the strategy-level
+            shared client when ``None``.
         temperature: Sampling temperature for this agent. Falls back to the
             strategy-level ``temperature`` when ``None``.
-        system_prompt: Full system-prompt string for this agent. Falls back to
-            the built-in default prompt for the role when ``None``.
+        system_prompt: Full system-prompt string for this agent. Falls back to the
+            built-in default prompt for the role when ``None``.
         max_tokens: Maximum tokens to request. Falls back to role default.
     """
 
@@ -200,13 +199,13 @@ class MultiAgentStrategy(AdaptationStrategy):
 
     The decision process flows through three specialized agents:
 
-    1. **Diagnostician** — Detects anomalies, lists issues and root causes.
-    2. **Planner** — Proposes adaptation actions to mitigate the diagnosis.
-    3. **SafetyValidator** — Reviews the plan for safety and approves/rejects it.
+    1. **Diagnostician** — Detects anomalies, lists issues and root causes. 2.
+    **Planner** — Proposes adaptation actions to mitigate the diagnosis. 3.
+    **SafetyValidator** — Reviews the plan for safety and approves/rejects it.
 
-    Each agent can be independently configured via an :class:`AgentConfig`
-    object, enabling fully autonomous multi-agent setups where each role uses a
-    different model, provider, temperature, or system prompt.
+    Each agent can be independently configured via an :class:`AgentConfig` object,
+    enabling fully autonomous multi-agent setups where each role uses a different model,
+    provider, temperature, or system prompt.
 
     Attributes:
         llm: Shared/fallback LLM client.
@@ -242,24 +241,24 @@ class MultiAgentStrategy(AdaptationStrategy):
         """Initialise the MultiAgentStrategy.
 
         Args:
-            llm_client: Shared LLM client used as fallback when no per-agent
-                client is configured.
+            llm_client: Shared LLM client used as fallback when no per-agent client is
+                configured.
             knowledge_store: Store for querying historical system data.
             world_model: World model for predicting action outcomes.
-            temperature: Shared sampling temperature (default: 0.1). Each
-                agent can override this via its :class:`AgentConfig`.
-            system_description: Description of the managed system embedded in
-                default agent prompts (default: "A generic managed cloud system").
+            temperature: Shared sampling temperature (default: 0.1). Each agent can
+                override this via its :class:`AgentConfig`.
+            system_description: Description of the managed system embedded in default
+                agent prompts (default: "A generic managed cloud system").
             steps_limit: Default max reasoning steps for each agent stage (default: 3).
-            allowed_tools: List of enabled tools. If None, all built-in tools are enabled.
+            allowed_tools: List of enabled tools. If None, all built-in tools are
+                enabled.
             diagnostician_config: Optional per-agent config for the Diagnostician.
             planner_config: Optional per-agent config for the Planner.
             validator_config: Optional per-agent config for the SafetyValidator.
             agent_prompts: Optional dict mapping role names (``"diagnostician"``,
-                ``"planner"``, ``"validator"``) to custom system-prompt strings.
-                Merged into per-agent configs: ``agent_prompts`` value is used
-                when the corresponding :class:`AgentConfig` has no
-                ``system_prompt`` of its own.
+                ``"planner"``, ``"validator"``) to custom system-prompt strings. Merged
+                into per-agent configs: ``agent_prompts`` value is used when the
+                corresponding :class:`AgentConfig` has no ``system_prompt`` of its own.
             logger: Optional structured logger.
             metrics: Optional metrics collector (falls back to NullMetricsCollector).
         """
@@ -344,17 +343,17 @@ class MultiAgentStrategy(AdaptationStrategy):
     ) -> List[AdaptationAction]:
         """Assess system state using the multi-agent committee.
 
-        Runs the Diagnostician → Planner → SafetyValidator pipeline. Each
-        agent may use its own LLM client, temperature, and system prompt if
-        configured via :class:`AgentConfig`.
+        Runs the Diagnostician → Planner → SafetyValidator pipeline. Each agent may use
+        its own LLM client, temperature, and system prompt if configured via
+        :class:`AgentConfig`.
 
         Args:
             state: Current system state with metrics and health information.
             context: Adaptation context containing world-model insights.
 
         Returns:
-            List of approved :class:`AdaptationAction` objects, or an empty
-            list if no adaptation is required / the plan was rejected.
+            List of approved: class:`AdaptationAction` objects, or an empty list if no
+                adaptation is required / the plan was rejected.
         """
         if self.logger:
             self.logger.debug("MultiAgent assessment started", system_id=state.system_id)
@@ -729,8 +728,8 @@ class MultiAgentStrategy(AdaptationStrategy):
     ) -> Dict[str, Any]:
         """Execute a tool directly (deprecated).
 
-        This method is maintained for backward compatibility but delegates
-        to the ToolRegistry. New code should use the registry directly.
+        This method is maintained for backward compatibility but delegates to the
+        ToolRegistry. New code should use the registry directly.
         """
         deps = ToolDependencies(
             knowledge_store=self.knowledge_store,

@@ -1,6 +1,4 @@
-"""
-Comprehensive tests for LLM-based meta-learner.
-"""
+"""Comprehensive tests for LLM-based meta-learner."""
 
 from typing import Any, Dict, List
 from unittest.mock import Mock

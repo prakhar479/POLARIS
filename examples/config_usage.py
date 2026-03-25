@@ -1,5 +1,4 @@
-"""
-Example: Using configuration file.
+"""Example: Using configuration file.
 
 Shows how to use Polaris with a YAML configuration file.
 """

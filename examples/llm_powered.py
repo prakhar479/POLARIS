@@ -1,5 +1,4 @@
-"""
-Example: Using LLM-powered meta-learner and strategy.
+"""Example: Using LLM-powered meta-learner and strategy.
 
 Shows advanced AI-powered adaptation using Google Gemini or OpenAI.
 """

@@ -1,27 +1,25 @@
 """Hot-reload configuration watcher.
 
 Extracted from ``Polaris._maybe_hot_reload_config`` and
-``Polaris._apply_strategy_hot_reload`` so the config-reload logic can be
-tested and reused independently of the monitoring loop.
+``Polaris._apply_strategy_hot_reload`` so the config-reload logic can be tested and
+reused independently of the monitoring loop.
 """
 
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
-    from polaris.abstractions import AdaptationStrategy, Logger, MetricsCollector
-    from polaris.abstractions import MetaLearner
+    from polaris.abstractions import AdaptationStrategy, Logger, MetaLearner, MetricsCollector
     from polaris.infrastructure.config import PolarisConfig
 
 
 class ConfigReloader:
     """Watches a config file for changes and applies live updates to the strategy.
 
-    On each call to :meth:`maybe_reload`, the file's modification time is
-    compared against the last-seen mtime.  If the file has changed, the config
-    is reloaded and strategy parameters are updated in-place (without
-    restarting the framework).  A full strategy-type change still requires a
-    restart and is logged as such.
+    On each call to :meth:`maybe_reload`, the file's modification time is compared
+    against the last-seen mtime.  If the file has changed, the config is reloaded and
+    strategy parameters are updated in-place (without restarting the framework).  A full
+    strategy-type change still requires a restart and is logged as such.
     """
 
     def __init__(
@@ -59,8 +57,8 @@ class ConfigReloader:
         """Check for config changes and apply strategy/resilience updates.
 
         Returns:
-            The newly loaded ``PolarisConfig`` if the file changed, or
-            ``None`` if no reload was performed.
+            The newly loaded ``PolarisConfig`` if the file changed, or ``None`` if no
+                reload was performed.
         """
         if not self._config_path:
             return None
@@ -132,8 +130,8 @@ class ConfigReloader:
     async def _apply_meta_learner_hot_reload(self, meta_config: Any) -> None:
         """Apply meta-learner config updates (e.g., auto_apply, prompts, temperature).
 
-        Today we only support in-place updates for LLMMetaLearner instances.
-        Changing meta-learner type still requires a restart.
+        Today we only support in-place updates for LLMMetaLearner instances. Changing
+        meta-learner type still requires a restart.
         """
         meta_learner = getattr(self, "_meta_learner", None)
         if not meta_learner or not meta_config:
@@ -165,16 +163,19 @@ class ConfigReloader:
         try:
             if "auto_apply" in llm_cfg:
                 meta_learner.auto_apply = bool(llm_cfg.get("auto_apply"))
-            if "temperature" in llm_cfg:
-                meta_learner.temperature = float(llm_cfg.get("temperature"))
+
+            temperature_val = llm_cfg.get("temperature")
+            if temperature_val is not None:
+                meta_learner.temperature = float(temperature_val)
+
             if "analysis_system_prompt" in llm_cfg:
                 meta_learner.analysis_system_prompt = llm_cfg.get("analysis_system_prompt")
             if "optimization_system_prompt" in llm_cfg:
-                meta_learner.optimization_system_prompt = llm_cfg.get(
-                    "optimization_system_prompt"
-                )
-            if "per_system_prompts" in llm_cfg and isinstance(llm_cfg.get("per_system_prompts"), dict):
-                meta_learner._per_system_prompts = llm_cfg.get("per_system_prompts")  # type: ignore[attr-defined]
+                meta_learner.optimization_system_prompt = llm_cfg.get("optimization_system_prompt")
+            if "per_system_prompts" in llm_cfg and isinstance(
+                llm_cfg.get("per_system_prompts"), dict
+            ):
+                meta_learner._per_system_prompts = llm_cfg.get("per_system_prompts")
 
             self._logger.info(
                 "Applied meta-learner hot-reload updates",

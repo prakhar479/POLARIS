@@ -1,11 +1,11 @@
 """Adaptation pipeline: assess → validate → execute → store → notify.
 
-Extracted from ``Polaris._process_system_iteration`` so the decision-and-
-execution logic can be tested and reused independently of the monitoring loop.
+Extracted from ``Polaris._process_system_iteration`` so the decision-and- execution
+logic can be tested and reused independently of the monitoring loop.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from polaris.abstractions import (
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from polaris.core.events import EventBus
     from polaris.core.models import SystemState
     from polaris.infrastructure.config import PolarisConfig
+
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
@@ -27,15 +28,14 @@ class AdaptationPipeline:
 
     Given a ``SystemState`` and the connector that produced it, the pipeline:
 
-    1. Builds an ``AdaptationContext`` (with world-model insights).
-    2. Asks the strategy to ``assess`` the state.
-    3. If actions are proposed, validates each against the connector.
-    4. Executes the actions and stores the results in the knowledge store.
-    5. Notifies the strategy via ``on_action_executed`` for each.
-    6. Publishes ``AdaptationEvent``s on the event bus.
+    1. Builds an ``AdaptationContext`` (with world-model insights). 2. Asks the strategy
+    to ``assess`` the state. 3. If actions are proposed, validates each against the
+    connector. 4. Executes the actions and stores the results in the knowledge store. 5.
+    Notifies the strategy via ``on_action_executed`` for each. 6. Publishes
+    ``AdaptationEvent``s on the event bus.
 
-    Returns ``True`` if at least one action was successfully executed (or would
-    have been in dry-run mode), ``False`` otherwise.
+    Returns ``True`` if at least one action was successfully executed (or would have
+    been in dry-run mode), ``False`` otherwise.
     """
 
     def __init__(
@@ -71,7 +71,8 @@ class AdaptationPipeline:
             connector: The connector for the managed system.
 
         Returns:
-            ``True`` if at least one adaptation action was executed, ``False`` otherwise.
+            ``True`` if at least one adaptation action was executed, ``False``
+                otherwise.
         """
         from polaris.abstractions.strategy import AdaptationContext
         from polaris.core.events import AdaptationEvent
@@ -208,15 +209,14 @@ class AdaptationPipeline:
 
         return executed_any
 
-    def _apply_wildfire_step_policy(self, state: "SystemState", actions):
+    def _apply_wildfire_step_policy(self, state: "SystemState", actions: Any) -> Any:
         """Apply wildfire step policy.
 
         Supported policies (wildfire config):
-          - always_step_each_cycle: when true, append wildfire_step every cycle
-          - auto_step_when_no_adaptation: when true, inject wildfire_step only when
-            strategy returned no actions (legacy behavior)
+        - always_step_each_cycle: when true, append wildfire_step every cycle
+        - auto_step_when_no_adaptation: when true, inject wildfire_step only when
+        strategy returned no actions (legacy behavior)
         """
-
         if state.system_id.lower() != "wildfire":
             return actions
 
@@ -234,8 +234,9 @@ class AdaptationPipeline:
         always_step = bool(wildfire_cfg.get("always_step_each_cycle", False))
         step_when_no_actions = bool(wildfire_cfg.get("auto_step_when_no_adaptation", False))
 
-        from polaris.core.models import AdaptationAction
         import uuid
+
+        from polaris.core.models import AdaptationAction
 
         def make_step(reason: str) -> AdaptationAction:
             return AdaptationAction(

@@ -17,16 +17,14 @@ class PredictionResult:
 
 
 class WorldModel(ABC):
-    """
-    Interface for system behavior modeling and prediction.
+    """Interface for system behavior modeling and prediction.
 
     Implement this to customize how Polaris understands system behavior.
     """
 
     @abstractmethod
     async def update(self, state: SystemState) -> None:
-        """
-        Update model with new system state.
+        """Update model with new system state.
 
         Args:
             state: New system state observation
@@ -37,8 +35,7 @@ class WorldModel(ABC):
     async def predict(
         self, action: AdaptationAction, current_state: SystemState
     ) -> PredictionResult:
-        """
-        Predict outcome of executing an action.
+        """Predict outcome of executing an action.
 
         Args:
             action: Action to predict outcome for
@@ -51,8 +48,7 @@ class WorldModel(ABC):
 
     @abstractmethod
     async def get_insights(self) -> Dict[str, Any]:
-        """
-        Get insights about system behavior.
+        """Get insights about system behavior.
 
         Returns:
             Dict with model insights (trends, patterns, etc.)

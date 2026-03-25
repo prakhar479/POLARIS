@@ -1,7 +1,7 @@
 """Interactive dashboard for Polaris.
 
-Real-time terminal UI showing system state, summarized metrics, and recent
-events/logs in a minimal, developer-friendly layout.
+Real-time terminal UI showing system state, summarized metrics, and recent events/logs
+in a minimal, developer-friendly layout.
 """
 
 import asyncio
@@ -86,11 +86,10 @@ class _EmbeddedInteractiveCLI:
 
 
 class Dashboard:
-    """
-    Interactive TUI dashboard for Polaris.
+    """Interactive TUI dashboard for Polaris.
 
-    Displays real-time system state, metrics, and adaptation events.
-    Requires 'rich' library: pip install rich
+    Displays real-time system state, metrics, and adaptation events. Requires 'rich'
+    library: pip install rich
     """
 
     def __init__(self, polaris: Any) -> None:
@@ -130,9 +129,8 @@ class Dashboard:
     def _setup_log_capture(self) -> None:
         """Attach a logging handler that feeds recent logs into the dashboard.
 
-        This provides a concise, human-friendly log view without dumping full
-        raw logs into the terminal. Full raw logs still go to configured log
-        files as usual.
+        This provides a concise, human-friendly log view without dumping full raw logs
+        into the terminal. Full raw logs still go to configured log files as usual.
         """
         logger = logging.getLogger("polaris")
 
@@ -217,18 +215,18 @@ class Dashboard:
         return layout
 
     def _render(self) -> Layout:
-        """Render current dashboard state."""
+        """Render current dashboard state.
+
+        Snapshot shared state once. Both recent_events and metric_history may be written
+        by event callbacks that fire from a different coroutine or thread. Taking local
+        copies here means the rest of _render works on stable data.
+        """
         layout = self._build_layout()
 
-        # --- Snapshot shared state once -------------------------------------------
-        # Both recent_events and metric_history may be written by event callbacks
-        # that fire from a different coroutine or thread.  Taking local copies
-        # here means the rest of _render works on stable data.
         recent_events_snapshot: List[Dict[str, Any]] = list(self.recent_events)
         metric_history_snapshot: Dict[str, List[Any]] = {
             k: list(v) for k, v in self.metric_history.items()
         }
-        # --------------------------------------------------------------------------
 
         # Header
         header_text = Text()
@@ -474,7 +472,10 @@ class Dashboard:
         return f"{secs}s"
 
     def _calculate_trend(self, history: list) -> str:
-        """Calculate simple trend indicator. Returns "↑", "↓", "→", or "—" if not enough data or non-numeric."""
+        """Calculate simple trend indicator.
+
+        Returns "↑", "↓", "→", or "—" if not enough data or non-numeric.
+        """
         if len(history) < 2:
             return "—"
 
@@ -633,7 +634,10 @@ class Dashboard:
                 return
 
     def _read_key_nonblocking(self) -> Optional[str]:
-        """Read one key from stdin without blocking. Returns None if no key is available or on error."""
+        """Read one key from stdin without blocking.
+
+        Returns None if no key is available or on error.
+        """
         if os.name == "nt":
             try:
                 import msvcrt
@@ -692,11 +696,10 @@ class Dashboard:
     ) -> Optional[str]:
         """Read exactly one byte from non-blocking stdin, retrying briefly.
 
-        Used when consuming the 2nd/3rd bytes of a multi-byte escape sequence
-        where the kernel may not have buffered the remaining bytes yet.
+        Used when consuming the 2nd/3rd bytes of a multi-byte escape sequence where the
+        kernel may not have buffered the remaining bytes yet.
 
-        Returns the character, or None if it did not arrive within the retry
-        window.
+        Returns the character, or None if it did not arrive within the retry window.
         """
         import time
 
@@ -769,9 +772,9 @@ class Dashboard:
     def _detach_log_handler(self) -> None:
         """Remove the dashboard log handler from the root logger.
 
-        Centralised teardown that nulls out self._log_handler after
-        removal so idempotent calls (e.g. both run() and run_with_interactive_cli()
-        reaching their finally blocks) do not attempt a second removeHandler.
+        Centralised teardown that nulls out self._log_handler after removal so
+        idempotent calls (e.g. both run() and run_with_interactive_cli() reaching their
+        finally blocks) do not attempt a second removeHandler.
         """
         if self._log_handler is not None:
             try:
@@ -781,8 +784,7 @@ class Dashboard:
             self._log_handler = None
 
     async def run(self, refresh_rate: float = 1.0) -> None:
-        """
-        Run the dashboard.
+        """Run the dashboard.
 
         Args:
             refresh_rate: Update frequency in seconds

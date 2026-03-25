@@ -1,7 +1,6 @@
 """Tests for Polaris configuration validation.
 
-Covers connector and strategy type validation using the registry-based
-factories (F6).
+Covers connector and strategy type validation using the registry-based factories (F6).
 """
 
 import pytest

@@ -38,8 +38,7 @@ class ParameterSpec:
 
 
 class AdaptationStrategy(ABC):
-    """
-    Interface for adaptation decision-making strategies.
+    """Interface for adaptation decision-making strategies.
 
     Implement this to create custom adaptation logic.
     """
@@ -48,8 +47,7 @@ class AdaptationStrategy(ABC):
     async def assess(
         self, state: "SystemState", context: AdaptationContext
     ) -> List["AdaptationAction"]:
-        """
-        Assess system state and decide on adaptation.
+        """Assess system state and decide on adaptation.
 
         Args:
             state: Current system state with metrics
@@ -69,8 +67,7 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
-        """
-        Return specification of parameters that can be tuned.
+        """Return specification of parameters that can be tuned.
 
         Returns:
             Dict mapping parameter paths to their specifications
@@ -79,8 +76,7 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
-        """
-        Update a tunable parameter.
+        """Update a tunable parameter.
 
         Args:
             parameter_path: Dot-notation path to parameter
@@ -96,8 +92,7 @@ class AdaptationStrategy(ABC):
         return
 
     async def get_performance_metrics(self) -> Dict[str, float]:
-        """
-        Return strategy-specific performance metrics.
+        """Return strategy-specific performance metrics.
 
         Used by Meta-Learner to assess effectiveness.
         """

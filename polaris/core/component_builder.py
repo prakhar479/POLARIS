@@ -35,9 +35,7 @@ class ComponentBuilder:
     state is maintained — all methods are ``@staticmethod``.
     """
 
-    # ------------------------------------------------------------------
     # Observability
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_logger(
@@ -158,9 +156,7 @@ class ComponentBuilder:
 
         return InMemoryEventBus(metrics=event_bus_metrics, logger=logger)
 
-    # ------------------------------------------------------------------
     # Core domain components
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_knowledge_store(
@@ -427,9 +423,7 @@ class ComponentBuilder:
 
         return connectors
 
-    # ------------------------------------------------------------------
     # Metrics export configuration
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_metrics_export_config(
@@ -468,9 +462,7 @@ class ComponentBuilder:
 
         return {"enabled": False}
 
-    # ------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def should_collect(

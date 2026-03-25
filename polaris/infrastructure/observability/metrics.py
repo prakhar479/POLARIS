@@ -11,11 +11,10 @@ from polaris.abstractions.observability import MetricsCollector as MetricsInterf
 
 
 class SimpleMetricsCollector(MetricsInterface):
-    """
-    Simple in-memory metrics collector.
+    """Simple in-memory metrics collector.
 
-    Stores metrics for querying. For production, integrate with
-    Prometheus, DataDog, or similar.
+    Stores metrics for querying. For production, integrate with Prometheus, DataDog, or
+    similar.
     """
 
     def __init__(self) -> None:
@@ -67,8 +66,7 @@ class SimpleMetricsCollector(MetricsInterface):
         }
 
     def export_to_file(self, file_path: Union[str, Path], format: str = "json") -> None:
-        """
-        Export metrics to file.
+        """Export metrics to file.
 
         Args:
             file_path: Path to export file

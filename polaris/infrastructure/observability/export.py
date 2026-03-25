@@ -13,8 +13,7 @@ def export_polaris_metrics(
     experiment_name: Optional[str] = None,
     formats: Optional[list] = None,
 ) -> dict:
-    """
-    Export Polaris metrics with standardized naming and structure.
+    """Export Polaris metrics with standardized naming and structure.
 
     Args:
         metrics_collector: The metrics collector instance
@@ -54,8 +53,7 @@ def export_polaris_metrics(
 def create_metrics_summary_report(
     metrics_collector: SimpleMetricsCollector, output_file: Union[str, Path]
 ) -> None:
-    """
-    Create a human-readable metrics summary report.
+    """Create a human-readable metrics summary report.
 
     Args:
         metrics_collector: The metrics collector instance

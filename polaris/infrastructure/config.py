@@ -168,10 +168,9 @@ class PolarisConfig(BaseModel):
         """Preserve unknown top-level keys into `extra`.
 
         Some configurations include connector-specific top-level blocks (for example
-        `wildfire:`) that aren't part of the strict PolarisConfig schema. We keep
-        them so core code can access them for optional behaviors.
+        `wildfire:`) that aren't part of the strict PolarisConfig schema. We keep them
+        so core code can access them for optional behaviors.
         """
-
         if not isinstance(data, dict):
             return data
 
@@ -267,8 +266,7 @@ class PolarisConfig(BaseModel):
 
 
 def load_config(path: str) -> "PolarisConfig":
-    """
-    Load Polaris configuration from YAML file.
+    """Load Polaris configuration from YAML file.
 
     Args:
         path: Path to YAML configuration file

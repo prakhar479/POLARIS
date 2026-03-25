@@ -22,10 +22,11 @@ def test_create_llm_client_ollama_accepts_base_url_and_model():
     assert client.base_url == "http://10.10.16.46:11435"
     assert client.model == "gpt-oss:20b"
 
-def test_ollama_native_mode_uses_api_generate(monkeypatch):
-    from polaris.infrastructure.llm.client import LLMMessage, OllamaClient
 
+def test_ollama_native_mode_uses_api_generate(monkeypatch):
     import asyncio
+
+    from polaris.infrastructure.llm.client import LLMMessage, OllamaClient
 
     captured = {}
 

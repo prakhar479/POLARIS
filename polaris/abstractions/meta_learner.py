@@ -56,19 +56,17 @@ class AppliedUpdate:
 
 
 class MetaLearner(ABC):
-    """
-    Interface for autonomous parameter tuning and strategy optimization.
+    """Interface for autonomous parameter tuning and strategy optimization.
 
-    The Meta-Learner operates asynchronously in the background, analyzing
-    historical system behavior to optimize adaptation strategies over time.
+    The Meta-Learner operates asynchronously in the background, analyzing historical
+    system behavior to optimize adaptation strategies over time.
     """
 
     @abstractmethod
     async def analyze_performance(
         self, system_id: str, time_window_hours: float = 24.0
     ) -> PerformanceAnalysis:
-        """
-        Analyze recent system performance.
+        """Analyze recent system performance.
 
         Args:
             system_id: System to analyze
@@ -83,8 +81,7 @@ class MetaLearner(ABC):
     async def propose_strategy_updates(
         self, strategy: AdaptationStrategy, analysis: PerformanceAnalysis
     ) -> List[ParameterProposal]:
-        """
-        Propose parameter updates for a strategy.
+        """Propose parameter updates for a strategy.
 
         Args:
             strategy: Current strategy instance
@@ -99,8 +96,7 @@ class MetaLearner(ABC):
     async def validate_proposals(
         self, proposals: List[ParameterProposal]
     ) -> List[ParameterProposal]:
-        """
-        Validate and rank proposals by safety and impact.
+        """Validate and rank proposals by safety and impact.
 
         Args:
             proposals: Proposed changes
@@ -113,8 +109,7 @@ class MetaLearner(ABC):
     async def apply_proposals(
         self, strategy: AdaptationStrategy, proposals: List[ParameterProposal]
     ) -> List[AppliedUpdate]:
-        """
-        Apply approved parameter updates to strategy.
+        """Apply approved parameter updates to strategy.
 
         Default implementation uses strategy's tuning interface.
         """

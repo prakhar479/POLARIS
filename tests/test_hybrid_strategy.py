@@ -38,7 +38,9 @@ def state():
 
 @pytest.mark.asyncio
 async def test_hybrid_strategy_selects_all_actions_from_chosen_strategy(state, context):
-    """Test that HybridStrategy returns the full list of actions from the selected strategy."""
+    """Test that HybridStrategy returns the full list of actions from the selected
+    strategy.
+    """
     action1 = AdaptationAction(action_id="1", action_type="a", target_system="test-system")
     action2 = AdaptationAction(action_id="2", action_type="b", target_system="test-system")
 

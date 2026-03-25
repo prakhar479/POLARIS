@@ -1,8 +1,7 @@
 """Main monitoring and adaptation loop.
 
-Extracted from ``Polaris._monitoring_loop`` and
-``Polaris._process_system_iteration`` so the per-cycle logic can be tested
-independently of the Polaris orchestrator.
+Extracted from ``Polaris._monitoring_loop`` and ``Polaris._process_system_iteration`` so
+the per-cycle logic can be tested independently of the Polaris orchestrator.
 """
 
 import asyncio
@@ -23,11 +22,11 @@ class MonitoringLoop:
 
     Each iteration:
 
-    1. Optionally hot-reloads the config via :class:`ConfigReloader`.
-    2. Iterates over all registered connectors.
-    3. Collects telemetry, stores state, updates the world model, publishes a
-       ``TelemetryEvent``, then delegates to :class:`AdaptationPipeline`.
-    4. Records loop-level metrics and sleeps for the remainder of the interval.
+    1. Optionally hot-reloads the config via :class:`ConfigReloader`. 2. Iterates over
+    all registered connectors. 3. Collects telemetry, stores state, updates the world
+    model, publishes a ``TelemetryEvent``, then delegates to
+    :class:`AdaptationPipeline`. 4. Records loop-level metrics and sleeps for the
+    remainder of the interval.
     """
 
     def __init__(
@@ -213,9 +212,7 @@ class MonitoringLoop:
             datetime.now(timezone.utc).timestamp(),
         )
 
-    # ------------------------------------------------------------------
     # Metric helpers
-    # ------------------------------------------------------------------
 
     def _should_collect(self, component: str) -> bool:
         from polaris.core.component_builder import ComponentBuilder

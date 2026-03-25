@@ -1,5 +1,4 @@
-"""
-Example: Configuration validation and error handling.
+"""Example: Configuration validation and error handling.
 
 Shows how configuration validation works and handles various error scenarios.
 """

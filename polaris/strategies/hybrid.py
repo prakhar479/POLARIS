@@ -11,11 +11,10 @@ from polaris.infrastructure.observability.null_metrics import NullMetricsCollect
 
 
 class HybridStrategy(AdaptationStrategy):
-    """
-    Hybrid strategy that combines multiple strategies.
+    """Hybrid strategy that combines multiple strategies.
 
-    Can delegate to multiple strategies and select the best action
-    based on different selection modes.
+    Can delegate to multiple strategies and select the best action based on different
+    selection modes.
     """
 
     def __init__(
@@ -28,20 +27,19 @@ class HybridStrategy(AdaptationStrategy):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        """
-        Initialize hybrid strategy.
+        """Initialize hybrid strategy.
 
         Args:
             strategies: List of (strategy, priority) tuples
-            selection_mode: How to select among proposals
-                - 'first': Use first strategy that proposes action
-                - 'priority': Use highest priority strategy
-                - 'confidence': Use highest confidence action
+            selection_mode: How to select among proposals - 'first': Use first strategy
+                that proposes action - 'priority': Use highest priority strategy -
+                'confidence': Use highest confidence action
             min_confidence: Minimum confidence threshold
-            cooldown_seconds: Minimum seconds between any selected actions.
-                When > 0 the entire assess() is skipped (returning []) if the
-                cooldown has not elapsed since the last selected action.
-                Default 0 means no cooldown.
+            cooldown_seconds: Minimum seconds between any selected actions. When > 0 the
+                entire assess() is skipped (returning []) if the cooldown has not
+                elapsed since the last selected action. Default 0 means no cooldown.
+            logger: Optional logger for observability
+            metrics: Optional metrics collector
         """
         self.strategies = sorted(strategies, key=lambda x: x[1], reverse=True)
         self.selection_mode = selection_mode
@@ -246,8 +244,7 @@ class HybridStrategy(AdaptationStrategy):
     async def _estimate_confidence(
         self, strategy: AdaptationStrategy, action: AdaptationAction, state: SystemState
     ) -> float:
-        """
-        Estimate confidence in an action using strategy metrics when available.
+        """Estimate confidence in an action using strategy metrics when available.
 
         Fallback to a conservative default when metrics are unavailable.
         """

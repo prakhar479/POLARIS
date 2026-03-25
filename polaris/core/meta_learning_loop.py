@@ -1,7 +1,7 @@
 """Meta-learning background loop.
 
-Extracted from ``Polaris._meta_learning_loop`` so the meta-learning cycle
-can be tested and reused independently of the monitoring loop.
+Extracted from ``Polaris._meta_learning_loop`` so the meta-learning cycle can be tested
+and reused independently of the monitoring loop.
 """
 
 import asyncio
@@ -23,9 +23,9 @@ class MetaLearningLoop:
 
     The loop sleeps for ``interval_seconds``, then for each registered system:
 
-    1. Calls ``meta_learner.analyze_performance(system_id)``.
-    2. Calls ``meta_learner.propose_strategy_updates(strategy, analysis)``.
-    3. Validates and applies approved proposals via the meta-learner.
+    1. Calls ``meta_learner.analyze_performance(system_id)``. 2. Calls
+    ``meta_learner.propose_strategy_updates(strategy, analysis)``. 3. Validates and
+    applies approved proposals via the meta-learner.
     """
 
     def __init__(

@@ -33,7 +33,9 @@ class DummyStrategy(AdaptationStrategy):
 
     # type: ignore[override]
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
-        """Minimal implementation that always reports success; used indirectly by meta-learner tuning."""
+        """Minimal implementation that always reports success; used indirectly by meta-
+        learner tuning.
+        """
         return True
 
     async def on_action_executed(self, action, result) -> None:

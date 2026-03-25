@@ -1,5 +1,4 @@
-"""
-LLM-powered reasoning strategy.
+"""LLM-powered reasoning strategy.
 
 Uses LLM to analyze system state and decide on adaptations.
 """
@@ -18,11 +17,10 @@ from polaris.infrastructure.observability.null_metrics import NullMetricsCollect
 
 
 class LLMReasoningStrategy(AdaptationStrategy):
-    """
-    LLM-powered adaptation strategy.
+    """LLM-powered adaptation strategy.
 
-    Uses an LLM to analyze system state and decide on adaptations
-    based on natural language reasoning.
+    Uses an LLM to analyze system state and decide on adaptations based on natural
+    language reasoning.
     """
 
     def __init__(
@@ -36,8 +34,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        """
-        Initialize LLM reasoning strategy.
+        """Initialize LLM reasoning strategy.
 
         Args:
             llm_client: LLM client to use for reasoning
@@ -46,6 +43,8 @@ class LLMReasoningStrategy(AdaptationStrategy):
             temperature: LLM temperature (lower = more deterministic)
             logger: Optional logger for observability
             metrics: Optional metrics collector
+            system_prompt: Optional system prompt template
+            per_system_prompts: Optional per-system prompts
         """
         self.llm = llm_client
         self.system_description = system_description

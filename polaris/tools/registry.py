@@ -1,7 +1,7 @@
 """Tool registry for managing and executing POLARIS tools.
 
-This module provides the ToolRegistry class, which manages tool instances
-and provides centralized tool execution with metrics and error handling.
+This module provides the ToolRegistry class, which manages tool instances and provides
+centralized tool execution with metrics and error handling.
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -16,16 +16,19 @@ if TYPE_CHECKING:
 class ToolRegistry:
     """Registry for managing and executing tools.
 
-    The registry maintains a mapping of tool names to tool instances
-    and provides methods for registration, lookup, and execution.
+    The registry maintains a mapping of tool names to tool instances and provides
+    methods for registration, lookup, and execution.
 
     Follows the same pattern as ConnectorRegistry for consistency.
 
-    Example:
+    Examples:
+        ```
         registry = ToolRegistry(metrics=metrics_collector)
         registry.register(GetRecentStatesTool())
         registry.register(SummarizeMetricTrendsTool())
+        ```
 
+        ```
         # Execute a tool
         result = await registry.execute(
             tool_name="get_recent_states",
@@ -34,6 +37,7 @@ class ToolRegistry:
             context=adaptation_context,
             deps=tool_dependencies
         )
+        ```
     """
 
     def __init__(self, metrics: Optional["MetricsCollector"] = None):
@@ -52,7 +56,7 @@ class ToolRegistry:
             tool: Tool instance to register
 
         Raises:
-            ValueError: If a tool with the same name is already registered
+            `ValueError`: If a tool with the same name is already registered
         """
         name = tool.name
         if name in self._tools:
@@ -140,13 +144,14 @@ class ToolRegistry:
         state: "SystemState",
         context: "AdaptationContext",
         deps: "ToolDependencies",
+        timeout: float = 30.0,
     ) -> Dict[str, Any]:
         """Execute a tool by name with the provided context.
 
         This is the main entry point for tool execution. It handles:
         - Tool lookup
         - Metrics collection
-        - Error handling
+        - Error handling with timeouts
         - Execution time tracking
 
         Args:
@@ -155,10 +160,12 @@ class ToolRegistry:
             state: Current system state
             context: Adaptation context
             deps: Tool dependencies
+            timeout: Maximum execution time in seconds
 
         Returns:
             Tool execution result or error dictionary
         """
+        import asyncio
         from datetime import datetime as dt
         from datetime import timezone
 
@@ -185,10 +192,14 @@ class ToolRegistry:
                 )
             return error_result
 
-        # Execute the tool with timing
+        # Execute the tool with timing and timeout
         start = dt.now(timezone.utc)
+        error_type = "unknown_error"
         try:
-            result = await tool.execute(args, state, context, deps)
+            result = await asyncio.wait_for(
+                tool.execute(args, state, context, deps),
+                timeout=timeout,
+            )
 
             if self._metrics:
                 duration = (dt.now(timezone.utc) - start).total_seconds()
@@ -204,29 +215,63 @@ class ToolRegistry:
 
             return result
 
-        except Exception as e:
-            if self._metrics:
-                duration = (dt.now(timezone.utc) - start).total_seconds()
-                self._metrics.histogram(
-                    "polaris.tool.execution.duration_seconds",
-                    duration,
-                    tags={"tool": tool_name, "system_id": state.system_id},
+        except asyncio.TimeoutError:
+            error_type = "timeout"
+            if deps.logger:
+                deps.logger.error(
+                    f"Tool timeout: {tool_name}",
+                    timeout=timeout,
+                    system_id=state.system_id,
                 )
-                self._metrics.increment(
-                    "polaris.tool.execution.errors",
-                    tags={
-                        "tool": tool_name,
-                        "system_id": state.system_id,
-                        "error_type": type(e).__name__,
-                    },
-                )
-
             error = ToolError(
-                code="execution_error",
-                message=f"{type(e).__name__}: {str(e)}",
+                code="timeout",
+                message=f"Tool execution timed out after {timeout} seconds",
                 recoverable=True,
             )
-            return error.to_dict()
+
+        except ToolError as te:
+            error_type = te.code
+            if deps.logger:
+                deps.logger.warning(
+                    f"Tool error: {tool_name}",
+                    error=te.message,
+                    code=te.code,
+                )
+            error = te
+
+        except Exception as e:
+            error_type = type(e).__name__
+            if deps.logger:
+                deps.logger.error(
+                    f"Unexpected tool error: {tool_name}",
+                    error=str(e),
+                    error_type=error_type,
+                    system_id=state.system_id,
+                )
+            error = ToolError(
+                code="execution_error",
+                message=f"{error_type}: {str(e)}",
+                recoverable=True,
+            )
+
+        # Handle metrics for errors
+        if self._metrics:
+            duration = (dt.now(timezone.utc) - start).total_seconds()
+            self._metrics.histogram(
+                "polaris.tool.execution.duration_seconds",
+                duration,
+                tags={"tool": tool_name, "system_id": state.system_id},
+            )
+            self._metrics.increment(
+                "polaris.tool.execution.errors",
+                tags={
+                    "tool": tool_name,
+                    "system_id": state.system_id,
+                    "error_type": error_type,
+                },
+            )
+
+        return error.to_dict()
 
     def filter_by_allowed(self, allowed_tools: Optional[List[str]]) -> List["Tool"]:
         """Filter registered tools by allowed list.

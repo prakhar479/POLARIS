@@ -76,8 +76,7 @@ class StructuredLogger(LoggerInterface):
 
 
 class HumanReadableLogger(LoggerInterface):
-    """
-    Human-readable logger for Polaris.
+    """Human-readable logger for Polaris.
 
     Provides colorized, formatted output optimized for human consumption.
     """
@@ -201,8 +200,8 @@ def create_logger(
         name: Logger name
         level: Log level
         log_file: Optional log file path
-        console: Whether to output to console
-        **kwargs: Additional logger-specific arguments
+        console: Whether to output to console **kwargs: Additional logger-specific
+            arguments
 
     Returns:
         Logger instance

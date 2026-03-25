@@ -1,9 +1,8 @@
-"""
-Example: Advanced Multi-Agent Committee with Iterative Tool-Use.
+"""Example: Advanced Multi-Agent Committee with Iterative Tool-Use.
 
-Demonstrates how each agent in the committee (Diagnostician, Planner, Validator)
-can autonomously use tools like the Knowledge Store and World Model to perform
-deep investigation, simulation, and safety verification.
+Demonstrates how each agent in the committee (Diagnostician, Planner, Validator) can
+autonomously use tools like the Knowledge Store and World Model to perform deep
+investigation, simulation, and safety verification.
 """
 
 import asyncio

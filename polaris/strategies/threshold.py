@@ -12,8 +12,7 @@ from polaris.infrastructure.observability.null_metrics import NullMetricsCollect
 
 
 class ThresholdReactiveStrategy(AdaptationStrategy):
-    """
-    Simple threshold-based reactive strategy.
+    """Simple threshold-based reactive strategy.
 
     Triggers adaptations when metric values cross defined thresholds.
     """
@@ -25,8 +24,7 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        """
-        Initialize threshold strategy.
+        """Initialize threshold strategy.
 
         Args:
             thresholds: Dict of {metric: {'high': value, 'low': value}}

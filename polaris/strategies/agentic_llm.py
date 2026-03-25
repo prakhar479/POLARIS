@@ -1,15 +1,13 @@
 """Agentic LLM-based adaptation strategy for POLARIS.
 
-This module implements an adaptation strategy that uses a Large Language Model (LLM)
-as an agentic reasoning engine to make adaptation decisions. The strategy employs
-a tool-using approach where the LLM can query system state, analyze metrics,
-predict outcomes, and ultimately decide whether adaptation is needed.
+This module implements an adaptation strategy that uses a Large Language Model (LLM) as
+an agentic reasoning engine to make adaptation decisions. The strategy employs a tool-
+using approach where the LLM can query system state, analyze metrics, predict outcomes,
+and ultimately decide whether adaptation is needed.
 
-The strategy follows a step-by-step reasoning process:
-1. Analyzes current system state and context
-2. Uses available tools to gather additional information
-3. Makes a final decision on adaptation needs
-4. Proposes specific adaptation actions if needed
+The strategy follows a step-by-step reasoning process: 1. Analyzes current system state
+and context 2. Uses available tools to gather additional information 3. Makes a final
+decision on adaptation needs 4. Proposes specific adaptation actions if needed
 """
 
 import json
@@ -89,8 +87,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
     """An adaptation strategy that uses LLM as an agentic reasoning engine.
 
     This strategy leverages a Large Language Model to make intelligent adaptation
-    decisions by using a tool-based approach. The LLM can query system state,
-    analyze historical data, predict outcomes, and propose adaptation actions.
+    decisions by using a tool-based approach. The LLM can query system state, analyze
+    historical data, predict outcomes, and propose adaptation actions.
 
     Attributes:
         llm: The LLM client for generating responses
@@ -169,17 +167,17 @@ class AgenticLLMStrategy(AdaptationStrategy):
     ) -> List[AdaptationAction]:
         """Assess system state and determine if adaptation is needed.
 
-        Uses the LLM to analyze the current system state and context through
-        a tool-using reasoning process. The LLM can query historical data,
-        analyze trends, and predict outcomes before making a final decision.
+        Uses the LLM to analyze the current system state and context through a tool-
+        using reasoning process. The LLM can query historical data, analyze trends, and
+        predict outcomes before making a final decision.
 
         Args:
             state: Current system state with metrics and health information
             context: Adaptation context containing world model insights
 
         Returns:
-            Optional[AdaptationAction]: Proposed adaptation action if needed,
-                None if no adaptation is required
+            Optional[AdaptationAction]: Proposed adaptation action if needed, None if no
+                adaptation is required
         """
         if self.logger:
             self.logger.debug("Agentic assessment started", system_id=state.system_id)
@@ -368,8 +366,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
     async def on_action_executed(self, action: AdaptationAction, result: Any) -> None:
         """Handle callback when an adaptation action is executed.
 
-        Updates internal metrics tracking adaptation success rates and
-        publishes execution metrics for monitoring.
+        Updates internal metrics tracking adaptation success rates and publishes
+        execution metrics for monitoring.
 
         Args:
             action: The adaptation action that was executed
@@ -435,8 +433,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
         """Apply configuration updates to the strategy.
 
-        Updates parameters, tool availability, and resilience settings based
-        on the provided configuration dictionary.
+        Updates parameters, tool availability, and resilience settings based on the
+        provided configuration dictionary.
 
         Args:
             config: Configuration dictionary with updates to apply
@@ -480,8 +478,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
         """Get performance metrics for the strategy.
 
         Returns:
-            Dict[str, float]: Performance metrics including success rate
-                and total adaptations count
+            Dict[str, float]: Performance metrics including success rate and total
+                adaptations count
         """
         if self._adaptation_count == 0:
             return {"success_rate": 0.0}
@@ -550,11 +548,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
     def _parse_json(self, content: str) -> Any:
         """Parse JSON from an LLM response.
 
-        Many providers (including OpenRouter) may return extra prose, wrap JSON in
-        code fences, or include trailing/leading text. We try hard to extract the
-        first valid JSON object/array from the content.
+        Many providers (including OpenRouter) may return extra prose, wrap JSON in code
+        fences, or include trailing/leading text. We try hard to extract the first valid
+        JSON object/array from the content.
         """
-
         raw = (content or "").strip()
         if not raw:
             return {}
@@ -589,7 +586,6 @@ class AgenticLLMStrategy(AdaptationStrategy):
         Returns:
             (parsed_value, extracted_snippet)
         """
-
         s = (text or "").strip()
         if not s:
             return None, None
@@ -650,10 +646,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
         """Optionally log raw LLM output for debugging parsing issues.
 
         Controlled by env:
-          - POLARIS_LOG_LLM_RAW=1 to enable
-          - POLARIS_LOG_LLM_RAW_MAX_CHARS (default 4000)
+        - POLARIS_LOG_LLM_RAW=1 to enable
+        - POLARIS_LOG_LLM_RAW_MAX_CHARS (default 4000)
         """
-
         import os
 
         if not self.logger:
@@ -666,7 +661,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         except Exception:
             max_chars = 4000
 
-        safe = (content or "")
+        safe = content or ""
         if len(safe) > max_chars:
             safe = safe[:max_chars] + f"\n...<truncated {len(content) - max_chars} chars>"
 
@@ -679,7 +674,6 @@ class AgenticLLMStrategy(AdaptationStrategy):
 
     def _maybe_log_extracted_json(self, label: str, snippet: Optional[str]) -> None:
         """Optionally log the extracted JSON snippet used for parsing."""
-
         import os
 
         if not self.logger:
@@ -719,8 +713,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
     ) -> Dict[str, Any]:
         """Execute a tool directly (deprecated).
 
-        This method is maintained for backward compatibility but delegates
-        to the ToolRegistry. New code should use the registry directly.
+        This method is maintained for backward compatibility but delegates to the
+        ToolRegistry. New code should use the registry directly.
         """
         from polaris.tools import ToolDependencies
 
