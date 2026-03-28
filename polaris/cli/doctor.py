@@ -62,6 +62,8 @@ def _extract_llm_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]
             add_llm("strategy.llm_reasoning", strategy.get("llm_reasoning"))
         elif strategy_type == "agentic_llm":
             add_llm("strategy.agentic_llm", strategy.get("agentic_llm"))
+        elif strategy_type == "thread_agentic":
+            add_llm("strategy.thread_agentic", strategy.get("thread_agentic"))
         elif strategy_type == "hybrid":
             hybrid_cfg = strategy.get("hybrid")
             if isinstance(hybrid_cfg, dict):
@@ -78,6 +80,11 @@ def _extract_llm_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]
                         add_llm(
                             f"strategy.hybrid.strategies[{index}].agentic_llm",
                             sub.get("agentic_llm"),
+                        )
+                    elif sub_type == "thread_agentic":
+                        add_llm(
+                            f"strategy.hybrid.strategies[{index}].thread_agentic",
+                            sub.get("thread_agentic"),
                         )
 
     meta_learner = raw_config.get("meta_learner")

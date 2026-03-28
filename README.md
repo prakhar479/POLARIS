@@ -167,6 +167,7 @@ Polaris supports multiple LLM-powered strategies:
 
 - `llm_reasoning`: Single-shot LLM decision-making with reasoning
 - `agentic_llm`: Iterative tool-using loop where the LLM calls built-in tools (metrics, history, predictions)
+- `thread_agentic`: Recursive THREAD-style join-synchronized reasoning with dynamic child-thread spawning
 - `multi_agent`: Committee of three specialized agents (Diagnostician → Planner → SafetyValidator); each agent can use its own LLM provider, temperature, and prompt
 - `hybrid`: Combine any strategies (including LLM-based ones) with configurable selection mode
 
@@ -225,7 +226,27 @@ strategy:
       max_backoff_ms: 4000
 ```
 
-For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `hybrid`, each sub-strategy can specify its own provider. The `multi_agent` strategy also supports `hybrid` as a container.
+Example (THREAD recursive strategy):
+
+```yaml
+strategy:
+  type: thread_agentic
+  thread_agentic:
+    provider: google   # or "openai"
+    steps_limit: 4
+    max_thread_depth: 3
+    max_total_threads: 16
+    child_timeout_seconds: 20.0
+    max_repeated_spawns: 2
+    tools:
+      enabled:
+        - get_recent_states
+        - summarize_metric_trends
+        - predict_outcome
+        - list_supported_actions
+```
+
+For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `thread_agentic`, use `strategy.thread_agentic.provider`. For `hybrid`, each sub-strategy can specify its own provider. The `multi_agent` strategy also supports `hybrid` as a container.
 
 The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
 

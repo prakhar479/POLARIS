@@ -88,6 +88,8 @@ monitoring:
 #   - llm_reasoning:  AI-driven decisions using an LLM
 #   - hybrid:         Combine multiple strategies
 #   - agentic_llm:    LLM agent with tools and multi-step reasoning
+#   - thread_agentic: Recursive THREAD-style agentic strategy
+#   - multi_agent:    Committee-style multi-agent strategy
 #
 
 strategy:
@@ -333,6 +335,44 @@ strategy:
   #     base_backoff_ms: 200
   #     max_backoff_ms: 4000
 
+  ###############################################################################
+  # STRATEGY F: THREAD Recursive Agentic Strategy
+  ###############################################################################
+  #
+  # Recursive join-synchronized reasoning inspired by THREAD
+  # (Thinking Deeper with Recursive Spawning).
+  # Parent threads can spawn child threads, wait for feedback, and continue.
+  #
+  # thread_agentic:
+  #   provider: google             # "google", "openai", or "openrouter"
+  #   steps_limit: 4               # Max reasoning steps per thread
+  #   temperature: 0.1             # Model creativity
+  #   max_thread_depth: 3          # Max recursive depth
+  #   max_total_threads: 16        # Global thread budget per assessment
+  #   child_timeout_seconds: 20.0  # Timeout for each child thread
+  #   max_repeated_spawns: 2       # Prevent repeated identical spawn loops
+  #   phi_mode: "last_line"       # "last_line" or "recent_lines"
+  #   phi_max_lines: 6             # Used when phi_mode is "recent_lines"
+  #   listen_token: "=>"          # Child feedback framing prefix
+  #   return_token: "<="          # Child feedback framing suffix
+  #   tools:
+  #     enabled:
+  #       - get_recent_states
+  #       - summarize_metric_trends
+  #       - list_metric_fields
+  #       - compute_metric_math
+  #       - get_world_model_insights
+  #       - predict_outcome
+  #       - get_action_history
+  #       - list_supported_actions
+  #   resilience:
+  #     rps: 1
+  #     burst: 2
+  #     concurrency: 2
+  #     max_retries: 4
+  #     base_backoff_ms: 200
+  #     max_backoff_ms: 4000
+
 ################################################################################
 # 4. WORLD MODEL (OPTIONAL)
 ################################################################################
@@ -441,7 +481,7 @@ meta_learner:
           {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>,
             "rationale": "<30+ words citing analysis evidence>",
             "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
-          or 
+          or
            {"analysis": "<narrative with specific metric values and trends>",
            "issues": ["<issue with metric evidence>"],
             "recommendations": ["<specific param + direction, e.g. increase strategy_0.cooldown_seconds from X to Y because ..., or dimmer adjustments are more effective than server scaling based on recent trends>"]}>]}

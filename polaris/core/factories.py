@@ -156,6 +156,7 @@ def _register_default_strategy_factories() -> None:
         HybridStrategy,
         LLMReasoningStrategy,
         MultiAgentStrategy,
+        ThreadAgenticStrategy,
         ThresholdReactiveStrategy,
     )
 
@@ -374,6 +375,50 @@ def _register_default_strategy_factories() -> None:
                 )
                 sub_strategies.append((sub_ma, priority))
 
+            elif s_type == "thread_agentic":
+                thread_cfg = s.get("thread_agentic", {}) or {}
+                steps_limit = int(thread_cfg.get("steps_limit", 4))
+                temperature = float(thread_cfg.get("temperature", 0.1))
+                max_thread_depth = int(thread_cfg.get("max_thread_depth", 3))
+                max_total_threads = int(thread_cfg.get("max_total_threads", 16))
+                child_timeout_seconds = float(thread_cfg.get("child_timeout_seconds", 20.0))
+                max_repeated_spawns = int(thread_cfg.get("max_repeated_spawns", 2))
+
+                allowed_tools = None
+                tools_cfg = thread_cfg.get("tools")
+                if isinstance(tools_cfg, dict):
+                    allowed_tools = tools_cfg.get("enabled")
+
+                provider = thread_cfg.get("provider", "google")
+                resilience_cfg = thread_cfg.get("resilience")
+                llm_kwargs = dict(thread_cfg)
+                llm_kwargs.pop("provider", None)
+                llm_kwargs.pop("resilience", None)
+                llm_client = _llm.create_llm_client(
+                    provider,
+                    resilience=resilience_cfg,
+                    **llm_kwargs,
+                )
+
+                sub_thread = ThreadAgenticStrategy(
+                    llm_client=llm_client,
+                    knowledge_store=knowledge_store,
+                    world_model=world_model,
+                    connector_getter=registry.get,
+                    steps_limit=steps_limit,
+                    temperature=temperature,
+                    max_thread_depth=max_thread_depth,
+                    max_total_threads=max_total_threads,
+                    child_timeout_seconds=child_timeout_seconds,
+                    max_repeated_spawns=max_repeated_spawns,
+                    allowed_tools=allowed_tools,
+                    system_prompt=thread_cfg.get("system_prompt"),
+                    per_system_prompts=thread_cfg.get("per_system_prompts"),
+                    logger=logger,
+                    metrics=metrics,
+                )
+                sub_strategies.append((sub_thread, priority))
+
             else:
                 # Fallback to threshold for unknown types
                 sub = ThresholdReactiveStrategy(logger=logger, metrics=metrics)
@@ -434,6 +479,66 @@ def _register_default_strategy_factories() -> None:
         )
 
     register_strategy_factory("agentic_llm", _agentic_llm_factory)
+
+    def _thread_agentic_factory(
+        strategy_cfg: Any,
+        logger: "Logger",
+        metrics: Optional["MetricsCollector"],
+        knowledge_store: "KnowledgeStore",
+        world_model: "WorldModel",
+        registry: ConnectorRegistry,
+    ) -> "AdaptationStrategy":
+        thread_conf = strategy_cfg.thread_agentic or {}
+        steps_limit = int(thread_conf.get("steps_limit", 4))
+        temperature = float(thread_conf.get("temperature", 0.1))
+        max_thread_depth = int(thread_conf.get("max_thread_depth", 3))
+        max_total_threads = int(thread_conf.get("max_total_threads", 16))
+        child_timeout_seconds = float(thread_conf.get("child_timeout_seconds", 20.0))
+        max_repeated_spawns = int(thread_conf.get("max_repeated_spawns", 2))
+        max_tool_result_chars = int(thread_conf.get("max_tool_result_chars", 1200))
+        max_child_payload_chars = int(thread_conf.get("max_child_payload_chars", 800))
+        phi_mode = str(thread_conf.get("phi_mode", "last_line"))
+        phi_max_lines = int(thread_conf.get("phi_max_lines", 6))
+        listen_token = str(thread_conf.get("listen_token", "=>"))
+        return_token = str(thread_conf.get("return_token", "<="))
+
+        allowed_tools = None
+        tools_cfg = thread_conf.get("tools")
+        if isinstance(tools_cfg, dict):
+            allowed_tools = tools_cfg.get("enabled")
+
+        provider = thread_conf.get("provider", "google")
+        resilience_cfg = thread_conf.get("resilience")
+        llm_kwargs = dict(thread_conf)
+        llm_kwargs.pop("provider", None)
+        llm_kwargs.pop("resilience", None)
+        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+
+        return ThreadAgenticStrategy(
+            llm_client=llm_client,
+            knowledge_store=knowledge_store,
+            world_model=world_model,
+            connector_getter=registry.get,
+            steps_limit=steps_limit,
+            temperature=temperature,
+            max_thread_depth=max_thread_depth,
+            max_total_threads=max_total_threads,
+            child_timeout_seconds=child_timeout_seconds,
+            max_repeated_spawns=max_repeated_spawns,
+            max_tool_result_chars=max_tool_result_chars,
+            max_child_payload_chars=max_child_payload_chars,
+            phi_mode=phi_mode,
+            phi_max_lines=phi_max_lines,
+            listen_token=listen_token,
+            return_token=return_token,
+            allowed_tools=allowed_tools,
+            system_prompt=thread_conf.get("system_prompt"),
+            per_system_prompts=thread_conf.get("per_system_prompts"),
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_strategy_factory("thread_agentic", _thread_agentic_factory)
 
     def _multi_agent_factory(
         strategy_cfg: Any,

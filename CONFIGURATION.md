@@ -8,7 +8,7 @@ Complete reference and guide for configuring the Polaris self-adaptive framework
 - [Complete File Structure](#complete-configuration-file-structure) - Full YAML structure
 - [Systems Configuration](#systems) - Managed systems setup
 - [Monitoring](#monitoring) - Loop frequency settings
-- [Adaptation Strategies](#adaptation-strategies) - Decision-making (4 types)
+- [Adaptation Strategies](#adaptation-strategies) - Decision-making (6 types)
 - [World Model & Knowledge](#world-model--knowledge-store) - System insights
 - [Meta-Learner](#meta-learner) - Parameter optimization
 - [Observability](#observability) - Logging, metrics, export
@@ -137,7 +137,7 @@ systems:
 
 # Adaptation strategy
 strategy:
-  type: "threshold" # Must match a registered strategy factory (built-ins: threshold, llm_reasoning, hybrid, agentic_llm)
+  type: "threshold" # Must match a registered strategy factory (built-ins: threshold, llm_reasoning, hybrid, agentic_llm, thread_agentic, multi_agent)
 
   # Threshold strategy configuration
   threshold:
@@ -486,7 +486,7 @@ The framework validates configuration at startup:
 ### Strategy Configuration Validation
 
 - `type` must be one of the types registered in the strategy factory registry
-  (built-ins: `"threshold"`, `"llm_reasoning"`, `"hybrid"`, `"agentic_llm"`, `"multi_agent"`)
+  (built-ins: `"threshold"`, `"llm_reasoning"`, `"hybrid"`, `"agentic_llm"`, `"thread_agentic"`, `"multi_agent"`)
 - For threshold strategy:
   - High thresholds must be greater than low thresholds
   - `cooldown_seconds` must be non-negative
@@ -1034,7 +1034,7 @@ observability:
 
 #### 3. Adaptation Strategy Configuration
 
-- [ ] `strategy.type`: One of: "threshold", "llm_reasoning", "hybrid", "agentic_llm"
+- [ ] `strategy.type`: One of: "threshold", "llm_reasoning", "hybrid", "agentic_llm", "thread_agentic", "multi_agent"
 - [ ] Strategy-specific block present and valid
 
 **Threshold Strategy:**
@@ -1067,6 +1067,15 @@ observability:
 - [ ] `strategy.agentic_llm.system_prompt`: Optional system prompt template
 - [ ] `strategy.agentic_llm.per_system_prompts`: Optional per-system prompt overrides
 - [ ] `strategy.agentic_llm.tools.enabled`: Array of tool names (non-empty)
+
+**THREAD Agentic Strategy:**
+
+- [ ] `strategy.thread_agentic.provider`: "google" or "openai"
+- [ ] `strategy.thread_agentic.steps_limit`: Positive integer (default: 4)
+- [ ] `strategy.thread_agentic.max_thread_depth`: Non-negative integer (default: 3)
+- [ ] `strategy.thread_agentic.max_total_threads`: Positive integer (default: 16)
+- [ ] `strategy.thread_agentic.child_timeout_seconds`: Positive number
+- [ ] `strategy.thread_agentic.tools.enabled`: Array of tool names (non-empty)
 
 #### 4. World Model Configuration (Optional)
 
@@ -1165,7 +1174,7 @@ Configure the managed systems to monitor and adapt.
 
 | Field           | Type   | Default     | Description                                                                         |
 | --------------- | ------ | ----------- | ----------------------------------------------------------------------------------- |
-| `strategy.type` | string | `threshold` | Strategy type: `threshold`, `llm_reasoning`, `hybrid`, `agentic_llm`, `multi_agent` |
+| `strategy.type` | string | `threshold` | Strategy type: `threshold`, `llm_reasoning`, `hybrid`, `agentic_llm`, `thread_agentic`, `multi_agent` |
 
 **Threshold Strategy Parameters:**
 
@@ -1208,6 +1217,23 @@ Configure the managed systems to monitor and adapt.
 | `strategy.agentic_llm.system_prompt`      | string  | -        | Custom system prompt template (supports `{system_id}`, `{allowed_tools}`) |
 | `strategy.agentic_llm.per_system_prompts` | object  | -        | Per-system prompt overrides keyed by `systems[].id`                       |
 | `strategy.agentic_llm.tools.enabled`      | array   | -        | Enabled tools array                                                       |
+
+**THREAD Agentic Strategy Parameters:**
+
+| Field                                           | Type    | Default      | Description                                                       |
+| ----------------------------------------------- | ------- | ------------ | ----------------------------------------------------------------- |
+| `strategy.thread_agentic.provider`              | string  | `google`     | LLM provider: google or openai                                   |
+| `strategy.thread_agentic.steps_limit`           | integer | `4`          | Maximum reasoning steps per thread                                |
+| `strategy.thread_agentic.temperature`           | float   | `0.1`        | Model creativity                                                   |
+| `strategy.thread_agentic.max_thread_depth`      | integer | `3`          | Maximum recursive child depth                                     |
+| `strategy.thread_agentic.max_total_threads`     | integer | `16`         | Global thread budget per assessment                               |
+| `strategy.thread_agentic.child_timeout_seconds` | float   | `20.0`       | Timeout for each spawned child thread                             |
+| `strategy.thread_agentic.max_repeated_spawns`   | integer | `2`          | Maximum repeated identical spawn signatures                       |
+| `strategy.thread_agentic.phi_mode`              | string  | `last_line`  | Parent-to-child context mapping mode (`last_line`/`recent_lines`) |
+| `strategy.thread_agentic.phi_max_lines`         | integer | `6`          | Number of parent lines used when `phi_mode=recent_lines`          |
+| `strategy.thread_agentic.listen_token`          | string  | `=>`         | Child feedback framing prefix                                     |
+| `strategy.thread_agentic.return_token`          | string  | `<=`         | Child feedback framing suffix                                     |
+| `strategy.thread_agentic.tools.enabled`         | array   | -            | Enabled tools array                                                |
 
 **Multi-Agent Strategy Parameters:**
 

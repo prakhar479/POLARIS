@@ -66,6 +66,7 @@ class StrategyConfig(BaseModel):
     hybrid: Optional[Dict[str, Any]] = None
     agentic_llm: Optional[Dict[str, Any]] = None
     multi_agent: Optional[Dict[str, Any]] = None
+    thread_agentic: Optional[Dict[str, Any]] = None
 
     def _validate_strategy_config_block(
         self, strategy_type: str, config_attr: str, config_block: Optional[Dict[str, Any]]
@@ -139,6 +140,7 @@ class StrategyConfig(BaseModel):
             "llm_reasoning": (self.llm_reasoning, "llm_reasoning"),
             "agentic_llm": (self.agentic_llm, "agentic_llm"),
             "multi_agent": (self.multi_agent, "multi_agent"),
+            "thread_agentic": (self.thread_agentic, "thread_agentic"),
         }
 
         if self.type in strategy_validations:

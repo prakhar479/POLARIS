@@ -46,3 +46,35 @@ def test_strategy_config_invalid_type():
                 }
             }
         )
+
+
+def test_thread_agentic_requires_dict_block():
+    """thread_agentic strategy must receive a dictionary config block."""
+    with pytest.raises(ValueError, match="thread_agentic"):
+        PolarisConfig.from_dict(
+            {
+                "strategy": {
+                    "type": "thread_agentic",
+                    "thread_agentic": "invalid",
+                }
+            }
+        )
+
+
+def test_thread_agentic_accepts_dict_block():
+    """thread_agentic strategy should load with a dictionary config block."""
+    cfg = PolarisConfig.from_dict(
+        {
+            "strategy": {
+                "type": "thread_agentic",
+                "thread_agentic": {
+                    "provider": "google",
+                    "max_thread_depth": 2,
+                },
+            }
+        }
+    )
+
+    assert cfg.strategy.type == "thread_agentic"
+    assert cfg.strategy.thread_agentic is not None
+    assert cfg.strategy.thread_agentic["max_thread_depth"] == 2

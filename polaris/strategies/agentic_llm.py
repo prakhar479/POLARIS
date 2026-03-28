@@ -14,7 +14,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -30,12 +30,6 @@ from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 from polaris.tools import ToolRegistry, get_builtin_tools
-
-
-def _get_connector_class() -> Type["Connector"]:
-    from polaris.abstractions.connector import Connector
-
-    return Connector
 
 
 class ActionBlock(BaseModel):

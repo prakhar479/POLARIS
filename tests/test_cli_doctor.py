@@ -60,6 +60,33 @@ def test_doctor_reports_missing_llm_credentials(tmp_path: Path, monkeypatch) -> 
     )
 
 
+def test_doctor_reports_missing_thread_agentic_credentials(tmp_path: Path, monkeypatch) -> None:
+    """thread_agentic configs should also report missing provider credentials."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "strategy:",
+                "  type: thread_agentic",
+                "  thread_agentic:",
+                "    provider: openai",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = doctor_cli.run_doctor(str(config_file))
+
+    assert any(
+        item.status == "FAIL" and "strategy.thread_agentic: missing credentials" in item.message
+        for item in diagnostics
+    )
+
+
 def test_main_dispatches_doctor_subcommand(monkeypatch) -> None:
     """`polaris doctor` should dispatch to doctor CLI parser."""
     called = {}

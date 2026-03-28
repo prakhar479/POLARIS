@@ -99,6 +99,7 @@ class ConfigReloader:
             "llm_reasoning": "LLMReasoningStrategy",
             "hybrid": "HybridStrategy",
             "agentic_llm": "AgenticLLMStrategy",
+            "thread_agentic": "ThreadAgenticStrategy",
         }
 
         current_class = type(self._strategy).__name__
@@ -119,6 +120,8 @@ class ConfigReloader:
             config_payload = strategy_config.hybrid or {}
         elif desired_type == "agentic_llm":
             config_payload = strategy_config.agentic_llm or {}
+        elif desired_type == "thread_agentic":
+            config_payload = strategy_config.thread_agentic or {}
         else:
             config_payload = {}
 
