@@ -259,16 +259,18 @@ class Dashboard:
         metrics_table.add_column("Metric", style="yellow")
         metrics_table.add_column("Value", style="white")
         metrics_table.add_column("Trend", style="dim")
+        metrics_table.add_column("History", style="magenta")
 
         metric_items = sorted(metric_history_snapshot.items(), key=lambda item: item[0])[:30]
         if not metric_items:
-            metrics_table.add_row("No telemetry yet", "—", "—")
+            metrics_table.add_row("No telemetry yet", "—", "—", "")
 
         for metric_name, history in metric_items:
             if history:
                 current = history[-1][1]
                 trend = self._calculate_trend(history)
-                metrics_table.add_row(metric_name, self._format_metric_value(current), trend)
+                spark = self._render_sparkline(history)
+                metrics_table.add_row(metric_name, self._format_metric_value(current), trend, spark)
 
         layout["metrics"].update(Panel(metrics_table, border_style="yellow"))
 
@@ -501,6 +503,35 @@ class Dashboard:
                 return "→"
         except (ValueError, TypeError, ZeroDivisionError):
             return "—"
+
+    def _render_sparkline(self, history: list) -> str:
+        """Render a small unicode sparkline of recent metric history."""
+        if len(history) < 2:
+            return ""
+
+        recent = [v for _, v in history[-15:]]
+        try:
+            recent_floats = [float(v) for v in recent]
+            if len(recent_floats) < 2:
+                return ""
+
+            min_val = min(recent_floats)
+            max_val = max(recent_floats)
+            range_val = max_val - min_val
+
+            bars = " ▂▃▄▅▆▇█"
+            if range_val == 0:
+                # If values are constant, return a middle bar
+                return "▄" * len(recent_floats)
+
+            sparkline = ""
+            for val in recent_floats:
+                idx = int(((val - min_val) / range_val) * (len(bars) - 1))
+                sparkline += bars[idx]
+
+            return sparkline
+        except (ValueError, TypeError):
+            return ""
 
     @contextmanager
     def _raw_terminal_input(self) -> Any:

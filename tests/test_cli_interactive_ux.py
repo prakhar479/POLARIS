@@ -114,4 +114,4 @@ def test_unknown_command_shows_suggestion() -> None:
 
     cli.default("sttus")
 
-    assert any("Did you mean" in line and "status" in line for line in output)
+    assert any("Auto-correcting" in line and "status" in line for line in output)

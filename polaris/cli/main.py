@@ -16,6 +16,11 @@ def main() -> int:
 
         return run_doctor_cli(sys.argv[2:])
 
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        from polaris.cli.init import run_init_cli
+
+        return run_init_cli(sys.argv[2:])
+
     parser = argparse.ArgumentParser(
         description="Polaris - Modular Self-Adaptive Systems Framework"
     )
