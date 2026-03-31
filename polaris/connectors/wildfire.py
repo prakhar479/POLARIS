@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from polaris.abstractions.connector import Connector
+from polaris.abstractions.connector_capabilities import ConnectorCapabilities
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
     AdaptationAction,
@@ -24,13 +25,6 @@ from polaris.infrastructure.constants import (
 
 if TYPE_CHECKING:
     import httpx
-
-
-# Use string-based import to avoid circular imports
-def _get_connector_class() -> type:
-    from polaris.abstractions.connector import Connector
-
-    return Connector
 
 
 class WildfireConnector(Connector):
@@ -417,3 +411,16 @@ class WildfireConnector(Connector):
                 parameters={"actions": []},
             ),
         ]
+
+    async def get_capabilities(self) -> ConnectorCapabilities:
+        """Expose normalized Wildfire capability metadata."""
+        actions = await self.get_supported_actions()
+        action_types = [
+            action.action_type
+            for action in actions
+            if isinstance(action.action_type, str) and action.action_type.strip()
+        ]
+        return ConnectorCapabilities.from_supported_action_types(
+            action_types,
+            metadata={"system_family": "wildfire"},
+        )

@@ -124,7 +124,7 @@ class RedisEventBus(EventBus):
         # If we're already running, subscribe the pubsub to this channel dynamically
         if self._running and self.pubsub:
             channel_name = f"polaris:events:{event_type.__name__}"
-            asyncio.create_task(self.pubsub.subscribe(channel_name))
+            asyncio.create_task(self._dynamic_subscribe(channel_name))
 
         if self._metrics:
             self._metrics.increment(
@@ -147,8 +147,7 @@ class RedisEventBus(EventBus):
                 # If no more handlers for this type, unsubscribe from Redis channel
                 if not self._handlers[event_type] and self._running and self.pubsub:
                     channel_name = f"polaris:events:{event_type.__name__}"
-                    # Use ensure_future instead of create_task for better compatibility
-                    asyncio.ensure_future(self.pubsub.unsubscribe(channel_name))
+                    asyncio.create_task(self._dynamic_unsubscribe(channel_name))
 
                 if self._metrics:
                     self._metrics.increment(
@@ -257,3 +256,13 @@ class RedisEventBus(EventBus):
                     value=error_count,
                     tags={"event_type": event_type.__name__, "bus": "redis"},
                 )
+
+    async def _dynamic_subscribe(self, channel_name: str) -> None:
+        """Coroutine wrapper for dynamic redis subscription."""
+        if self.pubsub:
+            await self.pubsub.subscribe(channel_name)
+
+    async def _dynamic_unsubscribe(self, channel_name: str) -> None:
+        """Coroutine wrapper for dynamic redis unsubscription."""
+        if self.pubsub:
+            await self.pubsub.unsubscribe(channel_name)

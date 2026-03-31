@@ -1,5 +1,7 @@
 """Tests for monitoring interval configuration and CLI semantics (F7)."""
 
+import pytest
+
 from polaris.core.polaris import Polaris
 from polaris.infrastructure.config import PolarisConfig
 
@@ -27,36 +29,35 @@ def test_monitoring_interval_cli_override_positive(mock_logger, mock_metrics):
     assert polaris._monitoring_interval == 5.0
 
 
-def test_monitoring_interval_invalid_value_falls_back(mock_logger, mock_metrics):
-    """Non-numeric monitoring_interval should fall back to 30 seconds."""
+def test_monitoring_interval_invalid_value_raises_error(mock_logger, mock_metrics):
+    """Non-numeric monitoring_interval should raise ValueError."""
     cfg = PolarisConfig.from_dict({"monitoring": {"interval_seconds": 10}})
 
-    polaris = Polaris(
-        config=cfg,
-        cli_overrides={"monitoring_interval": "not-a-number"},
-        logger=mock_logger,
-        metrics=mock_metrics,
-    )
+    with pytest.raises(ValueError, match="monitoring.interval_seconds must be a number"):
+        Polaris(
+            config=cfg,
+            cli_overrides={"monitoring_interval": "not-a-number"},
+            logger=mock_logger,
+            metrics=mock_metrics,
+        )
 
-    assert polaris._monitoring_interval == 30.0
 
-
-def test_monitoring_interval_non_positive_falls_back(mock_logger, mock_metrics):
-    """Zero or negative monitoring_interval should fall back to 30 seconds."""
+def test_monitoring_interval_non_positive_raises_error(mock_logger, mock_metrics):
+    """Zero or negative monitoring_interval should raise ValueError."""
     cfg = PolarisConfig.from_dict({"monitoring": {"interval_seconds": 10}})
 
-    polaris_zero = Polaris(
-        config=cfg,
-        cli_overrides={"monitoring_interval": 0},
-        logger=mock_logger,
-        metrics=mock_metrics,
-    )
-    assert polaris_zero._monitoring_interval == 30.0
+    with pytest.raises(ValueError, match="monitoring.interval_seconds must be > 0"):
+        Polaris(
+            config=cfg,
+            cli_overrides={"monitoring_interval": 0},
+            logger=mock_logger,
+            metrics=mock_metrics,
+        )
 
-    polaris_negative = Polaris(
-        config=cfg,
-        cli_overrides={"monitoring_interval": -5},
-        logger=mock_logger,
-        metrics=mock_metrics,
-    )
-    assert polaris_negative._monitoring_interval == 30.0
+    with pytest.raises(ValueError, match="monitoring.interval_seconds must be > 0"):
+        Polaris(
+            config=cfg,
+            cli_overrides={"monitoring_interval": -5},
+            logger=mock_logger,
+            metrics=mock_metrics,
+        )

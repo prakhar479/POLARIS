@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from polaris.abstractions.knowledge_store import KnowledgeStore
     from polaris.abstractions.observability import Logger, MetricsCollector
     from polaris.abstractions.strategy import AdaptationContext
+    from polaris.abstractions.system_contract import SystemContract
     from polaris.abstractions.world_model import WorldModel
     from polaris.core.models import SystemState
 
@@ -29,6 +30,7 @@ class ToolDependencies:
         knowledge_store: Store for querying historical system data
         world_model: Model for predicting action outcomes
         connector: Optional connector to the managed system
+        system_contract: Optional runtime contract for the managed system
         logger: Optional structured logger
         metrics: Metrics collector for observability
     """
@@ -37,6 +39,7 @@ class ToolDependencies:
     world_model: "WorldModel"
     metrics: Optional["MetricsCollector"] = None
     connector: Optional["Connector"] = None
+    system_contract: Optional["SystemContract"] = None
     logger: Optional["Logger"] = None
 
 

@@ -51,9 +51,17 @@ def test_world_model_config_is_applied(mock_logger, mock_metrics):
 
 
 def test_max_concurrent_connectors_is_normalized():
-    """max_concurrent_connectors should parse int values and sanitize invalid inputs."""
+    """max_concurrent_connectors should parse int values and fail on invalid inputs."""
     cfg_valid = PolarisConfig.from_dict({"max_concurrent_connectors": "3"})
     assert cfg_valid.max_concurrent_connectors == 3
 
-    cfg_invalid = PolarisConfig.from_dict({"max_concurrent_connectors": -1})
-    assert cfg_invalid.max_concurrent_connectors == 10
+    with pytest.raises(Exception):
+        PolarisConfig.from_dict({"max_concurrent_connectors": -1})
+
+
+def test_unknown_top_level_keys_are_rejected():
+    """Unknown top-level keys should fail fast instead of being preserved implicitly."""
+    with pytest.raises(Exception) as exc_info:
+        PolarisConfig.from_dict({"wildfire": {"always_step_each_cycle": True}})
+
+    assert "wildfire" in str(exc_info.value)

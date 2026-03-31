@@ -36,10 +36,7 @@ def _module_available(module_name: str) -> bool:
 
 
 def _normalize_provider(provider: Any) -> str:
-    provider_name = str(provider or "google").lower()
-    if provider_name == "gemini":
-        return "google"
-    return provider_name
+    return str(provider or "google").lower()
 
 
 def _extract_llm_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -354,12 +351,12 @@ def run_doctor(config_path: str) -> List[Diagnostic]:
     """Run all doctor diagnostics and return findings."""
     diagnostics: List[Diagnostic] = []
 
-    if sys.version_info < (3, 8):
+    if sys.version_info < (3, 10):
         diagnostics.append(
             Diagnostic(
                 "FAIL",
                 "runtime",
-                f"Unsupported Python version: {sys.version.split()[0]} (requires >= 3.8)",
+                f"Unsupported Python version: {sys.version.split()[0]} (requires >= 3.10)",
             )
         )
     else:

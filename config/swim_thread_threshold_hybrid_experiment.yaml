@@ -1,0 +1,201 @@
+# SWIM experimental profile: threshold guard + THREAD agentic hybrid
+# Primary goal: prevent SLA violations (average_response_time <= 500 ms)
+
+systems:
+  - id: "swim"
+    connector_type: "swim"
+    enabled: true
+    connection:
+      host: "localhost"
+      port: 4242
+    monitoring:
+      collection_interval: 5
+
+monitoring:
+  interval_seconds: 5
+
+strategy:
+  type: "hybrid"
+  hybrid:
+    selection_mode: "first"
+    min_confidence: 0.75
+    # Applies to cooldown-restricted sub-strategies (THREAD/agentic).
+    cooldown_seconds: 60
+    strategies:
+      - type: "threshold"
+        priority: 1.0
+        threshold:
+          thresholds:
+            average_response_time:
+              high: 500.0
+          cooldown_seconds: 60
+
+      - type: "thread_agentic"
+        priority: 0.6
+        thread_agentic:
+          provider: "google"
+          model: "gemini-2.5-flash"
+          steps_limit: 4
+          temperature: 0.05
+          max_thread_depth: 2
+          max_total_threads: 12
+          child_timeout_seconds: 15.0
+          max_repeated_spawns: 2
+          assessment_cooldown_seconds: 60
+          max_tool_result_chars: 1200
+          max_child_payload_chars: 800
+          phi_mode: "recent_lines"
+          phi_max_lines: 4
+          listen_token: "=>"
+          return_token: "<="
+          tools:
+            enabled:
+              - get_recent_states
+              - summarize_metric_trends
+              - list_metric_fields
+              - compute_metric_math
+              - get_world_model_insights
+              - predict_outcome
+              - get_action_history
+              - list_supported_actions
+          per_system_prompts:
+            swim: |
+              You are the safety-first adaptation controller for the SWIM web server pool.
+              Primary objective: prevent SLA violations by keeping average_response_time <= 500 ms.
+              Secondary objectives: preserve stable throughput and avoid unnecessary cost.
+
+              SWIM metric semantics:
+              - average_response_time: milliseconds (ms), lower is better.
+              - average_utilization: ratio in [0.0, 1.0], where > 0.80 indicates high load.
+              - server_count, active_servers, max_servers: integer capacity state.
+              - dimmer: ratio in [0.0, 1.0], where lower values shed optional load faster.
+
+              Allowed actions:
+              - scale_up / add_server
+              - scale_down / remove_server
+              - set_dimmer with parameters {"value": <0.0..1.0>}
+
+              Safety and anti-oscillation rules:
+              1) Propose at most one action in a final decision.
+              2) Never scale_down when average_response_time > 450 ms.
+              3) Never scale_down when average_utilization > 0.70.
+              4) Never set dimmer below 0.20 or above 1.00.
+              5) Do not immediately undo the latest scaling action.
+              6) Before scale_down, verify sustained low load across recent windows.
+              7) If latency is near/above SLA and capacity exists, prefer scale_up.
+              8) Use set_dimmer as fast mitigation when latency spikes suddenly.
+
+              Reasoning procedure:
+              - Use tools first to inspect trend and action history evidence.
+              - Use world model insights and predict_outcome before scaling decisions.
+              - Keep rationale concise and cite concrete metric evidence.
+
+              Output contract (strict JSON only):
+              1) {"tool": "name", "args": {...}}
+              2) {"spawn": {"objective": "...", "context_hint": "..."}}
+              3) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
+              Root-thread rule: when depth=0, DO NOT output return_payload.
+              Root-thread strictness:
+              - If needs_adaptation=true, actions MUST contain exactly one action object.
+              - If needs_adaptation=false, actions MUST be an empty list.
+              - NEVER emit return_payload at root, and NEVER emit null/"null"/"None" placeholders.
+              - Use canonical action types only: scale_up, scale_down, set_dimmer.
+
+              Valid root final examples:
+              - {"final": {"needs_adaptation": true, "reasoning": "Latency trend breaches SLA", "actions": [{"type": "scale_up", "parameters": {"instances": 1}}]}}
+              - {"final": {"needs_adaptation": false, "reasoning": "Latency stable under SLA with no risk", "actions": []}}
+
+              If no action is needed, return needs_adaptation=false with explicit evidence.
+
+world_model:
+  type: "statistical"
+  statistical:
+    window_size: 150
+    use_kalman: true
+
+knowledge_store:
+  type: "memory"
+  memory:
+    max_states_per_system: 5000
+
+meta_learner:
+  enabled: true
+  type: "llm"
+  analysis_interval_hours: 0.5
+  transparency:
+    enabled: true
+    output_path: "./logs/meta_learning_updates_swim_thread_threshold.jsonl"
+  llm:
+    provider: "google"
+    model: "gemini-2.5-flash"
+    temperature: 0.1
+    auto_apply: true
+    per_system_prompts:
+      swim:
+        analysis_system_prompt: |
+          Analyze SWIM adaptation quality for a threshold-first hybrid strategy
+          with THREAD fallback. Focus on:
+          - SLA risk around average_response_time (ms), especially tail spikes.
+          - Whether threshold guard triggers early enough before SLA breach.
+          - Oscillation patterns in scale_up/scale_down or dimmer changes.
+          - Whether THREAD actions improve outcomes without excessive churn.
+          Provide evidence with metric trends and action history.
+        optimization_system_prompt: |
+          Optimize this SWIM hybrid strategy while keeping safety-first behavior.
+          Use only these parameter paths:
+          - strategy_0.thresholds.average_response_time.high (float, 125.0-875.0)
+          - strategy_0.cooldown_seconds (int, 10-300)
+          - strategy_1.temperature (float, 0.0-2.0)
+          - strategy_1.steps_limit (int, 1-20)
+          - strategy_1.max_thread_depth (int, 0-8)
+          - strategy_1.max_total_threads (int, 1-128)
+          - min_confidence (float, 0.0-1.0)
+          - cooldown_seconds (int, 0-3600)
+
+          Reply ONLY as JSON:
+          {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>, "rationale": "<evidence-based>", "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
+          or {"proposals": []}
+
+          Keep changes conservative (< 15% where applicable) and avoid changes that increase SLA risk.
+    resilience:
+      rps: 1
+      burst: 2
+      concurrency: 2
+      max_retries: 4
+      base_backoff_ms: 200
+      max_backoff_ms: 4000
+
+observability:
+  logging:
+    type: "human"
+    level: "INFO"
+    console: true
+    file: true
+    file_path: "./logs/swim_thread_threshold_experiment.log"
+    use_colors: true
+  metrics:
+    enabled: true
+    collector_type: "simple"
+    export:
+      enabled: true
+      formats:
+        - json
+        - csv
+      output_dir: "./metrics/swim"
+      auto_export_interval_minutes: 5
+      experiment_name: "SWIM_thread_threshold_hybrid_exp"
+      include_timestamp: true
+    simple:
+      histogram_max_values: 2000
+    components:
+      core_framework: true
+      monitoring_loop: true
+      event_bus: true
+      registry: true
+      strategy: true
+      connectors: true
+      world_model: true
+      knowledge_store: true
+      meta_learner: true
+
+max_concurrent_connectors: 10

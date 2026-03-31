@@ -161,7 +161,7 @@ See `CONFIGURATION.md` for the registration pattern and examples.
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - `rich` library (for dashboard and interactive CLI)
 - Valid YAML configuration file
 

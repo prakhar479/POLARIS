@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from polaris.abstractions.strategy import AdaptationContext
+from polaris.abstractions.system_contract import SystemContract
 from polaris.core.models import (
     AdaptationAction,
     ExecutionResult,
@@ -23,31 +24,16 @@ class DummyLLM:
         return types.SimpleNamespace(content="{}", model="dummy")
 
 
-class DummyConnector:
-    def __init__(self, actions):
-        self._actions = actions
-
-    async def get_supported_actions(self):
-        return self._actions
-
-
 @pytest.mark.asyncio
-async def test_list_supported_actions_uses_connector():
+async def test_list_supported_actions_uses_contract():
     # Prepare
     ks = InMemoryKnowledgeStore()
     wm = StatisticalWorldModel(ks)
-    connector = DummyConnector(
-        actions=[
-            types.SimpleNamespace(action_type="scale_up"),
-            types.SimpleNamespace(action_type="scale_down"),
-        ]
-    )
 
     strategy = AgenticLLMStrategy(
         llm_client=DummyLLM(),
         knowledge_store=ks,
         world_model=wm,
-        connector_getter=lambda sid: connector,
         steps_limit=1,
     )
 
@@ -57,19 +43,28 @@ async def test_list_supported_actions_uses_connector():
         metrics={"cpu_usage": MetricValue(name="cpu_usage", value=75.0)},
         health_status=HealthStatus.HEALTHY,
     )
-    ctx = AdaptationContext(system_id="sys", historical_states=[], world_model_insights=None)
+    ctx = AdaptationContext(
+        system_id="sys",
+        historical_states=[],
+        world_model_insights=None,
+        system_contract=SystemContract(
+            system_id="sys",
+            connector_type="DummyConnector",
+            supported_action_types=("scale_up", "scale_down"),
+        ),
+    )
 
     # Act
     result = await strategy._execute_tool("list_supported_actions", {}, state, ctx)
 
     # Assert
-    assert result.get("source") == "connector"
+    assert result.get("source") == "contract"
     assert set(result.get("action_types", [])) == {"scale_up", "scale_down"}
 
 
 @pytest.mark.asyncio
-async def test_list_supported_actions_falls_back_to_history():
-    # Prepare knowledge store with one historical action
+async def test_list_supported_actions_requires_contract():
+    # Prepare knowledge store with one historical action to verify no fallback is used
     ks = InMemoryKnowledgeStore()
     wm = StatisticalWorldModel(ks)
 
@@ -90,7 +85,6 @@ async def test_list_supported_actions_falls_back_to_history():
         llm_client=DummyLLM(),
         knowledge_store=ks,
         world_model=wm,
-        connector_getter=lambda sid: None,
         steps_limit=1,
     )
 
@@ -100,5 +94,4 @@ async def test_list_supported_actions_falls_back_to_history():
     out = await strategy._execute_tool("list_supported_actions", {}, state, ctx)
 
     # Assert
-    assert out.get("source") == "historical"
-    assert "adjust_qos" in set(out.get("action_types", []))
+    assert out.get("error_code") == "missing_system_contract"

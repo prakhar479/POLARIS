@@ -596,12 +596,15 @@ class Dashboard:
         live = None
         try:
             try:
+                # Keep rendering on the event-loop thread to avoid _RefreshThread
+                # write races in non-blocking PTY environments.
                 live = Live(
                     renderable,
                     console=self.console,
+                    auto_refresh=False,
                     refresh_per_second=refresh_per_second,
                 )
-                live.start()
+                live.start(refresh=True)
             except BlockingIOError:
                 # Terminal FD may be in an inconsistent non-blocking state.
                 # Attempt to coerce stdout/stderr back to blocking before retry.
@@ -619,9 +622,10 @@ class Dashboard:
                 live = Live(
                     renderable,
                     console=self.console,
+                    auto_refresh=False,
                     refresh_per_second=refresh_per_second,
                 )
-                live.start()
+                live.start(refresh=True)
             yield live
 
         finally:
@@ -641,7 +645,13 @@ class Dashboard:
         """Safely update Live display, handling BlockingIOError gracefully."""
         for attempt in range(max_retries):
             try:
-                live.update(renderable)
+                try:
+                    live.update(renderable, refresh=True)
+                except TypeError as exc:
+                    # Some test doubles / Live-like wrappers may not accept refresh.
+                    if "refresh" not in str(exc):
+                        raise
+                    live.update(renderable)
                 return
             except BlockingIOError:
                 if attempt < max_retries - 1:

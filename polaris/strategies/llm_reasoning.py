@@ -14,6 +14,7 @@ from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 from polaris.infrastructure.constants import DEFAULT_JSON_INDENT, DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+from polaris.strategies.action_resolution import ConnectorActionResolver, StrictContractViolation
 
 
 class LLMReasoningStrategy(AdaptationStrategy):
@@ -54,6 +55,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
         self._per_system_prompts = per_system_prompts or {}
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
+        self._action_resolver = ConnectorActionResolver()
         self._adaptation_count = 0
         self._success_count = 0
 
@@ -82,8 +84,17 @@ class LLMReasoningStrategy(AdaptationStrategy):
             )
 
         # Call LLM
+        system_contract = context.system_contract
+        supported_action_types = (
+            system_contract.supported_actions_list() if system_contract is not None else []
+        )
+        action_aliases = dict(system_contract.action_aliases) if system_contract else {}
+
         messages = [
-            LLMMessage(role="system", content=self._get_system_prompt(state.system_id)),
+            LLMMessage(
+                role="system",
+                content=self._get_system_prompt(state.system_id, supported_action_types),
+            ),
             LLMMessage(role="user", content=prompt),
         ]
 
@@ -123,7 +134,12 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     self.logger.debug(f"[LLM Reasoner] {line}")
 
             # Parse LLM response
-            actions = self._parse_response(response.content, state.system_id)
+            actions = self._parse_response(
+                response.content,
+                state.system_id,
+                supported_action_types=supported_action_types,
+                action_aliases=action_aliases,
+            )
 
             if actions:
                 if self.logger:
@@ -150,11 +166,10 @@ class LLMReasoningStrategy(AdaptationStrategy):
 
             return actions
 
-        except Exception as e:
-            # Fall back to no action on error
+        except Exception as exc:
             if self.logger:
                 self.logger.error(
-                    f"[LLM Reasoner] Error during LLM assessment: {type(e).__name__}: {str(e)}"
+                    f"[LLM Reasoner] Error during LLM assessment: {type(exc).__name__}: {str(exc)}"
                 )
                 import traceback
 
@@ -163,15 +178,33 @@ class LLMReasoningStrategy(AdaptationStrategy):
                 "polaris.strategy.llm.assessment_errors",
                 tags={"system_id": state.system_id},
             )
-            return []
+            raise
 
-    def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
+    def _get_system_prompt(
+        self,
+        system_id: Optional[str] = None,
+        supported_action_types: Optional[List[str]] = None,
+    ) -> str:
         """Get system prompt for LLM, with optional system-specific overrides."""
+        supported_actions_text = (
+            ", ".join(supported_action_types)
+            if supported_action_types
+            else "unknown (use connector-supported canonical action names)"
+        )
+
         # Per-system override if provided
         if system_id and self._per_system_prompts:
             override = self._per_system_prompts.get(system_id)
             if override:
-                return override
+                try:
+                    return override.format(
+                        system_id=system_id,
+                        system_description=self.system_description,
+                        adaptation_goals=self.adaptation_goals,
+                        supported_actions=supported_actions_text,
+                    )
+                except Exception:
+                    return override
 
         # Global template override, optionally formatted
         if self._system_prompt_template:
@@ -180,6 +213,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     system_id=system_id or "",
                     system_description=self.system_description,
                     adaptation_goals=self.adaptation_goals,
+                    supported_actions=supported_actions_text,
                 )
             except Exception:
                 # If formatting fails, fall back to the raw template
@@ -200,11 +234,13 @@ Respond in JSON format:{{
     "reasoning": "explanation of your decision",
     "actions":[  # provide a list of actions - can contain multiple elements
         {{
-            "type": "scale_up" or "scale_down" or "adjust_qos",
+            "type": "connector action type name",
             "parameters":{{"key": "value"}}
         }},
     ]
 }}
+
+Connector-supported action types: {supported_actions_text}
 
 Be conservative - only adapt when there's a clear need. Consider:
 - Current metric values vs normal ranges
@@ -242,162 +278,80 @@ Metrics:
 Should this system be adapted right now? Analyze the state and provide your decision.
 """
 
-    def _parse_response(self, response: str, system_id: str) -> List[AdaptationAction]:
-        """Parse LLM response into adaptation action."""
+    def _parse_response(
+        self,
+        response: str,
+        system_id: str,
+        supported_action_types: Optional[List[str]] = None,
+        action_aliases: Optional[Dict[str, str]] = None,
+    ) -> List[AdaptationAction]:
+        """Parse strict JSON response into adaptation actions."""
+        if not supported_action_types:
+            raise StrictContractViolation(
+                "Missing connector-supported action contract for strict LLM strategy"
+            )
+
+        payload = (response or "").strip()
+        if not payload:
+            raise StrictContractViolation("LLM response is empty")
+
         try:
-            # Extract JSON from response with improved robustness
-            response = response.strip()
-            if not response:
-                if self.logger:
-                    self.logger.warning("[LLM Reasoner] Empty response from LLM")
-                return []
+            data = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise StrictContractViolation(f"LLM response is not valid JSON: {exc}") from exc
 
-            json_content = response
-            extraction_method = "direct"
+        if not isinstance(data, dict):
+            raise StrictContractViolation("LLM response must be a JSON object")
 
-            # Handle ```json blocks
-            if "```json" in response:
-                parts = response.split("```json")
-                if len(parts) > 1:
-                    json_part = parts[1].split("```")[0].strip()
-                    if json_part:
-                        json_content = json_part
-                        extraction_method = "json_block"
+        needs_adaptation = data.get("needs_adaptation")
+        if not isinstance(needs_adaptation, bool):
+            raise StrictContractViolation("LLM response requires boolean 'needs_adaptation'")
 
-            # Handle generic ``` blocks
-            elif "```" in response:
-                parts = response.split("```")
-                if len(parts) >= 3:
-                    json_part = parts[1].strip()
-                    if json_part:
-                        json_content = json_part
-                        extraction_method = "code_block"
+        reasoning = data.get("reasoning")
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            raise StrictContractViolation("LLM response requires non-empty string 'reasoning'")
 
-            if self.logger:
-                self.logger.debug(f"[LLM Reasoner] JSON extraction method: {extraction_method}")
-                self.logger.debug(
-                    f"[LLM Reasoner] Extracted JSON content (length: {len(json_content)} chars): "
-                )
-                # Log first 20 lines
-                for line in json_content.split("\n")[:20]:
-                    self.logger.debug(f"[LLM Reasoner] {line}")
-
-            # Try to fix incomplete JSON by checking for unterminated strings
-            if extraction_method != "direct":
-                # Check if JSON appears incomplete
-                if json_content.rstrip().endswith(('", ', '"')):
-                    if self.logger:
-                        self.logger.warning(
-                            "[LLM Reasoner] Response appears incomplete - attempting to repair"
-                        )
-                    # Try to auto-complete the JSON structure
-                    try:
-                        # Count unclosed braces and brackets
-                        open_braces = json_content.count("{") - json_content.count("}")
-                        open_brackets = json_content.count("[") - json_content.count("]")
-
-                        # Complete the JSON
-                        if '"reasoning": "' in json_content and not json_content.strip().endswith(
-                            '"'
-                        ):
-                            # Complete unterminated reasoning field
-                            json_content = json_content.rstrip() + '"'
-
-                        # Close all open structures
-                        json_content += "}" * open_braces
-                        json_content += "]" * open_brackets
-
-                        if self.logger:
-                            self.logger.debug(
-                                "[LLM Reasoner] Auto-repaired JSON by adding closing braces/brackets"
-                            )
-                    except Exception as repair_error:
-                        if self.logger:
-                            self.logger.warning(
-                                f"[LLM Reasoner] Could not auto-repair JSON: {repair_error}"
-                            )
-
-            data = json.loads(json_content)
-
-            if self.logger:
-                self.logger.debug("[LLM Reasoner] Successfully parsed JSON structure")
-                self.logger.debug(
-                    f"[LLM Reasoner] Parsed JSON structure: {json.dumps(data, indent=DEFAULT_JSON_INDENT)}"
-                )
-
-            # Validate response structure
-            if not isinstance(data, dict):
-                if self.logger:
-                    self.logger.warning("[LLM Reasoner] Response is not a JSON object")
-                return []
-
-            needs_adaptation = data.get("needs_adaptation", False)
-            reasoning = data.get("reasoning", "")
-
-            if self.logger:
-                self.logger.debug(f"[LLM Reasoner] needs_adaptation: {needs_adaptation}")
-                self.logger.debug(f"[LLM Reasoner] reasoning: {reasoning}")
-
-            if not needs_adaptation:
-                if self.logger:
-                    self.logger.debug("[LLM Reasoner] LLM determined no adaptation needed")
-                return []
-
-            # Support both 'actions' list and single 'action' for backward compatibility/robustness
-            raw_actions = []
-            if "actions" in data and isinstance(data["actions"], list):
-                raw_actions = data["actions"]
-            elif "action" in data and isinstance(data["action"], dict):
-                raw_actions = [data["action"]]
-
-            if not raw_actions:
-                if self.logger:
-                    self.logger.warning(
-                        "[LLM Reasoner] No valid actions found in adaptation response"
-                    )
-                return []
-
-            adaptation_actions = []
-            for action_data in raw_actions:
-                if not isinstance(action_data, dict):
-                    continue
-
-                action_type = action_data.get("type")
-                parameters = action_data.get("parameters", {})
-
-                if not action_type or not isinstance(parameters, dict):
-                    if self.logger:
-                        self.logger.warning(
-                            f"[LLM Reasoner] Invalid individual action structure: {action_data}"
-                        )
-                    continue
-
-                adaptation_actions.append(
-                    AdaptationAction(
-                        action_id=str(uuid.uuid4()),
-                        action_type=action_type,
-                        target_system=system_id,
-                        parameters={**parameters, "llm_reasoning": reasoning},
-                    )
-                )
-
-            if self.logger:
-                self.logger.info(
-                    f"[LLM Reasoner] Successfully created {len(adaptation_actions)} adaptation actions"
-                )
-
-            return adaptation_actions
-
-        except json.JSONDecodeError as e:
-            if self.logger:
-                self.logger.error(f"[LLM Reasoner] JSON parsing error: {str(e)}")
+        if not needs_adaptation:
             return []
-        except (KeyError, TypeError, AttributeError) as e:
-            if self.logger:
-                self.logger.error(
-                    f"[LLM Reasoner] Error extracting adaptation data: {type(e).__name__}: {str(e)}"
+
+        raw_actions = data.get("actions")
+        if not isinstance(raw_actions, list) or not raw_actions:
+            raise StrictContractViolation(
+                "LLM response with needs_adaptation=true requires non-empty 'actions' list"
+            )
+
+        adaptation_actions: List[AdaptationAction] = []
+        for action_data in raw_actions:
+            if not isinstance(action_data, dict):
+                raise StrictContractViolation("Each action entry must be a JSON object")
+
+            action_type = action_data.get("type")
+            parameters = action_data.get("parameters", {})
+            if not isinstance(action_type, str) or not action_type.strip():
+                raise StrictContractViolation("Each action requires non-empty string 'type'")
+            if not isinstance(parameters, dict):
+                raise StrictContractViolation("Each action requires object 'parameters'")
+
+            resolved_action_type = self._action_resolver.resolve_action_type(
+                action_type,
+                supported_action_types,
+                action_aliases,
+            )
+            if resolved_action_type is None:
+                raise StrictContractViolation(
+                    f"Unsupported action type '{action_type}' for system '{system_id}'"
                 )
-            return []
+
+            adaptation_actions.append(
+                AdaptationAction(
+                    action_id=str(uuid.uuid4()),
+                    action_type=resolved_action_type,
+                    target_system=system_id,
+                    parameters={**parameters, "llm_reasoning": reasoning},
+                )
+            )
+
+        return adaptation_actions
 
     async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """Track adaptation success."""
@@ -486,9 +440,11 @@ Should this system be adapted right now? Analyze the state and provide your deci
         if resil and hasattr(self.llm, "update_resilience"):
             try:
                 self.llm.update_resilience(resil)
-            except Exception as e:
+            except Exception as exc:
                 if self.logger:
-                    self.logger.warning(f"[LLM Reasoner] Failed to hot-update LLM resilience: {e}")
+                    self.logger.warning(
+                        f"[LLM Reasoner] Failed to hot-update LLM resilience: {exc}"
+                    )
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

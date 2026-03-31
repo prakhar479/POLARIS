@@ -15,11 +15,21 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
     """Simple threshold-based reactive strategy.
 
     Triggers adaptations when metric values cross defined thresholds.
+
+    Opt into hybrid cooldown exemption so that when used inside a
+    ``HybridStrategy`` this strategy continues to evaluate during cooldown
+    while heavier agentic strategies are paused.
     """
+
+    # Allow HybridStrategy to identify this as a lightweight guard strategy
+    # that should bypass its cooldown logic.  Custom strategies may set this
+    # attribute to True to achieve the same effect.
+    hybrid_cooldown_exempt: bool = True
 
     def __init__(
         self,
         thresholds: Optional[Dict[str, Dict[str, float]]] = None,
+        action_templates: Optional[Dict[str, Any]] = None,
         cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
@@ -27,15 +37,32 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         """Initialize threshold strategy.
 
         Args:
-            thresholds: Dict of {metric: {'high': value, 'low': value}}
+            thresholds: Dict of {metric: {'high': value, 'low': value}}.
+                Defaults to an empty mapping — if not provided no actions will
+                ever be triggered.  You must configure at least one metric
+                threshold for the strategy to be useful.
+            action_templates: Per-metric action templates for threshold
+                crossings.  Expected shape::
+
+                    {
+                        "default": {
+                            "high": {"type": "scale_up", "parameters": {}},
+                            "low":  {"type": "scale_down", "parameters": {}},
+                        },
+                        "<metric_name>": {
+                            "high": {"type": "...", "parameters": {}},
+                        },
+                    }
+
+                A ``"default"`` entry acts as a fallback for metrics that do
+                not have their own template.  Must be provided when
+                ``thresholds`` is non-empty.
             cooldown_seconds: Minimum time between adaptations
             logger: Logger instance for structured logging
             metrics: Metrics collector for tracking strategy performance
         """
-        self.thresholds = thresholds or {
-            "cpu_usage": {"high": 80.0, "low": 20.0},
-            "memory_usage": {"high": 85.0, "low": 25.0},
-        }
+        self.thresholds = thresholds or {}
+        self.action_templates = self._normalize_action_templates(action_templates)
         self.cooldown_seconds = cooldown_seconds
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
@@ -43,10 +70,18 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         self._adaptation_count = 0
         self._success_count = 0
 
+        if self.thresholds and not self.action_templates:
+            if self.logger:
+                self.logger.warning(
+                    "ThresholdReactiveStrategy: thresholds configured but no "
+                    "action_templates provided — threshold crossings will raise an error."
+                )
+
         if self.logger:
             self.logger.info(
                 "Threshold strategy initialized",
                 thresholds=self.thresholds,
+                action_templates=self.action_templates,
                 cooldown_seconds=cooldown_seconds,
             )
 
@@ -57,6 +92,12 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
         self, state: SystemState, context: AdaptationContext
     ) -> List[AdaptationAction]:
         """Check if any thresholds are crossed."""
+        if not self.thresholds:
+            # No thresholds configured — nothing to evaluate. This is not an
+            # error; the strategy may be intentionally unconfigured (e.g. as a
+            # placeholder in a hybrid setup).
+            return []
+
         if self.logger:
             self.logger.debug(
                 "Assessing thresholds for system",
@@ -98,66 +139,6 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
 
             try:
                 value = float(metric.value)
-                thresholds = self.thresholds[metric_name]
-
-                if self.logger:
-                    self.logger.debug(
-                        "Evaluating metric against thresholds",
-                        metric=metric_name,
-                        value=value,
-                        thresholds=thresholds,
-                        system_id=state.system_id,
-                    )
-
-                self.metrics.histogram(
-                    "polaris.strategy.threshold.metric_values",
-                    value,
-                    tags={"metric": metric_name, "system_id": state.system_id},
-                )
-
-                # Check if threshold crossed
-                if "high" in thresholds and value > thresholds["high"]:
-                    if self.logger:
-                        self.logger.info(
-                            "High threshold exceeded, creating scale action",
-                            metric=metric_name,
-                            value=value,
-                            threshold=thresholds["high"],
-                            system_id=state.system_id,
-                        )
-
-                    self.metrics.increment(
-                        "polaris.strategy.threshold.high_threshold_exceeded",
-                        tags={"metric": metric_name, "system_id": state.system_id},
-                    )
-
-                    action = self._create_scale_action(
-                        state.system_id, metric_name, value, "high", thresholds["high"]
-                    )
-                    self._last_adaptation[state.system_id] = now
-                    return [action]
-
-                elif "low" in thresholds and value < thresholds["low"]:
-                    if self.logger:
-                        self.logger.info(
-                            "Low threshold breached, creating scale action",
-                            metric=metric_name,
-                            value=value,
-                            threshold=thresholds["low"],
-                            system_id=state.system_id,
-                        )
-
-                    self.metrics.increment(
-                        "polaris.strategy.threshold.low_threshold_breached",
-                        tags={"metric": metric_name, "system_id": state.system_id},
-                    )
-
-                    action = self._create_scale_action(
-                        state.system_id, metric_name, value, "low", thresholds["low"]
-                    )
-                    self._last_adaptation[state.system_id] = now
-                    return [action]
-
             except (ValueError, TypeError) as e:
                 if self.logger:
                     self.logger.warning(
@@ -168,10 +149,70 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                         system_id=state.system_id,
                     )
                 self.metrics.increment(
-                    "polaris.strategy.threshold.no_action_needed",
-                    tags={"system_id": state.system_id},
+                    "polaris.strategy.threshold.metric_parse_errors",
+                    tags={"metric": metric_name, "system_id": state.system_id},
                 )
                 continue
+
+            thresholds = self.thresholds[metric_name]
+
+            if self.logger:
+                self.logger.debug(
+                    "Evaluating metric against thresholds",
+                    metric=metric_name,
+                    value=value,
+                    thresholds=thresholds,
+                    system_id=state.system_id,
+                )
+
+            self.metrics.histogram(
+                "polaris.strategy.threshold.metric_values",
+                value,
+                tags={"metric": metric_name, "system_id": state.system_id},
+            )
+
+            # Check if threshold crossed; ValueError from missing template propagates up
+            if "high" in thresholds and value > thresholds["high"]:
+                if self.logger:
+                    self.logger.info(
+                        "High threshold exceeded, creating action",
+                        metric=metric_name,
+                        value=value,
+                        threshold=thresholds["high"],
+                        system_id=state.system_id,
+                    )
+
+                self.metrics.increment(
+                    "polaris.strategy.threshold.high_threshold_exceeded",
+                    tags={"metric": metric_name, "system_id": state.system_id},
+                )
+
+                action = self._create_scale_action(
+                    state.system_id, metric_name, value, "high", thresholds["high"]
+                )
+                self._last_adaptation[state.system_id] = now
+                return [action]
+
+            elif "low" in thresholds and value < thresholds["low"]:
+                if self.logger:
+                    self.logger.info(
+                        "Low threshold breached, creating action",
+                        metric=metric_name,
+                        value=value,
+                        threshold=thresholds["low"],
+                        system_id=state.system_id,
+                    )
+
+                self.metrics.increment(
+                    "polaris.strategy.threshold.low_threshold_breached",
+                    tags={"metric": metric_name, "system_id": state.system_id},
+                )
+
+                action = self._create_scale_action(
+                    state.system_id, metric_name, value, "low", thresholds["low"]
+                )
+                self._last_adaptation[state.system_id] = now
+                return [action]
 
         if self.logger:
             self.logger.debug("No thresholds exceeded", system_id=state.system_id)
@@ -183,28 +224,88 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
     def _create_scale_action(
         self, system_id: str, metric: str, value: float, threshold_type: str, threshold_value: float
     ) -> AdaptationAction:
-        """Create a scale action based on threshold crossing."""
-        # For server_count, the logic is inverted:
-        # - Low server count -> scale up
-        # - High server count -> scale down
-        if metric == "server_count":
-            action_type = "scale_up" if threshold_type == "low" else "scale_down"
-        else:
-            # For other metrics (CPU, memory, response time):
-            # - High values -> scale up
-            # - Low values -> scale down
-            action_type = "scale_up" if threshold_type == "high" else "scale_down"
+        """Create an action for a threshold crossing using configured templates."""
+        template = self._resolve_action_template(metric, threshold_type)
+        action_type = template["type"]
+        template_parameters = template.get("parameters", {})
+        parameters = dict(template_parameters) if isinstance(template_parameters, dict) else {}
+        parameters["metric"] = metric
+        parameters["current_value"] = value
+        parameters["threshold"] = threshold_value
+        parameters.setdefault("instances", 1)
 
         return AdaptationAction(
             action_id=str(uuid.uuid4()),
             action_type=action_type,
             target_system=system_id,
-            parameters={
-                "metric": metric,
-                "current_value": value,
-                "threshold": threshold_value,
-                "instances": 1,
-            },
+            parameters=parameters,
+        )
+
+    def _normalize_action_templates(
+        self, action_templates: Optional[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Normalize user-provided action templates into a canonical structure.
+
+        Only entries that have a valid ``type`` string are kept.  No default
+        actions are injected — all behaviour must be configured explicitly.
+        """
+        templates: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        if not isinstance(action_templates, dict):
+            return templates
+
+        for metric, rules in action_templates.items():
+            if not isinstance(metric, str) or not metric.strip() or not isinstance(rules, dict):
+                continue
+
+            metric_key = metric.strip()
+            metric_templates: Dict[str, Dict[str, Any]] = {}
+            for threshold_type in ("high", "low"):
+                candidate = rules.get(threshold_type)
+                if not isinstance(candidate, dict):
+                    continue
+                action_type = candidate.get("type")
+                if not isinstance(action_type, str) or not action_type.strip():
+                    continue
+                parameters = candidate.get("parameters", {})
+                if not isinstance(parameters, dict):
+                    parameters = {}
+                metric_templates[threshold_type] = {
+                    "type": action_type.strip(),
+                    "parameters": dict(parameters),
+                }
+
+            if metric_templates:
+                templates[metric_key] = metric_templates
+
+        return templates
+
+    def _resolve_action_template(self, metric: str, threshold_type: str) -> Dict[str, Any]:
+        """Resolve action template for a metric and threshold direction.
+
+        Lookup order:
+        1. Per-metric template (``action_templates[metric][threshold_type]``)
+        2. Default fallback template (``action_templates["default"][threshold_type]``)
+
+        Raises:
+            ValueError: If no template is found for the metric/direction combination.
+                This indicates a configuration error — the user has configured a
+                threshold without a corresponding action template.
+        """
+        metric_rules = self.action_templates.get(metric, {})
+        template = metric_rules.get(threshold_type)
+        if isinstance(template, dict) and isinstance(template.get("type"), str):
+            return template
+
+        default_rules = self.action_templates.get("default", {})
+        default_template = default_rules.get(threshold_type)
+        if isinstance(default_template, dict) and isinstance(default_template.get("type"), str):
+            return default_template
+
+        raise ValueError(
+            f"ThresholdReactiveStrategy: no action_template configured for "
+            f"metric='{metric}' threshold_type='{threshold_type}'. "
+            f"Add a per-metric or 'default' entry to action_templates."
         )
 
     async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
@@ -295,6 +396,9 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                 await self.update_parameter(f"thresholds.{metric}.high", vals["high"])
             if "low" in vals:
                 await self.update_parameter(f"thresholds.{metric}.low", vals["low"])
+
+        if "action_templates" in config and isinstance(config["action_templates"], dict):
+            self.action_templates = self._normalize_action_templates(config["action_templates"])
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

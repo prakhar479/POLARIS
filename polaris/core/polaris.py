@@ -197,9 +197,12 @@ class Polaris:
         await self.event_bus.start()
 
         # Connect all configured connectors
+        from polaris.infrastructure.contract_builder import build_system_contract
+
         for connector in self._connectors:
             system_id = await connector.get_system_id()
-            await self.registry.register(connector)
+            contract = await build_system_contract(connector, logger=self.logger)
+            await self.registry.register(connector, contract=contract)
             connected = await connector.connect()
             if connected:
                 self.logger.info(f"Connected to system: {system_id}")

@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from polaris.infrastructure.constants import DEFAULT_GOOGLE_MODEL, DEFAULT_MAX_TOKENS
 
+CANONICAL_LLM_PROVIDERS = {"google", "openai", "openrouter", "groq", "ollama"}
+
 try:
     import httpx
 except Exception:  # pragma: no cover
@@ -742,7 +744,7 @@ class ResilientLLMClient(LLMClient):
         else:
             if self.provider == "openai" and os.getenv("OPENAI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("OPENAI_API_KEYS", "").split(",") if k.strip()]
-            if self.provider in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"):
+            if self.provider == "google" and os.getenv("GEMINI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
             if self.provider == "groq" and os.getenv("GROQ_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("GROQ_API_KEYS", "").split(",") if k.strip()]
@@ -799,7 +801,7 @@ class ResilientLLMClient(LLMClient):
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", "openai/gpt-oss-120b")),
             )
-        elif self.provider in ("google", "gemini"):
+        elif self.provider == "google":
             return GoogleGeminiClient(
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", DEFAULT_GOOGLE_MODEL)),
@@ -818,7 +820,7 @@ class ResilientLLMClient(LLMClient):
         else:
             raise ValueError(
                 f"Unknown LLM provider: '{self.provider}'. "
-                "Supported values are: 'openai', 'openrouter', 'groq', 'google', 'gemini', 'ollama'."
+                "Supported values are: 'google', 'openai', 'openrouter', 'groq', 'ollama'."
             )
 
     def _current_client(self) -> LLMClient:
@@ -974,19 +976,23 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     """Create LLM client for specified provider.
 
     Args:
-        provider: 'google'/'gemini', 'openai', 'openrouter', 'groq', or 'ollama'
+        provider: 'google', 'openai', 'openrouter', 'groq', or 'ollama'
             **kwargs: Additional arguments for the client
 
     Returns:
         LLMClient instance
     """
-    provider_norm = provider.lower()
-    if provider_norm == "gemini":
-        provider_norm = "google"
-    if provider_norm in ("open-router", "open_router"):
-        provider_norm = "openrouter"
+    provider_norm = str(provider or "").strip().lower()
+
+    # Support aliases for Ollama
     if provider_norm in ("ollama-openai", "ollama_openai"):
         provider_norm = "ollama"
+
+    if provider_norm not in CANONICAL_LLM_PROVIDERS:
+        raise ValueError(
+            f"Unknown LLM provider: {provider_norm}. "
+            "Supported values are: google, openai, openrouter, groq, ollama."
+        )
 
     resilience: Optional[Dict[str, Any]] = kwargs.pop("resilience", None)
     model = kwargs.get("model")
@@ -1015,5 +1021,4 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
         return GroqClient(**kwargs)
     elif provider_norm == "ollama":
         return OllamaClient(**kwargs)
-    else:
-        raise ValueError(f"Unknown LLM provider: {provider_norm}")
+    raise ValueError(f"Unknown LLM provider: {provider_norm}")

@@ -5,6 +5,10 @@ provide extension points for custom strategies and connectors without modifying 
 orchestrator.
 """
 
+import importlib
+import importlib.metadata
+import inspect
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import polaris.infrastructure.llm as _llm
@@ -20,12 +24,18 @@ if TYPE_CHECKING:
     )
 
 from polaris.core.registry import ConnectorRegistry
-from polaris.infrastructure.constants import DEFAULT_CONNECTOR_TIMEOUT, DEFAULT_WILDFIRE_PORT
+from polaris.infrastructure.constants import (
+    DEFAULT_CONNECTOR_TIMEOUT,
+    DEFAULT_WILDFIRE_PORT,
+    MAX_PORT,
+    MIN_PORT,
+)
 
 # Type aliases for factory callables. We intentionally keep the
 # config parameters typed as Any to avoid import cycles with the
 # configuration module.
 ConnectorFactory = Callable[[Any, "Logger", Optional["MetricsCollector"]], "Connector"]
+ConnectorConfigValidator = Callable[[Dict[str, Any]], None]
 StrategyFactory = Callable[
     [
         Any,
@@ -40,7 +50,15 @@ StrategyFactory = Callable[
 
 
 _CONNECTOR_FACTORIES: Dict[str, ConnectorFactory] = {}
+_CONNECTOR_CONFIG_VALIDATORS: Dict[str, ConnectorConfigValidator] = {}
 _STRATEGY_FACTORIES: Dict[str, StrategyFactory] = {}
+
+CONNECTOR_PLUGIN_ENTRY_POINT_GROUP = "polaris.connectors"
+
+# Loaded plugin bookkeeping.
+_entry_points_discovered = False
+_loaded_plugin_modules: set[str] = set()
+_loaded_entry_points: set[str] = set()
 
 
 # Global flag to track if factories have been registered
@@ -56,11 +74,112 @@ def _ensure_factories_registered() -> None:
     _register_default_connector_factories()
     _register_default_strategy_factories()
     _factories_registered = True
+    _discover_connector_entry_points()
+
+
+def _invoke_plugin_registration(registration_hook: Callable[..., Any]) -> None:
+    """Invoke plugin registration hook with strict canonical signature."""
+    signature = inspect.signature(registration_hook)
+    names = set(signature.parameters.keys())
+    required = {"register_connector_factory", "register_connector_config_validator"}
+    if not required.issubset(names):
+        raise TypeError(
+            "register_polaris_plugins must accept keyword parameters "
+            "'register_connector_factory' and 'register_connector_config_validator'"
+        )
+
+    registration_hook(
+        register_connector_factory=register_connector_factory,
+        register_connector_config_validator=register_connector_config_validator,
+    )
+
+
+def _activate_plugin(plugin: Any) -> None:
+    """Activate a loaded plugin object if it exposes registration hooks."""
+    registration_hook = getattr(plugin, "register_polaris_plugins", None)
+    if callable(registration_hook):
+        _invoke_plugin_registration(registration_hook)
+        return
+
+    if isinstance(plugin, ModuleType):
+        # Module may have already self-registered via import side effects.
+        return
+
+    if callable(plugin):
+        _invoke_plugin_registration(plugin)
+
+
+def _discover_connector_entry_points() -> None:
+    """Load connector plugins exposed via entry points once per process."""
+    global _entry_points_discovered
+    if _entry_points_discovered:
+        return
+
+    _entry_points_discovered = True
+
+    try:
+        entry_points = importlib.metadata.entry_points(group=CONNECTOR_PLUGIN_ENTRY_POINT_GROUP)
+    except Exception:
+        return
+
+    for entry_point in entry_points:
+        entry_point_id = f"{entry_point.group}:{entry_point.name}"
+        if entry_point_id in _loaded_entry_points:
+            continue
+
+        try:
+            plugin = entry_point.load()
+            _activate_plugin(plugin)
+            _loaded_entry_points.add(entry_point_id)
+        except Exception:
+            # Keep startup resilient when optional third-party plugins fail to load.
+            continue
+
+
+def discover_connector_plugins(plugin_imports: Optional[List[str]] = None) -> List[str]:
+    """Discover connector plugins from entry points and explicit import paths.
+
+    Args:
+        plugin_imports: Optional list of module paths to import. Imported modules
+            can self-register connectors or expose a ``register_polaris_plugins``
+            callable.
+
+    Returns:
+        List of explicit plugin module paths loaded during this call.
+    """
+    _ensure_factories_registered()
+
+    loaded_now: List[str] = []
+    for module_path in plugin_imports or []:
+        normalized_path = module_path.strip()
+        if not normalized_path or normalized_path in _loaded_plugin_modules:
+            continue
+
+        plugin_module = importlib.import_module(normalized_path)
+        _activate_plugin(plugin_module)
+        _loaded_plugin_modules.add(normalized_path)
+        loaded_now.append(normalized_path)
+
+    return loaded_now
 
 
 def register_connector_factory(connector_type: str, factory: ConnectorFactory) -> None:
     """Register or override a connector factory for a given type string."""
     _CONNECTOR_FACTORIES[connector_type] = factory
+
+
+def register_connector_config_validator(
+    connector_type: str,
+    validator: ConnectorConfigValidator,
+) -> None:
+    """Register connector-specific configuration validator hook."""
+    _CONNECTOR_CONFIG_VALIDATORS[connector_type] = validator
+
+
+def get_connector_config_validator(connector_type: str) -> Optional[ConnectorConfigValidator]:
+    """Get a connector configuration validator by connector type."""
+    _ensure_factories_registered()
+    return _CONNECTOR_CONFIG_VALIDATORS.get(connector_type)
 
 
 def get_connector_factory(connector_type: str) -> Optional[ConnectorFactory]:
@@ -102,6 +221,58 @@ def _register_default_connector_factories() -> None:
     # Import here to avoid circular imports
     from polaris.connectors import KubernetesConnector, SWIMConnector, WildfireConnector
 
+    def _validate_port(port: Any, connector_name: str) -> None:
+        if not isinstance(port, int):
+            raise ValueError(f"{connector_name} connection port must be an integer")
+        if not (MIN_PORT <= port <= MAX_PORT):
+            raise ValueError(
+                f"{connector_name} connection port must be between {MIN_PORT} and {MAX_PORT}"
+            )
+
+    def _validate_swim_connection(connection: Dict[str, Any]) -> None:
+        if not isinstance(connection, dict):
+            raise ValueError("SWIM connection config must be a dictionary")
+
+        host = connection.get("host")
+        if host is not None and not isinstance(host, str):
+            raise ValueError("SWIM connection host must be a string")
+
+        port = connection.get("port")
+        if port is not None:
+            _validate_port(port, "SWIM")
+
+    def _validate_wildfire_connection(connection: Dict[str, Any]) -> None:
+        if not isinstance(connection, dict):
+            raise ValueError("Wildfire connection config must be a dictionary")
+
+        base_url = connection.get("base_url")
+        if base_url is not None and not isinstance(base_url, str):
+            raise ValueError("Wildfire base_url must be a string")
+
+        host = connection.get("host")
+        if host is not None and not isinstance(host, str):
+            raise ValueError("Wildfire host must be a string")
+
+        port = connection.get("port")
+        if port is not None:
+            _validate_port(port, "Wildfire")
+
+    def _validate_kubernetes_connection(connection: Dict[str, Any]) -> None:
+        if not isinstance(connection, dict):
+            raise ValueError("Kubernetes connection config must be a dictionary")
+
+        kubeconfig_path = connection.get("kubeconfig_path")
+        if kubeconfig_path is not None and not isinstance(kubeconfig_path, str):
+            raise ValueError("Kubernetes kubeconfig_path must be a string")
+
+        in_cluster = connection.get("in_cluster")
+        if in_cluster is not None and not isinstance(in_cluster, bool):
+            raise ValueError("Kubernetes in_cluster must be a boolean")
+
+        namespace = connection.get("namespace")
+        if namespace is not None and not isinstance(namespace, str):
+            raise ValueError("Kubernetes namespace must be a string")
+
     def _swim_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
     ) -> "Connector":
@@ -110,6 +281,7 @@ def _register_default_connector_factories() -> None:
         return SWIMConnector(host=host, port=port, logger=logger, metrics=metrics)
 
     register_connector_factory("swim", _swim_factory)
+    register_connector_config_validator("swim", _validate_swim_connection)
 
     def _wildfire_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
@@ -130,6 +302,7 @@ def _register_default_connector_factories() -> None:
         )
 
     register_connector_factory("wildfire", _wildfire_factory)
+    register_connector_config_validator("wildfire", _validate_wildfire_connection)
 
     def _kubernetes_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
@@ -146,6 +319,7 @@ def _register_default_connector_factories() -> None:
         )
 
     register_connector_factory("kubernetes", _kubernetes_factory)
+    register_connector_config_validator("kubernetes", _validate_kubernetes_connection)
 
 
 def _register_default_strategy_factories() -> None:
@@ -168,20 +342,22 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        if strategy_cfg.threshold:
+        params = getattr(strategy_cfg, "params", {})
+        if params:
             thresholds = {}
-            threshold_data = strategy_cfg.threshold.get("thresholds", {})
+            threshold_data = params.get("thresholds", {})
             for metric, values in threshold_data.items():
                 thresholds[metric] = values
 
-            cooldown = strategy_cfg.threshold.get("cooldown_seconds", 60)
+            cooldown = params.get("cooldown_seconds", 60)
+            action_templates = params.get("action_templates")
             return ThresholdReactiveStrategy(
                 thresholds=thresholds,
+                action_templates=action_templates,
                 cooldown_seconds=cooldown,
                 logger=logger,
                 metrics=metrics,
             )
-
         return ThresholdReactiveStrategy(logger=logger, metrics=metrics)
 
     register_strategy_factory("threshold", _threshold_factory)
@@ -194,10 +370,11 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        if not strategy_cfg.llm_reasoning:
-            raise ValueError("LLM strategy requires 'llm_reasoning' configuration section")
+        params = getattr(strategy_cfg, "params", {})
+        if not params:
+            raise ValueError("LLM strategy requires configuration params")
 
-        llm_reasoning_cfg = strategy_cfg.llm_reasoning or {}
+        llm_reasoning_cfg = params
         provider = llm_reasoning_cfg.get("provider", "google")
         resilience_cfg = llm_reasoning_cfg.get("resilience")
         llm_kwargs = dict(llm_reasoning_cfg)
@@ -207,15 +384,11 @@ def _register_default_strategy_factories() -> None:
 
         return LLMReasoningStrategy(
             llm_client=llm_client,
-            system_description=strategy_cfg.llm_reasoning.get(
-                "system_description", "Managed system"
-            ),
-            adaptation_goals=strategy_cfg.llm_reasoning.get(
-                "adaptation_goals", "Maintain optimal performance"
-            ),
-            temperature=strategy_cfg.llm_reasoning.get("temperature", 0.1),
-            system_prompt=strategy_cfg.llm_reasoning.get("system_prompt"),
-            per_system_prompts=strategy_cfg.llm_reasoning.get("per_system_prompts"),
+            system_description=params.get("system_description", "Managed system"),
+            adaptation_goals=params.get("adaptation_goals", "Maintain optimal performance"),
+            temperature=params.get("temperature", 0.1),
+            system_prompt=params.get("system_prompt"),
+            per_system_prompts=params.get("per_system_prompts"),
             logger=logger,
             metrics=metrics,
         )
@@ -230,7 +403,7 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        hybrid_conf = strategy_cfg.hybrid or {}
+        hybrid_conf = getattr(strategy_cfg, "params", {})
         selection_mode = hybrid_conf.get("selection_mode", "confidence")
         min_confidence = float(hybrid_conf.get("min_confidence", 0.7))
         sub_defs = hybrid_conf.get("strategies", [])
@@ -240,193 +413,25 @@ def _register_default_strategy_factories() -> None:
             s_type = s.get("type", "threshold")
             priority = float(s.get("priority", 0.5))
 
-            if s_type == "threshold":
-                thresholds = None
-                cooldown = 60
-                if "threshold" in s and isinstance(s["threshold"], dict):
-                    th = s["threshold"]
-                    thresholds = th.get("thresholds")
-                    cooldown = th.get("cooldown_seconds", cooldown)
+            sub_factory = get_strategy_factory(s_type)
+            if not sub_factory:
+                logger.error(f"Unknown sub-strategy type '{s_type}' in hybrid config")
+                continue
 
-                sub = ThresholdReactiveStrategy(
-                    thresholds=thresholds,
-                    cooldown_seconds=cooldown,
-                    logger=logger,
-                    metrics=metrics,
+            from polaris.infrastructure.config import StrategyConfig
+
+            try:
+                sub_cfg = StrategyConfig(**s)
+                sub_strategy = sub_factory(
+                    sub_cfg, logger, metrics, knowledge_store, world_model, registry
                 )
-                sub_strategies.append((sub, priority))
-
-            elif s_type == "llm_reasoning":
-                llm_cfg = s.get("llm_reasoning", {}) or {}
-                resilience_cfg = llm_cfg.get("resilience")
-                provider = llm_cfg.get("provider", "google")
-                llm_kwargs = dict(llm_cfg)
-                llm_kwargs.pop("provider", None)
-                llm_kwargs.pop("resilience", None)
-                llm_client = _llm.create_llm_client(
-                    provider,
-                    resilience=resilience_cfg,
-                    **llm_kwargs,
-                )
-                sub_llm = LLMReasoningStrategy(
-                    llm_client=llm_client,
-                    system_description=llm_cfg.get("system_description", "Managed system"),
-                    adaptation_goals=llm_cfg.get(
-                        "adaptation_goals", "Maintain optimal performance"
-                    ),
-                    temperature=llm_cfg.get("temperature", 0.1),
-                    system_prompt=llm_cfg.get("system_prompt"),
-                    per_system_prompts=llm_cfg.get("per_system_prompts"),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_llm, priority))
-
-            elif s_type == "agentic_llm":
-                agent_cfg = s.get("agentic_llm", {}) or {}
-                steps_limit = int(agent_cfg.get("steps_limit", 3))
-                temperature = float(agent_cfg.get("temperature", 0.1))
-                allowed_tools = None
-                tools_cfg = agent_cfg.get("tools")
-                if isinstance(tools_cfg, dict):
-                    allowed_tools = tools_cfg.get("enabled")
-
-                provider = agent_cfg.get("provider", "google")
-                resilience_cfg = agent_cfg.get("resilience")
-                llm_kwargs = dict(agent_cfg)
-                llm_kwargs.pop("provider", None)
-                llm_kwargs.pop("resilience", None)
-                llm_client = _llm.create_llm_client(
-                    provider, resilience=resilience_cfg, **llm_kwargs
-                )
-
-                sub_agent = AgenticLLMStrategy(
-                    llm_client=llm_client,
-                    knowledge_store=knowledge_store,
-                    world_model=world_model,
-                    connector_getter=registry.get,
-                    steps_limit=steps_limit,
-                    temperature=temperature,
-                    allowed_tools=allowed_tools,
-                    system_prompt=agent_cfg.get("system_prompt"),
-                    per_system_prompts=agent_cfg.get("per_system_prompts"),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_agent, priority))
-
-            elif s_type == "multi_agent":
-                from polaris.strategies.multi_agent import AgentConfig
-
-                ma_cfg = s.get("multi_agent", {}) or {}
-                ma_provider = ma_cfg.get("provider", "google")
-                ma_resilience = ma_cfg.get("resilience")
-                ma_kwargs = dict(ma_cfg)
-                ma_kwargs.pop("provider", None)
-                ma_kwargs.pop("resilience", None)
-                ma_shared_llm = _llm.create_llm_client(
-                    ma_provider,
-                    resilience=ma_resilience,
-                    **ma_kwargs,
-                )
-
-                def _build_agent_cfg_hybrid(
-                    role_cfg: Optional[dict],
-                    ma_provider: str = ma_provider,
-                    ma_kwargs: dict = ma_kwargs,
-                ) -> Optional[AgentConfig]:
-                    if not isinstance(role_cfg, dict) or not role_cfg:
-                        return None
-                    rp = role_cfg.get("provider")
-                    rr = role_cfg.get("resilience")
-                    rc = None
-                    if rp:
-                        role_kwargs = dict(role_cfg)
-                        role_kwargs.pop("provider", None)
-                        role_kwargs.pop("resilience", None)
-                        rc = _llm.create_llm_client(rp, resilience=rr, **role_kwargs)
-                    elif rr:
-                        rc = _llm.create_llm_client(ma_provider, resilience=rr, **ma_kwargs)
-                    return AgentConfig(
-                        llm_client=rc,
-                        temperature=role_cfg.get("temperature"),
-                        system_prompt=role_cfg.get("system_prompt"),
-                        max_tokens=role_cfg.get("max_tokens"),
-                        steps_limit=role_cfg.get("steps_limit"),
-                        allowed_tools=role_cfg.get("tools"),
-                    )
-
-                sub_ma = MultiAgentStrategy(
-                    llm_client=ma_shared_llm,
-                    knowledge_store=knowledge_store,
-                    world_model=world_model,
-                    temperature=float(ma_cfg.get("temperature", 0.1)),
-                    system_description=ma_cfg.get(
-                        "system_description", "A generic managed cloud system"
-                    ),
-                    steps_limit=int(ma_cfg.get("steps_limit", 3)),
-                    allowed_tools=ma_cfg.get("tools"),
-                    diagnostician_config=_build_agent_cfg_hybrid(ma_cfg.get("diagnostician")),
-                    planner_config=_build_agent_cfg_hybrid(ma_cfg.get("planner")),
-                    validator_config=_build_agent_cfg_hybrid(ma_cfg.get("validator")),
-                    agent_prompts=ma_cfg.get("agent_prompts"),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_ma, priority))
-
-            elif s_type == "thread_agentic":
-                thread_cfg = s.get("thread_agentic", {}) or {}
-                steps_limit = int(thread_cfg.get("steps_limit", 4))
-                temperature = float(thread_cfg.get("temperature", 0.1))
-                max_thread_depth = int(thread_cfg.get("max_thread_depth", 3))
-                max_total_threads = int(thread_cfg.get("max_total_threads", 16))
-                child_timeout_seconds = float(thread_cfg.get("child_timeout_seconds", 20.0))
-                max_repeated_spawns = int(thread_cfg.get("max_repeated_spawns", 2))
-
-                allowed_tools = None
-                tools_cfg = thread_cfg.get("tools")
-                if isinstance(tools_cfg, dict):
-                    allowed_tools = tools_cfg.get("enabled")
-
-                provider = thread_cfg.get("provider", "google")
-                resilience_cfg = thread_cfg.get("resilience")
-                llm_kwargs = dict(thread_cfg)
-                llm_kwargs.pop("provider", None)
-                llm_kwargs.pop("resilience", None)
-                llm_client = _llm.create_llm_client(
-                    provider,
-                    resilience=resilience_cfg,
-                    **llm_kwargs,
-                )
-
-                sub_thread = ThreadAgenticStrategy(
-                    llm_client=llm_client,
-                    knowledge_store=knowledge_store,
-                    world_model=world_model,
-                    connector_getter=registry.get,
-                    steps_limit=steps_limit,
-                    temperature=temperature,
-                    max_thread_depth=max_thread_depth,
-                    max_total_threads=max_total_threads,
-                    child_timeout_seconds=child_timeout_seconds,
-                    max_repeated_spawns=max_repeated_spawns,
-                    allowed_tools=allowed_tools,
-                    system_prompt=thread_cfg.get("system_prompt"),
-                    per_system_prompts=thread_cfg.get("per_system_prompts"),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_thread, priority))
-
-            else:
-                # Fallback to threshold for unknown types
-                sub = ThresholdReactiveStrategy(logger=logger, metrics=metrics)
-                sub_strategies.append((sub, priority))
+                sub_strategies.append((sub_strategy, priority))
+            except Exception as exc:
+                logger.error(f"Failed to build sub-strategy {s_type}: {exc}")
+                continue
 
         if not sub_strategies:
-            # Safety fallback
-            return ThresholdReactiveStrategy(logger=logger, metrics=metrics)
+            raise ValueError("Hybrid strategy requires at least one valid sub-strategy")
 
         cooldown_seconds = int(hybrid_conf.get("cooldown_seconds", 0))
 
@@ -449,7 +454,7 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        agent_conf = strategy_cfg.agentic_llm or {}
+        agent_conf = getattr(strategy_cfg, "params", {})
         steps_limit = int(agent_conf.get("steps_limit", 3))
         temperature = float(agent_conf.get("temperature", 0.1))
         allowed_tools = None
@@ -468,7 +473,6 @@ def _register_default_strategy_factories() -> None:
             llm_client=llm_client,
             knowledge_store=knowledge_store,
             world_model=world_model,
-            connector_getter=registry.get,
             steps_limit=steps_limit,
             temperature=temperature,
             allowed_tools=allowed_tools,
@@ -488,13 +492,14 @@ def _register_default_strategy_factories() -> None:
         world_model: "WorldModel",
         registry: ConnectorRegistry,
     ) -> "AdaptationStrategy":
-        thread_conf = strategy_cfg.thread_agentic or {}
+        thread_conf = getattr(strategy_cfg, "params", {})
         steps_limit = int(thread_conf.get("steps_limit", 4))
         temperature = float(thread_conf.get("temperature", 0.1))
         max_thread_depth = int(thread_conf.get("max_thread_depth", 3))
         max_total_threads = int(thread_conf.get("max_total_threads", 16))
         child_timeout_seconds = float(thread_conf.get("child_timeout_seconds", 20.0))
         max_repeated_spawns = int(thread_conf.get("max_repeated_spawns", 2))
+        assessment_cooldown_seconds = float(thread_conf.get("assessment_cooldown_seconds", 0.0))
         max_tool_result_chars = int(thread_conf.get("max_tool_result_chars", 1200))
         max_child_payload_chars = int(thread_conf.get("max_child_payload_chars", 800))
         phi_mode = str(thread_conf.get("phi_mode", "last_line"))
@@ -518,13 +523,13 @@ def _register_default_strategy_factories() -> None:
             llm_client=llm_client,
             knowledge_store=knowledge_store,
             world_model=world_model,
-            connector_getter=registry.get,
             steps_limit=steps_limit,
             temperature=temperature,
             max_thread_depth=max_thread_depth,
             max_total_threads=max_total_threads,
             child_timeout_seconds=child_timeout_seconds,
             max_repeated_spawns=max_repeated_spawns,
+            assessment_cooldown_seconds=assessment_cooldown_seconds,
             max_tool_result_chars=max_tool_result_chars,
             max_child_payload_chars=max_child_payload_chars,
             phi_mode=phi_mode,
@@ -550,7 +555,7 @@ def _register_default_strategy_factories() -> None:
     ) -> "AdaptationStrategy":
         from polaris.strategies.multi_agent import AgentConfig
 
-        agent_conf = strategy_cfg.multi_agent or {}
+        agent_conf = getattr(strategy_cfg, "params", {})
         temperature = float(agent_conf.get("temperature", 0.1))
         system_description = agent_conf.get("system_description", "A generic managed cloud system")
 
@@ -562,7 +567,6 @@ def _register_default_strategy_factories() -> None:
         shared_llm = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
         def _build_agent_config(role_cfg: Optional[dict]) -> Optional[AgentConfig]:
-            """Build an AgentConfig from a per-agent config dict."""
             if not isinstance(role_cfg, dict) or not role_cfg:
                 return None
             role_provider = role_cfg.get("provider")
@@ -578,7 +582,6 @@ def _register_default_strategy_factories() -> None:
                     **role_kwargs,
                 )
             elif role_resilience:
-                # Same provider as shared but different resilience
                 role_client = _llm.create_llm_client(
                     provider, resilience=role_resilience, **llm_kwargs
                 )
@@ -595,9 +598,6 @@ def _register_default_strategy_factories() -> None:
         planner_config = _build_agent_config(agent_conf.get("planner"))
         validator_config = _build_agent_config(agent_conf.get("validator"))
 
-        # Top-level agent_prompts dict alternative (shorthand)
-        agent_prompts: Optional[Dict[str, str]] = agent_conf.get("agent_prompts")
-
         return MultiAgentStrategy(
             llm_client=shared_llm,
             knowledge_store=knowledge_store,
@@ -609,7 +609,6 @@ def _register_default_strategy_factories() -> None:
             diagnostician_config=diagnostician_config,
             planner_config=planner_config,
             validator_config=validator_config,
-            agent_prompts=agent_prompts,
             logger=logger,
             metrics=metrics,
         )

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
 from polaris.abstractions.connector import Connector
+from polaris.abstractions.connector_capabilities import ConnectorCapabilities
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
     AdaptationAction,
@@ -17,13 +18,6 @@ from polaris.core.models import (
     MetricValue,
     SystemState,
 )
-
-
-# Use string-based import to avoid circular imports
-def _get_connector_class() -> type:
-    from polaris.abstractions.connector import Connector
-
-    return Connector
 
 
 class KubernetesConnector(Connector):
@@ -98,10 +92,10 @@ class KubernetesConnector(Connector):
             if self._logger:
                 self._logger.error("The 'kubernetes' package is not installed.")
             return False
-        except Exception as e:
+        except Exception as exc:
             self._connected = False
             if self._logger:
-                self._logger.error("KubernetesConnector connection failed", error=str(e))
+                self._logger.error("KubernetesConnector connection failed", error=str(exc))
             if self._metrics:
                 self._metrics.increment("polaris.connector.kubernetes.connection_errors")
             return False
@@ -223,9 +217,9 @@ class KubernetesConnector(Connector):
                 health_status=health,
             )
 
-        except Exception as e:
+        except Exception as exc:
             if self._logger:
-                self._logger.error("Kubernetes telemetry collection failed", error=str(e))
+                self._logger.error("Kubernetes telemetry collection failed", error=str(exc))
             if self._metrics:
                 self._metrics.increment("polaris.connector.kubernetes.telemetry_errors")
             return SystemState(
@@ -233,7 +227,7 @@ class KubernetesConnector(Connector):
                 timestamp=datetime.now(timezone.utc),
                 metrics={},
                 health_status=HealthStatus.UNHEALTHY,
-                metadata={"error": str(e)},
+                metadata={"error": str(exc)},
             )
 
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
@@ -342,18 +336,18 @@ class KubernetesConnector(Connector):
                     error_message=f"Unsupported action type: {action.action_type}",
                 )
 
-        except Exception as e:
+        except Exception as exc:
             if self._logger:
                 self._logger.error(
                     "Kubernetes action execution failed",
                     action_type=action.action_type,
-                    error=str(e),
+                    error=str(exc),
                 )
             return ExecutionResult(
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
                 result_data={},
-                error_message=str(e),
+                error_message=str(exc),
             )
 
     async def validate_action(self, action: AdaptationAction) -> bool:
@@ -378,3 +372,20 @@ class KubernetesConnector(Connector):
                 parameters={"deployment_name": "string"},
             ),
         ]
+
+    async def get_capabilities(self) -> ConnectorCapabilities:
+        """Expose normalized Kubernetes capability metadata."""
+        actions = await self.get_supported_actions()
+        action_types = [
+            action.action_type
+            for action in actions
+            if isinstance(action.action_type, str) and action.action_type.strip()
+        ]
+        return ConnectorCapabilities.from_supported_action_types(
+            action_types,
+            action_aliases={
+                "scale deployment": "scale_deployment",
+                "restart deployment": "restart_deployment",
+            },
+            metadata={"system_family": "kubernetes", "namespace": self.namespace},
+        )

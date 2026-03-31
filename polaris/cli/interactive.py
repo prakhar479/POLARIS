@@ -111,6 +111,33 @@ class PolarisInteractiveCLI(cmd.Cmd):
         except Exception:
             return []
 
+    def _predict_action_candidates(self, system_id: str) -> List[str]:
+        """Resolve action completions from the runtime system contract."""
+        if not system_id:
+            return []
+
+        try:
+            contract = self.polaris.registry.get_contract(system_id)
+        except Exception:
+            contract = None
+
+        if contract is None:
+            return []
+
+        candidates = set()
+
+        for action_type in getattr(contract, "supported_action_types", ()):
+            if isinstance(action_type, str) and action_type.strip():
+                candidates.add(action_type.strip())
+
+        aliases = getattr(contract, "action_aliases", {})
+        if isinstance(aliases, dict):
+            for alias in aliases.keys():
+                if isinstance(alias, str) and alias.strip():
+                    candidates.add(alias.strip())
+
+        return sorted(candidates)
+
     def _parse_args(self, raw: str) -> List[str]:
         try:
             return shlex.split(raw)
@@ -556,16 +583,9 @@ class PolarisInteractiveCLI(cmd.Cmd):
         if len(tokens) <= 1:
             return [s for s in self._system_ids() if s.startswith(text)]
         if len(tokens) == 2:
-            common_actions = [
-                "scale_up",
-                "scale_down",
-                "add_server",
-                "remove_server",
-                "increase_resources",
-                "decrease_resources",
-                "reconfigure",
-            ]
-            return [a for a in common_actions if a.startswith(text)]
+            system_id = tokens[1]
+            action_candidates = self._predict_action_candidates(system_id)
+            return [a for a in action_candidates if a.startswith(text)]
         return []
 
     def complete_metrics(self, text: str, line: str, begidx: int, endidx: int) -> List[str]:

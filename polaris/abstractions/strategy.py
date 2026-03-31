@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
+    from polaris.abstractions.system_contract import SystemContract
     from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 else:
     # Use Any as fallback for runtime type checks if models can't be imported
@@ -21,6 +22,7 @@ class AdaptationContext:
     system_id: str
     historical_states: List["SystemState"]
     world_model_insights: Optional[Dict[str, Any]] = None
+    system_contract: Optional["SystemContract"] = None
     metadata: Optional[Dict[str, Any]] = None
 
 

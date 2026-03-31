@@ -29,7 +29,6 @@ class GetRecentStatesTool(Tool):
 
     @property
     def description(self) -> str:
-        """Get tool description."""
         """Get the description of the tool."""
         return (
             "Query recent system states from the knowledge store. "
@@ -79,12 +78,12 @@ class GetRecentStatesTool(Tool):
 
             return {"states": out}
 
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("get_recent_states failed", error=str(e))
+                deps.logger.error("get_recent_states failed", error=str(exc))
             return ToolError(
                 code="query_failed",
-                message=f"Failed to query states: {str(e)}",
+                message=f"Failed to query states: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -153,12 +152,12 @@ class SummarizeMetricTrendsTool(Tool):
 
             return result
 
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("summarize_metric_trends failed", error=str(e))
+                deps.logger.error("summarize_metric_trends failed", error=str(exc))
             return ToolError(
                 code="query_failed",
-                message=f"Failed to summarize trends: {str(e)}",
+                message=f"Failed to summarize trends: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -232,12 +231,12 @@ class ListMetricFieldsTool(Tool):
                 "numeric_field_stats": stats,
             }
 
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("list_metric_fields failed", error=str(e))
+                deps.logger.error("list_metric_fields failed", error=str(exc))
             return ToolError(
                 code="query_failed",
-                message=f"Failed to list metric fields: {str(e)}",
+                message=f"Failed to list metric fields: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -374,12 +373,12 @@ class ComputeMetricMathTool(Tool):
 
         except ToolError as te:
             return te.to_dict()
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("compute_metric_math failed", error=str(e))
+                deps.logger.error("compute_metric_math failed", error=str(exc))
             return ToolError(
                 code="execution_error",
-                message=f"Failed to compute metric math: {str(e)}",
+                message=f"Failed to compute metric math: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -476,7 +475,6 @@ class GetWorldModelInsightsTool(Tool):
 
     @property
     def name(self) -> str:
-        """Get tool name."""
         """Get the name of the tool."""
         return "get_world_model_insights"
 
@@ -504,12 +502,12 @@ class GetWorldModelInsightsTool(Tool):
 
             return {"insights": insights}
 
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("get_world_model_insights failed", error=str(e))
+                deps.logger.error("get_world_model_insights failed", error=str(exc))
             return ToolError(
                 code="model_error",
-                message=f"Failed to get world model insights: {str(e)}",
+                message=f"Failed to get world model insights: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -519,7 +517,6 @@ class PredictOutcomeTool(Tool):
 
     @property
     def name(self) -> str:
-        """Get tool name."""
         """Get the name of the tool."""
         return "predict_outcome"
 
@@ -583,12 +580,12 @@ class PredictOutcomeTool(Tool):
                 "reasoning": pred.reasoning,
             }
 
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("predict_outcome failed", error=str(e))
+                deps.logger.error("predict_outcome failed", error=str(exc))
             return ToolError(
                 code="prediction_failed",
-                message=f"Failed to predict outcome: {str(e)}",
+                message=f"Failed to predict outcome: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -598,7 +595,6 @@ class GetActionHistoryTool(Tool):
 
     @property
     def name(self) -> str:
-        """Get tool name."""
         """Get the name of the tool."""
         return "get_action_history"
 
@@ -659,12 +655,12 @@ class GetActionHistoryTool(Tool):
 
             return {"items": items}
 
-        except Exception as e:
+        except Exception as exc:
             if deps.logger:
-                deps.logger.error("get_action_history failed", error=str(e))
+                deps.logger.error("get_action_history failed", error=str(exc))
             return ToolError(
                 code="query_failed",
-                message=f"Failed to query action history: {str(e)}",
+                message=f"Failed to query action history: {str(exc)}",
                 recoverable=True,
             ).to_dict()
 
@@ -674,7 +670,6 @@ class ListSupportedActionsTool(Tool):
 
     @property
     def name(self) -> str:
-        """Get tool name."""
         """Get the name of the tool."""
         return "list_supported_actions"
 
@@ -682,9 +677,8 @@ class ListSupportedActionsTool(Tool):
     def description(self) -> str:
         """Get the description of the tool."""
         return (
-            "List actions supported by the managed system. First tries the connector, "
-            "then falls back to historical inference. "
-            "Parameters: window_seconds for historical fallback (1-31536000, default 2592000)"
+            "List canonical actions supported by the managed system from the "
+            "runtime system contract. No parameters."
         )
 
     async def execute(
@@ -695,77 +689,37 @@ class ListSupportedActionsTool(Tool):
         deps: ToolDependencies,
     ) -> Dict[str, Any]:
         """Execute list_supported_actions tool."""
-        # First, try to get actions from connector if available
-        if deps.connector is not None:
-            try:
-                if hasattr(deps.connector, "get_supported_actions"):
-                    actions = await deps.connector.get_supported_actions()
-                    types = sorted(
-                        {
-                            action_type
-                            for a in (actions or [])
-                            if (action_type := getattr(a, "action_type", None))
-                        }
-                    )
-                    if types:
-                        if deps.logger:
-                            deps.logger.debug(
-                                "list_supported_actions from connector",
-                                count=len(types),
-                            )
-                        return {"action_types": types, "source": "connector"}
-            except Exception as e:
-                if deps.logger:
-                    deps.logger.warning(
-                        "Connector get_supported_actions failed, falling back to history",
-                        system_id=state.system_id,
-                        error=str(e),
-                    )
-                if deps.metrics:
-                    deps.metrics.increment(
-                        "polaris.tool.list_supported_actions.fallback",
-                        tags={"reason": "connector_failed"},
-                    )
-
-        # Fallback: infer from historical actions
-        try:
-            window_seconds = clamp_int(
-                args.get("window_seconds"), 1, 365 * 24 * 3600, 30 * 24 * 3600  # Max 1 year
-            )
-
-            from datetime import datetime as dt
-            from datetime import timedelta, timezone
-
-            end = dt.now(timezone.utc)
-            start = end - timedelta(seconds=window_seconds)
-
-            history = await deps.knowledge_store.query_actions(state.system_id, start, end)
-
-            types = sorted(
-                {
-                    action_type
-                    for a, _ in history
-                    if (action_type := getattr(a, "action_type", None))
-                }
-            )
-
-            if deps.logger:
-                deps.logger.debug(
-                    "list_supported_actions from history",
-                    count=len(types),
-                    system_id=state.system_id,
-                )
-
-            return {"action_types": types, "source": "historical"}
-
-        except Exception as e:
-            if deps.logger:
-                deps.logger.error("list_supported_history fallback failed", error=str(e))
+        contract = deps.system_contract or context.system_contract
+        if contract is None:
             return ToolError(
-                code="query_failed",
-                message=f"Failed to list supported actions: {str(e)}",
-                recoverable=True,
+                code="missing_system_contract",
+                message=(
+                    "System contract is missing; list_supported_actions requires "
+                    "contract-injected capabilities"
+                ),
+                recoverable=False,
             ).to_dict()
+
+        types = sorted(
+            {
+                action_type
+                for action_type in contract.supported_action_types
+                if isinstance(action_type, str) and action_type.strip()
+            }
+        )
+
+        if deps.logger:
+            deps.logger.debug(
+                "list_supported_actions from contract",
+                count=len(types),
+                system_id=state.system_id,
+            )
+
+        return {
+            "action_types": types,
+            "source": "contract",
+            "connector_type": contract.connector_type,
+        }
 
 
 class SleepTool(Tool):

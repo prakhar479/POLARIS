@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List
 
+from polaris.abstractions.connector_capabilities import ConnectorCapabilities
 from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
@@ -79,3 +80,14 @@ class Connector(ABC):
             List[AdaptationAction]: List of supported action objects
         """
         return []
+
+    async def get_capabilities(self) -> ConnectorCapabilities:
+        """Get normalized connector capabilities used by runtime contracts."""
+        supported_actions = await self.get_supported_actions()
+        action_types = []
+        for action in supported_actions or []:
+            action_type = getattr(action, "action_type", None)
+            if isinstance(action_type, str) and action_type.strip():
+                action_types.append(action_type.strip())
+
+        return ConnectorCapabilities.from_supported_action_types(action_types)

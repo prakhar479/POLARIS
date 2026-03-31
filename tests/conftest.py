@@ -58,6 +58,16 @@ class MockConnector(Connector):
             result_data={"message": "Action executed successfully"},
         )
 
+    async def get_supported_actions(self) -> List[AdaptationAction]:
+        return [
+            AdaptationAction(
+                action_id="1", action_type="scale_up", target_system=self.system_id, parameters={}
+            ),
+            AdaptationAction(
+                action_id="2", action_type="scale_down", target_system=self.system_id, parameters={}
+            ),
+        ]
+
     async def validate_action(self, action: AdaptationAction) -> bool:
         # When supported_actions is empty, accept everything (no restriction).
         # Tests that want to reject actions should populate supported_actions.

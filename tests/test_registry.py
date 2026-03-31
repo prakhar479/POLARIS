@@ -1,7 +1,10 @@
 """Tests for connector registry."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
+from polaris.abstractions.system_contract import SystemContract
 from polaris.core.registry import ConnectorRegistry
 
 
@@ -15,12 +18,18 @@ class TestConnectorRegistry:
 
     @pytest.mark.asyncio
     async def test_register_connector(self, registry, mock_connector):
-        """Test registering a connector."""
-        await registry.register(mock_connector)
+        """Test registering a connector with a contract."""
+        contract = SystemContract(
+            system_id="test-system",
+            connector_type="MockConnector",
+            supported_action_types=("scale_up",),
+        )
+        await registry.register(mock_connector, contract=contract)
 
         # Verify connector is registered
         retrieved = registry.get("test-system")
         assert retrieved == mock_connector
+        assert registry.get_contract("test-system") == contract
 
     @pytest.mark.asyncio
     async def test_register_multiple_connectors(self, registry):
@@ -30,8 +39,12 @@ class TestConnectorRegistry:
         connector1 = MockConnector("system-1")
         connector2 = MockConnector("system-2")
 
-        await registry.register(connector1)
-        await registry.register(connector2)
+        await registry.register(
+            connector1, MagicMock(spec=SystemContract, system_id=await connector1.get_system_id())
+        )
+        await registry.register(
+            connector2, MagicMock(spec=SystemContract, system_id=await connector2.get_system_id())
+        )
 
         # Verify both connectors are registered
         assert registry.get("system-1") == connector1
@@ -56,8 +69,12 @@ class TestConnectorRegistry:
         connector1 = MockConnector("system-1")
         connector2 = MockConnector("system-2")
 
-        await registry.register(connector1)
-        await registry.register(connector2)
+        await registry.register(
+            connector1, MagicMock(spec=SystemContract, system_id=await connector1.get_system_id())
+        )
+        await registry.register(
+            connector2, MagicMock(spec=SystemContract, system_id=await connector2.get_system_id())
+        )
 
         system_ids = registry.system_ids()
         assert len(system_ids) == 2
@@ -78,7 +95,9 @@ class TestConnectorRegistry:
         registry = ConnectorRegistry(metrics=mock_metrics)
         connector = MockConnector("test-system")
 
-        await registry.register(connector)
+        await registry.register(
+            connector, MagicMock(spec=SystemContract, system_id=await connector.get_system_id())
+        )
         registry.get("test-system")
         registry.get("nonexistent")
         registry.all()
@@ -98,3 +117,28 @@ class TestConnectorRegistry:
         # Check for gauge metrics
         gauge_calls = [call for call in metric_calls if call[0] == "gauge"]
         assert len(gauge_calls) >= 1  # At least one total_connectors gauge
+
+    @pytest.mark.asyncio
+    async def test_register_connector_contract(self, registry, mock_connector):
+        """Test contract is stored when provided during connector registration."""
+        contract = SystemContract(
+            system_id="test-system",
+            connector_type="MockConnector",
+            supported_action_types=("scale_up",),
+        )
+
+        await registry.register(mock_connector, contract=contract)
+
+        assert registry.get_contract("test-system") == contract
+
+    def test_register_contract_directly(self, registry):
+        """Test direct contract registration API."""
+        contract = SystemContract(
+            system_id="system-1",
+            connector_type="MockConnector",
+            supported_action_types=("scale_up", "scale_down"),
+        )
+
+        registry.register_contract(contract)
+
+        assert registry.get_contract("system-1") == contract

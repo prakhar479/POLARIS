@@ -18,6 +18,11 @@ Complete reference and guide for configuring the Polaris self-adaptive framework
 - [Code Mapping](#configuration-variable-mapping) - Where values are used
 - [Troubleshooting](#troubleshooting-guide) - Common issues & solutions
 
+Strict runtime semantics:
+- LLM-based strategies accept only schema-valid JSON outputs.
+- Adaptation outputs must use `actions` (list); singular `action` is not supported.
+- Contract violations fail the affected system iteration while the monitoring loop continues for other systems.
+
 ## Quick Start
 
 ### For New Users (5 minutes)
@@ -223,7 +228,7 @@ meta_learner:
 #     enabled: true                # Enabled by default when meta-learning is enabled
 #     output_path: "./logs/meta_learning_updates.jsonl"
 #   llm:
-#     provider: google             # or "openai"
+#     provider: google             # one of: "google", "openai", "openrouter", "groq", "ollama"
 #     temperature: 0.1             # LLM temperature for analysis and proposals
 #     auto_apply: false            # Whether to auto-apply approved proposals
 #
@@ -599,8 +604,8 @@ A committee of three specialized LLM agents — **Diagnostician**, **Planner**, 
 strategy:
   type: "multi_agent"
   multi_agent:
-    provider: google             # Shared/fallback LLM provider
-    temperature: 0.1             # Shared/fallback temperature
+    provider: google             # Shared default LLM provider
+    temperature: 0.1             # Shared default temperature
     steps_limit: 3               # Default max reasoning steps per agent (new)
     system_description: "SWIM web application server pool"
 
@@ -640,7 +645,7 @@ strategy:
       #   You are a conservative Safety Validator for {system_description}.
       #   Only approve safe, reversible plans.
 
-    resilience:                  # Shared fallback resilience
+    resilience:                  # Shared resilience defaults
       rps: 1
       burst: 2
       concurrency: 2
@@ -998,7 +1003,7 @@ observability:
 
 ### Before Starting ✓
 
-- [ ] Python 3.8+
+- [ ] Python 3.10+
 - [ ] `pyyaml` package installed
 - [ ] Configuration file created or `config/default.yaml` available
 - [ ] API credentials set (if using LLM strategies)
@@ -1046,7 +1051,7 @@ observability:
 
 **LLM Reasoning Strategy:**
 
-- [ ] `strategy.llm_reasoning.provider`: "google" or "openai"
+- [ ] `strategy.llm_reasoning.provider`: one of "google", "openai", "openrouter", "groq", "ollama"
 - [ ] `strategy.llm_reasoning.system_description`: Non-empty string
 - [ ] `strategy.llm_reasoning.adaptation_goals`: Non-empty string
 - [ ] `strategy.llm_reasoning.temperature`: Float between 0.0-1.0
@@ -1061,7 +1066,7 @@ observability:
 
 **Agentic LLM Strategy:**
 
-- [ ] `strategy.agentic_llm.provider`: "google" or "openai"
+- [ ] `strategy.agentic_llm.provider`: one of "google", "openai", "openrouter", "groq", "ollama"
 - [ ] `strategy.agentic_llm.steps_limit`: Positive integer (default: 3)
 - [ ] `strategy.agentic_llm.temperature`: Float between 0.0-1.0
 - [ ] `strategy.agentic_llm.system_prompt`: Optional system prompt template
@@ -1070,7 +1075,7 @@ observability:
 
 **THREAD Agentic Strategy:**
 
-- [ ] `strategy.thread_agentic.provider`: "google" or "openai"
+- [ ] `strategy.thread_agentic.provider`: one of "google", "openai", "openrouter", "groq", "ollama"
 - [ ] `strategy.thread_agentic.steps_limit`: Positive integer (default: 4)
 - [ ] `strategy.thread_agentic.max_thread_depth`: Non-negative integer (default: 3)
 - [ ] `strategy.thread_agentic.max_total_threads`: Positive integer (default: 16)
@@ -1085,8 +1090,8 @@ observability:
 
 #### 5. Knowledge Store Configuration (Optional)
 
-- [ ] If present: `knowledge.type`: "memory"
-- [ ] `knowledge.memory.max_states_per_system`: Positive integer
+- [ ] If present: `knowledge_store.type`: "memory" or "sqlite"
+- [ ] `knowledge_store.memory.max_states_per_system`: Positive integer
 
 #### 6. Meta-Learner Configuration (Optional)
 
@@ -1188,7 +1193,7 @@ Configure the managed systems to monitor and adapt.
 
 | Field                                           | Type    | Default  | Description                       |
 | ----------------------------------------------- | ------- | -------- | --------------------------------- |
-| `strategy.llm_reasoning.provider`               | string  | `google` | LLM provider: google or openai    |
+| `strategy.llm_reasoning.provider`               | string  | `google` | LLM provider: google/openai/openrouter/groq/ollama |
 | `strategy.llm_reasoning.system_description`     | string  | -        | Description of the managed system |
 | `strategy.llm_reasoning.adaptation_goals`       | string  | -        | Adaptation objectives             |
 | `strategy.llm_reasoning.temperature`            | float   | `0.1`    | Model creativity (0.0-1.0)        |
@@ -1211,7 +1216,7 @@ Configure the managed systems to monitor and adapt.
 
 | Field                                     | Type    | Default  | Description                                                               |
 | ----------------------------------------- | ------- | -------- | ------------------------------------------------------------------------- |
-| `strategy.agentic_llm.provider`           | string  | `google` | LLM provider: google or openai                                            |
+| `strategy.agentic_llm.provider`           | string  | `google` | LLM provider: google/openai/openrouter/groq/ollama                        |
 | `strategy.agentic_llm.steps_limit`        | integer | `3`      | Maximum reasoning steps                                                   |
 | `strategy.agentic_llm.temperature`        | float   | `0.1`    | Model creativity                                                          |
 | `strategy.agentic_llm.system_prompt`      | string  | -        | Custom system prompt template (supports `{system_id}`, `{allowed_tools}`) |
@@ -1222,7 +1227,7 @@ Configure the managed systems to monitor and adapt.
 
 | Field                                           | Type    | Default      | Description                                                       |
 | ----------------------------------------------- | ------- | ------------ | ----------------------------------------------------------------- |
-| `strategy.thread_agentic.provider`              | string  | `google`     | LLM provider: google or openai                                   |
+| `strategy.thread_agentic.provider`              | string  | `google`     | LLM provider: google/openai/openrouter/groq/ollama               |
 | `strategy.thread_agentic.steps_limit`           | integer | `4`          | Maximum reasoning steps per thread                                |
 | `strategy.thread_agentic.temperature`           | float   | `0.1`        | Model creativity                                                   |
 | `strategy.thread_agentic.max_thread_depth`      | integer | `3`          | Maximum recursive child depth                                     |
@@ -1239,9 +1244,9 @@ Configure the managed systems to monitor and adapt.
 
 | Field                                             | Type        | Default                           | Description                                              |
 | ------------------------------------------------- | ----------- | --------------------------------- | -------------------------------------------------------- |
-| `strategy.multi_agent.provider`                   | string      | `google`                          | Shared/fallback LLM provider                             |
-| `strategy.multi_agent.temperature`                | float       | `0.1`                             | Shared/fallback sampling temperature                     |
-| `strategy.multi_agent.steps_limit`                | integer     | `3`                               | Shared/fallback max reasoning steps per agent stage      |
+| `strategy.multi_agent.provider`                   | string      | `google`                          | Shared default LLM provider                              |
+| `strategy.multi_agent.temperature`                | float       | `0.1`                             | Shared default sampling temperature                      |
+| `strategy.multi_agent.steps_limit`                | integer     | `3`                               | Shared default max reasoning steps per agent stage       |
 | `strategy.multi_agent.system_description`         | string      | `A generic managed cloud system`  | System description embedded in default agent prompts     |
 | `strategy.multi_agent.resilience.*`               | object      | -                                 | Shared LLM resilience settings (see resilience section)  |
 | `strategy.multi_agent.diagnostician`              | object      | -                                 | Per-agent override for Diagnostician role                |
@@ -1268,7 +1273,6 @@ Configure the managed systems to monitor and adapt.
 | `strategy.multi_agent.validator.steps_limit`      | integer     | inherits shared                   | Max reasoning steps for SafetyValidator                  |
 | `strategy.multi_agent.validator.tools`            | array       | all built-in tools                | Available tools for SafetyValidator                      |
 | `strategy.multi_agent.validator.resilience.*`     | object      | inherits shared                   | Per-agent LLM resilience override                        |
-| `strategy.multi_agent.agent_prompts`              | object      | -                                 | Shorthand dict for per-role system prompts               |
 
 ### World Model & Knowledge Store
 
@@ -1277,8 +1281,8 @@ Configure the managed systems to monitor and adapt.
 | `world_model.type`                       | string  | `statistical` | World model type                  |
 | `world_model.statistical.window_size`    | integer | `100`         | Recent samples to keep per metric |
 | `world_model.statistical.use_kalman`     | boolean | `true`        | Enable Kalman filtering           |
-| `knowledge.type`                         | string  | `memory`      | Knowledge store type              |
-| `knowledge.memory.max_states_per_system` | integer | `1000`        | Max states per system             |
+| `knowledge_store.type`                         | string  | `memory`      | Knowledge store type              |
+| `knowledge_store.memory.max_states_per_system` | integer | `1000`        | Max states per system             |
 
 ### Meta-Learner
 
@@ -1520,7 +1524,7 @@ ls -ld ./logs ./metrics
 #### Multi-system
 
 - Multiple entries in `systems` array
-- Hybrid strategy for fallbacks
+- Hybrid strategy for strict multi-strategy orchestration
 - Per-system prompts for specialized handling
 
 ---

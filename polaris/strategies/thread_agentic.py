@@ -15,16 +15,12 @@ Design notes:
 
 import asyncio
 import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
-
-if TYPE_CHECKING:
-    from polaris.abstractions.connector import Connector
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
@@ -34,6 +30,12 @@ from polaris.core.models import AdaptationAction, SystemState
 from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+from polaris.strategies.action_resolution import ConnectorActionResolver, StrictContractViolation
+from polaris.strategies.utils import (
+    DEFAULT_ALLOWED_TOOLS,
+    format_system_state_for_llm,
+    parse_strict_json,
+)
 from polaris.tools import ToolDependencies, ToolRegistry, get_builtin_tools
 
 
@@ -71,20 +73,10 @@ class ThreadFinalBlock(BaseModel):
         default_factory=list,
         description="Root-thread proposed actions",
     )
-    action: Optional[ActionBlock] = Field(
-        default=None,
-        description="Deprecated single action field for compatibility",
-    )
     return_payload: Optional[str] = Field(
         default=None,
         description="Compact payload for child-to-parent return",
     )
-
-    def __init__(self, **data: Any) -> None:
-        """Initialize with backward-compatibility for singular action."""
-        super().__init__(**data)
-        if self.action is not None and not self.actions:
-            self.actions = [self.action]
 
 
 class ThreadAgenticResponse(BaseModel):
@@ -139,13 +131,13 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         llm_client: LLMClient,
         knowledge_store: KnowledgeStore,
         world_model: WorldModel,
-        connector_getter: Optional[Callable[[str], Optional["Connector"]]] = None,
         steps_limit: int = 4,
         temperature: float = 0.1,
         max_thread_depth: int = 3,
         max_total_threads: int = 16,
         child_timeout_seconds: float = 20.0,
         max_repeated_spawns: int = 2,
+        assessment_cooldown_seconds: float = 0.0,
         max_tool_result_chars: int = 1200,
         max_child_payload_chars: int = 800,
         phi_mode: str = "last_line",
@@ -164,13 +156,14 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             llm_client: LLM client for structured generation.
             knowledge_store: Historical state/action store.
             world_model: World model for prediction tools.
-            connector_getter: Optional connector provider for connector-aware tools.
             steps_limit: Max step count per thread.
             temperature: LLM temperature.
             max_thread_depth: Maximum child depth under root.
             max_total_threads: Global thread budget per assess call.
             child_timeout_seconds: Timeout for each child thread run.
             max_repeated_spawns: Guardrail against repeated identical spawn requests.
+            assessment_cooldown_seconds: Minimum seconds between consecutive
+                assess() executions for this strategy.
             max_tool_result_chars: Max serialized tool payload size injected to model.
             max_child_payload_chars: Max child payload size propagated via psi.
             phi_mode: Parent-to-child context mapping mode: last_line or recent_lines.
@@ -186,7 +179,6 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         self.llm = llm_client
         self.knowledge_store = knowledge_store
         self.world_model = world_model
-        self._get_connector = connector_getter
 
         self.steps_limit = max(1, int(steps_limit))
         self.temperature = float(temperature)
@@ -194,6 +186,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         self.max_total_threads = max(1, int(max_total_threads))
         self.child_timeout_seconds = max(0.1, float(child_timeout_seconds))
         self.max_repeated_spawns = max(1, int(max_repeated_spawns))
+        self.assessment_cooldown_seconds = max(0.0, float(assessment_cooldown_seconds))
         self.max_tool_result_chars = max(200, int(max_tool_result_chars))
         self.max_child_payload_chars = max(100, int(max_child_payload_chars))
         self.phi_mode = str(phi_mode or "last_line")
@@ -201,21 +194,13 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         self.listen_token = str(listen_token or "=>")
         self.return_token = str(return_token or "<=")
 
-        self.allowed_tools = allowed_tools or [
-            "get_recent_states",
-            "summarize_metric_trends",
-            "list_metric_fields",
-            "compute_metric_math",
-            "get_world_model_insights",
-            "predict_outcome",
-            "get_action_history",
-            "list_supported_actions",
-        ]
+        self.allowed_tools = allowed_tools or list(DEFAULT_ALLOWED_TOOLS)
 
         self._system_prompt_template = system_prompt
         self._per_system_prompts = per_system_prompts or {}
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
+        self._action_resolver = ConnectorActionResolver()
 
         self._tool_registry = ToolRegistry(metrics=self.metrics)
         all_tools = get_builtin_tools()
@@ -228,6 +213,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
 
         self._adaptation_count = 0
         self._success_count = 0
+        self._last_assess_time: Optional[datetime] = None
 
     async def assess(
         self,
@@ -235,6 +221,24 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         context: AdaptationContext,
     ) -> List[AdaptationAction]:
         """Assess system state using recursive THREAD-style reasoning."""
+        now = datetime.now(timezone.utc)
+        if self.assessment_cooldown_seconds > 0 and self._last_assess_time is not None:
+            elapsed = (now - self._last_assess_time).total_seconds()
+            if elapsed < self.assessment_cooldown_seconds:
+                if self.logger:
+                    self.logger.debug(
+                        "ThreadAgentic assessment cooldown active",
+                        system_id=state.system_id,
+                        remaining_seconds=round(self.assessment_cooldown_seconds - elapsed, 1),
+                    )
+                self.metrics.increment(
+                    "polaris.strategy.thread_agentic.assessment_cooldown_skips",
+                    tags={"system_id": state.system_id},
+                )
+                return []
+
+        self._last_assess_time = now
+
         if self.logger:
             self.logger.debug("ThreadAgentic assessment started", system_id=state.system_id)
 
@@ -243,7 +247,17 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             tags={"system_id": state.system_id},
         )
 
-        start = datetime.now(timezone.utc)
+        system_contract = context.system_contract
+        supported_action_types = (
+            system_contract.supported_actions_list() if system_contract is not None else []
+        )
+        if not supported_action_types:
+            raise StrictContractViolation(
+                "Missing connector-supported action contract for strict thread-agentic strategy"
+            )
+        action_aliases = dict(system_contract.action_aliases) if system_contract else {}
+
+        start = now
         runtime = _ThreadRuntime()
         try:
             root_input = self._initial_user_prompt(state, context)
@@ -255,6 +269,8 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 depth=0,
                 lineage=(),
                 runtime=runtime,
+                supported_action_types=supported_action_types,
+                action_aliases=action_aliases,
             )
 
             self.metrics.gauge(
@@ -275,22 +291,22 @@ class ThreadAgenticStrategy(AdaptationStrategy):
 
             final = result.final
             if final is None:
-                return []
+                raise StrictContractViolation("ThreadAgentic root thread returned no final block")
 
-            needs_adaptation = final.needs_adaptation
-            if needs_adaptation is None:
-                needs_adaptation = bool(final.actions)
+            final = self._normalize_root_final(
+                final,
+                state.system_id,
+                supported_action_types,
+                action_aliases,
+            )
 
-            if not needs_adaptation:
+            if not final.needs_adaptation:
                 return []
 
             if not final.actions:
-                if self.logger:
-                    self.logger.warning(
-                        "ThreadAgentic decision needs adaptation but actions are empty",
-                        system_id=state.system_id,
-                    )
-                return []
+                raise StrictContractViolation(
+                    "ThreadAgentic final response with needs_adaptation=true requires non-empty actions"
+                )
 
             reasoning = final.reasoning or "Thread strategy recommended adaptation"
             proposed: List[AdaptationAction] = []
@@ -337,13 +353,18 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         depth: int,
         lineage: Tuple[str, ...],
         runtime: _ThreadRuntime,
+        supported_action_types: Optional[List[str]] = None,
+        action_aliases: Optional[Dict[str, str]] = None,
     ) -> _ThreadResult:
         """Run a single recursive thread using join synchronization."""
         runtime.total_threads += 1
         runtime.max_depth_reached = max(runtime.max_depth_reached, depth)
 
         messages: List[LLMMessage] = [
-            LLMMessage(role="system", content=self._system_prompt(system_id, depth)),
+            LLMMessage(
+                role="system",
+                content=self._system_prompt(system_id, depth, supported_action_types),
+            ),
             LLMMessage(
                 role="user",
                 content=self._thread_user_input(
@@ -375,25 +396,29 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 tags={"system_id": system_id, "depth": str(depth)},
             )
 
-            parsed = self._parse_json(response.content)
-            if not isinstance(parsed, dict):
-                break
+            parsed = self._parse_json_object(response.content)
 
             try:
                 structured = ThreadAgenticResponse.model_validate(parsed)
-            except Exception as e:
-                if self.logger:
-                    self.logger.warning(
-                        "ThreadAgentic validation error",
-                        error=str(e),
-                        depth=depth,
-                    )
-                break
+            except Exception as exc:
+                raise StrictContractViolation(
+                    f"ThreadAgentic response failed schema validation at depth={depth}: {exc}"
+                ) from exc
 
             if structured.final is not None:
+                final_block = structured.final
+                if depth == 0:
+                    final_block = self._normalize_root_final(
+                        final_block,
+                        system_id,
+                        supported_action_types,
+                        action_aliases,
+                    )
+                else:
+                    self._validate_child_final(final_block, depth)
                 return _ThreadResult(
-                    return_payload=self._build_return_payload(structured.final),
-                    final=structured.final,
+                    return_payload=self._build_return_payload(final_block),
+                    final=final_block,
                 )
 
             if structured.spawn is not None:
@@ -406,6 +431,8 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                     runtime=runtime,
                     transcript_lines=transcript_lines,
                     spawn=structured.spawn,
+                    supported_action_types=supported_action_types,
+                    action_aliases=action_aliases,
                 )
 
                 if child_feedback is not None:
@@ -421,6 +448,10 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             tool = structured.tool
             args = structured.args or {}
             if tool:
+                if tool not in self.allowed_tools:
+                    raise StrictContractViolation(
+                        f"ThreadAgentic requested disallowed tool '{tool}' at depth={depth}"
+                    )
                 tool_result = await self._execute_tool(tool, args, state, context)
                 runtime.tool_calls += 1
                 compact_result = self._compact_json(tool_result, self.max_tool_result_chars)
@@ -433,15 +464,87 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 )
                 continue
 
-            break
+            raise StrictContractViolation(
+                f"ThreadAgentic response at depth={depth} must include one of: final, spawn, or tool"
+            )
 
         self.metrics.increment(
             "polaris.strategy.thread_agentic.step_limit_reached",
             tags={"system_id": system_id, "depth": str(depth)},
         )
-        if depth == 0:
-            return _ThreadResult(return_payload="root_thread_no_final")
-        return _ThreadResult(return_payload="child_thread_no_final")
+        raise StrictContractViolation(
+            f"ThreadAgentic thread at depth={depth} reached step limit without final output"
+        )
+
+    def _normalize_root_final(
+        self,
+        final: ThreadFinalBlock,
+        system_id: str,
+        supported_action_types: Optional[List[str]] = None,
+        action_aliases: Optional[Dict[str, str]] = None,
+    ) -> ThreadFinalBlock:
+        """Validate and normalize root final output under strict contracts."""
+        supported = supported_action_types or []
+        if not supported:
+            raise StrictContractViolation(
+                "ThreadAgentic root final normalization requires supported action types"
+            )
+
+        if final.return_payload is not None:
+            raise StrictContractViolation("Root thread final must not include 'return_payload'")
+
+        if not isinstance(final.needs_adaptation, bool):
+            raise StrictContractViolation("Root thread final requires boolean 'needs_adaptation'")
+
+        if not isinstance(final.reasoning, str) or not final.reasoning.strip():
+            raise StrictContractViolation("Root thread final requires non-empty 'reasoning'")
+
+        if final.needs_adaptation and not final.actions:
+            raise StrictContractViolation(
+                "Root thread final with needs_adaptation=true requires non-empty 'actions'"
+            )
+        if not final.needs_adaptation and final.actions:
+            raise StrictContractViolation(
+                "Root thread final with needs_adaptation=false must not include actions"
+            )
+
+        normalized_actions: List[ActionBlock] = []
+        for action in final.actions:
+            if not isinstance(action.type, str) or not action.type.strip():
+                raise StrictContractViolation("Each root action requires non-empty 'type'")
+            if not isinstance(action.parameters, dict):
+                raise StrictContractViolation("Each root action requires object 'parameters'")
+
+            resolved = self._action_resolver.resolve_action_type(
+                action.type,
+                supported,
+                action_aliases,
+            )
+            if resolved is None:
+                raise StrictContractViolation(
+                    f"Unsupported action type '{action.type}' for system '{system_id}'"
+                )
+            normalized_actions.append(
+                ActionBlock(type=resolved, parameters=dict(action.parameters))
+            )
+
+        final.actions = normalized_actions
+        return final
+
+    def _validate_child_final(self, final: ThreadFinalBlock, depth: int) -> None:
+        """Validate child-thread final output under strict contracts."""
+        if final.needs_adaptation is not None:
+            raise StrictContractViolation(
+                f"Child thread final at depth={depth} must not set 'needs_adaptation'"
+            )
+        if final.actions:
+            raise StrictContractViolation(
+                f"Child thread final at depth={depth} must not include 'actions'"
+            )
+        if not isinstance(final.return_payload, str) or not final.return_payload.strip():
+            raise StrictContractViolation(
+                f"Child thread final at depth={depth} requires non-empty 'return_payload'"
+            )
 
     async def _handle_spawn(
         self,
@@ -453,6 +556,8 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         runtime: _ThreadRuntime,
         transcript_lines: List[str],
         spawn: SpawnBlock,
+        supported_action_types: Optional[List[str]] = None,
+        action_aliases: Optional[Dict[str, str]] = None,
     ) -> Optional[str]:
         """Handle spawning a child thread and returning psi-framed payload."""
         objective = (spawn.objective or "").strip()
@@ -509,6 +614,8 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                     depth=depth + 1,
                     lineage=child_lineage,
                     runtime=runtime,
+                    supported_action_types=supported_action_types,
+                    action_aliases=action_aliases,
                 ),
                 timeout=self.child_timeout_seconds,
             )
@@ -520,14 +627,16 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 tags={"system_id": system_id, "depth": str(depth + 1)},
             )
             return self._psi("child_timeout")
-        except Exception as e:
+        except StrictContractViolation:
+            raise
+        except Exception as exc:
             if self.logger:
                 self.logger.warning(
                     "ThreadAgentic child execution failed",
-                    error=str(e),
+                    error=str(exc),
                     depth=depth + 1,
                 )
-            return self._psi(f"child_error: {type(e).__name__}")
+            return self._psi(f"child_error: {type(exc).__name__}")
 
     async def _execute_tool(
         self,
@@ -537,26 +646,10 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         context: AdaptationContext,
     ) -> Dict[str, Any]:
         """Execute a strategy tool with connector/world/knowledge dependencies."""
-        if tool not in self.allowed_tools:
-            from polaris.tools import ToolError
-
-            return ToolError(
-                code="tool_not_allowed",
-                message=f"tool_not_allowed: {tool}",
-                recoverable=True,
-            ).to_dict()
-
-        connector = None
-        if callable(self._get_connector):
-            try:
-                connector = self._get_connector(state.system_id)
-            except Exception:
-                connector = None
-
         deps = ToolDependencies(
             knowledge_store=self.knowledge_store,
             world_model=self.world_model,
-            connector=connector,
+            system_contract=context.system_contract,
             logger=self.logger,
             metrics=self.metrics,
         )
@@ -574,17 +667,28 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 tags={"tool": tool, "system_id": state.system_id},
             )
             return result
-        except Exception as e:
+        except Exception as exc:
             self.metrics.increment(
                 "polaris.strategy.thread_agentic.tool_error",
                 tags={"tool": tool, "system_id": state.system_id},
             )
             if self.logger:
-                self.logger.error("ThreadAgentic tool execution error", tool=tool, error=str(e))
-            return {"error": f"tool_error: {type(e).__name__}: {str(e)}"}
+                self.logger.error("ThreadAgentic tool execution error", tool=tool, error=str(exc))
+            return {"error": f"tool_error: {type(exc).__name__}: {str(exc)}"}
 
-    def _system_prompt(self, system_id: str, depth: int) -> str:
+    def _system_prompt(
+        self,
+        system_id: str,
+        depth: int,
+        supported_action_types: Optional[List[str]] = None,
+    ) -> str:
         """Build the system prompt for a thread depth."""
+        supported_actions_text = (
+            ", ".join(supported_action_types)
+            if supported_action_types
+            else "unknown (use connector-supported canonical action names)"
+        )
+
         if system_id and self._per_system_prompts:
             override = self._per_system_prompts.get(system_id)
             if override:
@@ -595,6 +699,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                         allowed_tools=", ".join(self.allowed_tools),
                         listen_token=self.listen_token,
                         return_token=self.return_token,
+                        supported_actions=supported_actions_text,
                     )
                 except Exception:
                     return override
@@ -607,6 +712,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                     allowed_tools=", ".join(self.allowed_tools),
                     listen_token=self.listen_token,
                     return_token=self.return_token,
+                    supported_actions=supported_actions_text,
                 )
             except Exception:
                 return self._system_prompt_template
@@ -617,10 +723,15 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             "Each step must use exactly one of these forms:\n"
             '1) {"tool": "name", "args": {...}}\n'
             '2) {"spawn": {"objective": "...", "context_hint": "..."}}\n'
-            '3) {"final": {"return_payload": "...", "needs_adaptation": true|false, '
-            '"reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}\n'
-            "Root thread (depth 0) must decide adaptation using needs_adaptation and actions. "
-            "Child threads should return concise return_payload summaries to parent. "
+            '3) {"final": {"needs_adaptation": true|false, "reasoning": "...", '
+            '"actions": [{"type": "...", "parameters": {...}}]}} (root only)\n'
+            '4) {"final": {"return_payload": "...", "reasoning": "..."}} (child only)\n'
+            "Root thread (depth 0) must output needs_adaptation + actions and MUST NOT include return_payload. "
+            "If root sets needs_adaptation=true, actions must contain at least one action. "
+            "If root sets needs_adaptation=false, actions must be omitted or empty. "
+            "Never output return_payload as null/'null'/'None'. "
+            f"Connector-supported action types: {supported_actions_text}. "
+            "Child threads should return concise return_payload summaries to parent and SHOULD NOT output actions. "
             "When parent receives child output, it is framed with tokens "
             f"{self.listen_token} and {self.return_token}. "
             f"Current depth: {depth}. Allowed tools: {', '.join(self.allowed_tools)}."
@@ -639,27 +750,9 @@ class ThreadAgenticStrategy(AdaptationStrategy):
 
     def _initial_user_prompt(self, state: SystemState, context: AdaptationContext) -> str:
         """Build root thread input from current system state."""
-        metrics = []
-        for k, v in state.metrics.items():
-            try:
-                metrics.append({"name": k, "value": v.value, "unit": v.unit})
-            except Exception:
-                metrics.append(
-                    {
-                        "name": k,
-                        "value": str(getattr(v, "value", None)),
-                        "unit": getattr(v, "unit", None),
-                    }
-                )
-
-        data = {
-            "system_id": state.system_id,
-            "health": getattr(state.health_status, "value", "unknown"),
-            "timestamp": state.timestamp.isoformat(),
-            "metrics": metrics,
-            "world_model_insights": context.world_model_insights or {},
-        }
-        return json.dumps({"current_state": data})
+        return json.dumps(
+            {"current_state": json.loads(format_system_state_for_llm(state, context))}
+        )
 
     def _phi(
         self,
@@ -714,90 +807,9 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             return text
         return text[:max_chars] + "..."
 
-    def _parse_json(self, content: str) -> Any:
-        """Parse JSON from potentially noisy model output."""
-        raw = (content or "").strip()
-        if not raw:
-            return {}
-
-        fence_match = re.search(
-            r"```(?:json)?\s*(?P<body>.*?)\s*```",
-            raw,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        candidates: List[str] = []
-        if fence_match:
-            candidates.append(fence_match.group("body").strip())
-        candidates.append(raw)
-
-        for cand in candidates:
-            parsed = self._extract_first_json_value(cand)
-            if parsed is not None:
-                return parsed
-
-        if self.logger:
-            self.logger.warning(
-                "ThreadAgentic received malformed JSON",
-                content_preview=raw[:500],
-            )
-        return {}
-
-    def _extract_first_json_value(self, text: str) -> Optional[Any]:
-        """Extract first JSON value from text while respecting strings/escapes."""
-        s = (text or "").strip()
-        if not s:
-            return None
-
-        try:
-            return json.loads(s)
-        except Exception:
-            pass
-
-        start = None
-        for i, ch in enumerate(s):
-            if ch in "[{":
-                start = i
-                break
-        if start is None:
-            return None
-
-        opening = s[start]
-        closing = "]" if opening == "[" else "}"
-        depth = 0
-        in_str = False
-        escape = False
-
-        for j in range(start, len(s)):
-            ch = s[j]
-            if in_str:
-                if escape:
-                    escape = False
-                    continue
-                if ch == "\\":
-                    escape = True
-                    continue
-                if ch == '"':
-                    in_str = False
-                continue
-
-            if ch == '"':
-                in_str = True
-                continue
-
-            if ch == opening:
-                depth += 1
-                continue
-
-            if ch == closing:
-                depth -= 1
-                if depth == 0:
-                    snippet = s[start : j + 1]
-                    try:
-                        return json.loads(snippet)
-                    except Exception:
-                        return None
-
-        return None
+    def _parse_json_object(self, content: str) -> Dict[str, Any]:
+        """Parse strict JSON object from model output."""
+        return parse_strict_json(content, StrictContractViolation)
 
     async def on_action_executed(self, action: AdaptationAction, result: Any) -> None:
         """Track execution outcomes for strategy performance metrics."""
@@ -850,6 +862,14 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 description="Maximum total thread count per assessment",
                 kind="agent_steps_limit",
             ),
+            "assessment_cooldown_seconds": ParameterSpec(
+                current_value=self.assessment_cooldown_seconds,
+                type=float,
+                min_value=0.0,
+                max_value=3600.0,
+                description="Minimum seconds between consecutive assessments",
+                kind="cooldown",
+            ),
         }
 
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
@@ -866,6 +886,9 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         if parameter_path == "max_total_threads":
             self.max_total_threads = max(1, int(new_value))
             return True
+        if parameter_path == "assessment_cooldown_seconds":
+            self.assessment_cooldown_seconds = max(0.0, float(new_value))
+            return True
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
@@ -878,6 +901,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             "steps_limit",
             "max_thread_depth",
             "max_total_threads",
+            "assessment_cooldown_seconds",
         ):
             if key in config:
                 await self.update_parameter(key, config[key])
@@ -918,9 +942,9 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             try:
                 llm_any: Any = self.llm
                 llm_any.update_resilience(resil)
-            except Exception as e:
+            except Exception as exc:
                 if self.logger:
-                    self.logger.warning("ThreadAgentic resilience update failed", error=str(e))
+                    self.logger.warning("ThreadAgentic resilience update failed", error=str(exc))
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy-level outcome metrics."""

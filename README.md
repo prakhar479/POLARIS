@@ -1,6 +1,6 @@
 # Polaris - Modular Self-Adaptive Systems Framework
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 **Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of ![POLARIS](./POLARIS_Framework.pdf)). It provides a simple default experience while allowing full customization of every component.
 
@@ -171,7 +171,12 @@ Polaris supports multiple LLM-powered strategies:
 - `multi_agent`: Committee of three specialized agents (Diagnostician → Planner → SafetyValidator); each agent can use its own LLM provider, temperature, and prompt
 - `hybrid`: Combine any strategies (including LLM-based ones) with configurable selection mode
 
-You can choose the LLM provider per strategy. Supported providers: `google` (Gemini, default) and `openai`.
+You can choose the LLM provider per strategy. Supported canonical providers:
+`google`, `openai`, `openrouter`, `groq`, and `ollama`.
+
+LLM strategies run in strict mode: model output must be schema-valid JSON and use
+`actions` lists only. A strict-contract violation fails that system iteration while
+other systems continue running.
 
 Example (multi-agent strategy with per-agent LLM config):
 
@@ -179,7 +184,7 @@ Example (multi-agent strategy with per-agent LLM config):
 strategy:
   type: multi_agent
   multi_agent:
-    provider: google           # Shared/fallback provider
+    provider: google           # Shared default provider
     temperature: 0.1
     steps_limit: 3             # Max reasoning steps per agent (new)
     system_description: "SWIM web application server pool"
@@ -206,7 +211,7 @@ Example (agentic LLM strategy):
 strategy:
   type: agentic_llm
   agentic_llm:
-    provider: google   # or "openai"
+    provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
     steps_limit: 3
     temperature: 0.1
     tools:
@@ -232,7 +237,7 @@ Example (THREAD recursive strategy):
 strategy:
   type: thread_agentic
   thread_agentic:
-    provider: google   # or "openai"
+    provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
     steps_limit: 4
     max_thread_depth: 3
     max_total_threads: 16

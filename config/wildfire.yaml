@@ -41,6 +41,21 @@ systems:
       # Wildfire dynamics change quickly, so frequent sampling is critical
       collection_interval: 3
 
+    # Generic per-system action policy.
+    # append_each_cycle is equivalent to the old always_step_each_cycle behavior.
+    # inject_when_no_actions is equivalent to the old auto_step_when_no_adaptation behavior.
+    action_policy:
+      inject_when_no_actions:
+        enabled: true
+        action:
+          type: "wildfire_step"
+          parameters: {}
+      append_each_cycle:
+        enabled: true
+        action:
+          type: "wildfire_step"
+          parameters: {}
+
 ################################################################################
 # 2. MONITORING CONFIGURATION
 ################################################################################
@@ -53,23 +68,6 @@ monitoring:
   # Adapt every 5 seconds - fire spread is dynamic and requires quick response
   # Faster than typical web app systems (which use 10-30s intervals)
   interval_seconds: 5
-
-################################################################################
-# 2.1 WILDFIRE SIMULATION CLOCK
-################################################################################
-#
-# The Wildfire simulator can be step-driven (i.e., the timestep only advances
-# when /api/v1/sim/step is called). In such setups, Polaris must step the
-# simulation even when no adaptation is proposed.
-#
-# When enabled, Polaris will automatically call the connector action
-# `wildfire_step` whenever the strategy returns no actions.
-#
-wildfire:
-  auto_step_when_no_adaptation: true
-  # Option B: always advance the simulation clock once per cycle.
-  # This appends an additional `wildfire_step` after any proposed actions.
-  always_step_each_cycle: true
 
 ################################################################################
 # 3. ADAPTATION STRATEGY - AGENTIC LLM
@@ -95,9 +93,9 @@ strategy:
 
   agentic_llm:
     # Use Google's models (fast, cost-effective for real-time control)
-    provider: ollama 
+    provider: ollama
     base_url: "http://10.10.16.46:11435"  # Ollama local server
-    model: "qwen2.5:32b"                      
+    model: "qwen2.5:32b"
 
     # System description: helps LLM understand the domain
     system_description: |
