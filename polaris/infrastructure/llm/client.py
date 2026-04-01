@@ -897,6 +897,7 @@ class ResilientLLMClient(LLMClient):
                         preview = resp.content if len(resp.content) <= 2000 else resp.content[:2000]
                         self._logger.info("response_preview=%s", preview)
                     except Exception:
+                        # Silently ignore preview logging failures - not critical
                         pass
                     return resp
 
@@ -948,12 +949,14 @@ class ResilientLLMClient(LLMClient):
                 self._capacity = new_cap
                 self._tokens = min(self._tokens, float(self._capacity))
             except Exception:
+                # Silently ignore invalid burst value - keep existing setting
                 pass
 
         if "rps" in new_resilience:
             try:
                 self._refill_rate = float(new_resilience["rps"])
             except Exception:
+                # Silently ignore invalid rps value - keep existing setting
                 pass
 
         for k in ("max_retries", "base_backoff_ms", "max_backoff_ms"):
@@ -961,6 +964,7 @@ class ResilientLLMClient(LLMClient):
                 try:
                     setattr(self, k, int(new_resilience[k]))
                 except Exception:
+                    # Silently ignore invalid resilience value - keep existing setting
                     pass
 
         if "concurrency" in new_resilience:
@@ -969,6 +973,7 @@ class ResilientLLMClient(LLMClient):
                 if new_conc > 0:
                     self._semaphore = asyncio.Semaphore(new_conc)
             except Exception:
+                # Silently ignore invalid concurrency value - keep existing setting
                 pass
 
 

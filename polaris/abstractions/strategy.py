@@ -1,5 +1,7 @@
 """Adaptation strategy interface for decision-making."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -7,12 +9,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from polaris.abstractions.system_contract import SystemContract
     from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
-else:
-    # Use Any as fallback for runtime type checks if models can't be imported
-    # (avoiding circular imports)
-    AdaptationAction = Any
-    ExecutionResult = Any
-    SystemState = Any
 
 
 @dataclass
@@ -47,8 +43,8 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     async def assess(
-        self, state: "SystemState", context: AdaptationContext
-    ) -> List["AdaptationAction"]:
+        self, state: SystemState, context: AdaptationContext
+    ) -> List[AdaptationAction]:
         """Assess system state and decide on adaptation.
 
         Args:
@@ -90,7 +86,11 @@ class AdaptationStrategy(ABC):
         pass
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
-        """Apply configuration updates for hot-reload."""
+        """Apply configuration updates for hot-reload.
+
+        Default implementation is a no-op. Override in subclasses to support
+        runtime configuration updates without restart.
+        """
         return
 
     async def get_performance_metrics(self) -> Dict[str, float]:

@@ -5,8 +5,9 @@ actions survive process restarts.
 
 Usage::
 
-store = SQLiteKnowledgeStore(db_path="./polaris_data.db") await store.store_state(state)
-states = await store.query_states(system_id, start, end)
+    store = SQLiteKnowledgeStore(db_path="./polaris_data.db")
+    await store.store_state(state)
+    states = await store.query_states(system_id, start, end)
 """
 
 import asyncio

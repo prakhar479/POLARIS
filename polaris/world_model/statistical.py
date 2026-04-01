@@ -136,6 +136,15 @@ class StatisticalWorldModel(WorldModel):
         self._update_regime(state)
 
     def _update_regime(self, state: SystemState) -> None:
+        """Update HMM-style regime probabilities based on current metrics.
+
+        Uses a simple Hidden Markov Model approach to track system operating
+        regimes (low, normal, high load). Updates transition probabilities
+        using emission preferences derived from CPU usage and response time.
+
+        Args:
+            state: Current system state containing metrics to analyze.
+        """
         system_id = state.system_id
         if system_id not in self._regime_probs:
             # Start with uniform prior over regimes

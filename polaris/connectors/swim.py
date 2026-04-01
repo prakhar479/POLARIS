@@ -65,6 +65,8 @@ class SWIMConnector(Connector):
                     self._metrics.increment("polaris.connector.swim.connected")
                 return True
             except Exception as exc:
+                # Broad catch is intentional: SWIM socket connections can fail in
+                # unpredictable ways (connection refused, timeout, malformed response).
                 last_error = exc
                 self._connected = False
                 if self._logger and attempt < attempts:
@@ -262,6 +264,8 @@ class SWIMConnector(Connector):
             )
 
         except Exception as exc:
+            # Broad catch is intentional: SWIM telemetry collection can fail due to
+            # socket errors, connection issues, or malformed responses.
             if self._logger:
                 self._logger.error(
                     "SWIMConnector telemetry collection failed",
@@ -377,6 +381,8 @@ class SWIMConnector(Connector):
             )
 
         except Exception as exc:
+            # Broad catch is intentional: SWIM action execution can fail due to
+            # socket errors, connection issues, or protocol violations.
             if self._metrics:
                 duration = time.monotonic() - start_time
                 self._metrics.histogram(

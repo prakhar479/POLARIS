@@ -93,6 +93,9 @@ class KubernetesConnector(Connector):
                 self._logger.error("The 'kubernetes' package is not installed.")
             return False
         except Exception as exc:
+            # Broad catch is intentional: Kubernetes API connections can fail in many
+            # unpredictable ways (auth, RBAC, network, API server issues). All are handled
+            # uniformly with logging and metrics.
             self._connected = False
             if self._logger:
                 self._logger.error("KubernetesConnector connection failed", error=str(exc))
@@ -218,6 +221,8 @@ class KubernetesConnector(Connector):
             )
 
         except Exception as exc:
+            # Broad catch is intentional: Kubernetes API calls can fail due to network
+            # issues, API server unavailability, permission errors, etc.
             if self._logger:
                 self._logger.error("Kubernetes telemetry collection failed", error=str(exc))
             if self._metrics:
@@ -337,6 +342,8 @@ class KubernetesConnector(Connector):
                 )
 
         except Exception as exc:
+            # Broad catch is intentional: Kubernetes API operations can fail due to
+            # network issues, permission errors, resource conflicts, etc.
             if self._logger:
                 self._logger.error(
                     "Kubernetes action execution failed",

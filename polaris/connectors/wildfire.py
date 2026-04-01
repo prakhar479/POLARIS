@@ -92,6 +92,9 @@ class WildfireConnector(Connector):
 
             return True
         except Exception as exc:
+            # Broad catch is intentional: external system connections can fail in many
+            # unpredictable ways (network, auth, timeout, service errors). All are handled
+            # uniformly with logging and metrics.
             self._connected = False
             if self._logger:
                 self._logger.error(
@@ -232,6 +235,8 @@ class WildfireConnector(Connector):
                 metadata={"raw_metrics": metrics_payload},
             )
         except Exception as exc:
+            # Broad catch is intentional: telemetry collection from external systems can
+            # fail due to network issues, malformed responses, timeouts, etc.
             if self._logger:
                 self._logger.error(
                     "WildfireConnector telemetry collection failed",
@@ -329,6 +334,8 @@ class WildfireConnector(Connector):
                 execution_time_ms=duration_ms,
             )
         except Exception as exc:
+            # Broad catch is intentional: action execution on external systems can fail
+            # due to network issues, service errors, invalid responses, etc.
             duration_ms = int((time.monotonic() - start) * MILLISECONDS_PER_SECOND)
             if self._metrics:
                 self._metrics.histogram(

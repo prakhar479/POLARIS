@@ -119,7 +119,8 @@ class StatisticalMetaLearner(MetaLearner):
                     "avg_metric_std": avg_std,
                     "regime": regime_info,
                 }
-            except Exception:  # Best-effort, do not break analysis on WM issues
+            except Exception:
+                # Best-effort world model insights - do not break analysis on WM issues
                 pass
 
         # Basic recommendations
