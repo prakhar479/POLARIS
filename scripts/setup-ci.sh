@@ -16,9 +16,20 @@ fi
 PYTHON_BIN="python"
 if [ -x ".venv/bin/python" ]; then
     PYTHON_BIN=".venv/bin/python"
+elif command -v python3.10 >/dev/null 2>&1; then
+    PYTHON_BIN="python3.10"
 fi
 
 echo "Using Python interpreter: $PYTHON_BIN"
+
+PYTHON_VERSION="$($PYTHON_BIN -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')"
+PYTHON_MAJOR="${PYTHON_VERSION%%.*}"
+PYTHON_MINOR="${PYTHON_VERSION#*.}"
+
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]; }; then
+    echo "ERROR: Python 3.10 or newer is required, but found $PYTHON_VERSION"
+    exit 1
+fi
 
 # Install dependencies
 echo "Installing dependencies..."
@@ -45,39 +56,21 @@ else
     echo "✓ POLARIS_PAT is configured"
 fi
 
-# Run initial checks
-echo "Running initial quality checks..."
+echo "Running initial quality checks via Makefile targets..."
 echo ""
 
-echo "=== Black Formatting Check ==="
-if "$PYTHON_BIN" -m black --check --line-length=100 polaris/ tests/ examples/; then
-    echo "✓ Code is properly formatted with Black"
+if make PYTHON="$PYTHON_BIN" pre-commit-check; then
+    echo "✓ Pre-commit-aligned checks passed"
 else
-    echo "⚠ Code needs formatting. Run 'make format' to fix"
+    echo "⚠ Pre-commit-aligned checks reported issues"
 fi
 
 echo ""
-echo "=== isort Import Sorting Check ==="
-if "$PYTHON_BIN" -m isort --check-only --line-length=100 polaris/ tests/ examples/; then
-    echo "✓ Imports are properly sorted"
-else
-    echo "⚠ Imports need sorting. Run 'make format' to fix"
-fi
 
-echo ""
-echo "=== mypy Type Checking ==="
-if "$PYTHON_BIN" -m mypy polaris/ --ignore-missing-imports; then
-    echo "✓ Type checking passed"
+if make PYTHON="$PYTHON_BIN" ci; then
+    echo "✓ CI-aligned checks passed"
 else
-    echo "⚠ Type checking issues found"
-fi
-
-echo ""
-echo "=== Test Suite ==="
-if "$PYTHON_BIN" -m pytest tests/ -v --tb=short; then
-    echo "✓ All tests passed"
-else
-    echo "⚠ Some tests failed"
+    echo "⚠ CI-aligned checks reported issues"
 fi
 
 echo ""

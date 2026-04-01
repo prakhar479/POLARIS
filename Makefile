@@ -1,4 +1,11 @@
-.PHONY: help install install-dev test test-verbose test-all format format-check lint type-check clean install-hooks run-hooks build docs
+.PHONY: help install install-dev test test-verbose test-all format format-check lint type-check dependency-check pre-commit-check ci clean install-hooks run-hooks build docs
+
+LINE_LENGTH ?= 100
+PYTHON ?= python
+BLACK_ARGS := --line-length=$(LINE_LENGTH)
+ISORT_ARGS := --profile=black --line-length=$(LINE_LENGTH)
+MYPY_ARGS := --ignore-missing-imports
+FLAKE8_ARGS := polaris/ examples/ --max-line-length=$(LINE_LENGTH) --extend-ignore=E203,W503,E221,E225,E231,E272,E501,E201,E202
 
 # Default target
 help:
@@ -20,36 +27,39 @@ help:
 
 # Installation
 install:
-	pip install -e .
+	$(PYTHON) -m pip install -e .
 
 install-dev:
-	pip install -e .[dev]
+	$(PYTHON) -m pip install -e .[dev]
 
 # Testing
 test:
-	pytest tests/ -v --tb=short
+	$(PYTHON) -m pytest tests/ -v --tb=short
 
 test-verbose:
-	pytest tests/ -vv --tb=long
+	$(PYTHON) -m pytest tests/ -vv --tb=long
 
 test-all:
-	pytest tests/ -v --cov=polaris --cov-report=term-missing --cov-fail-under=60
+	$(PYTHON) -m pytest tests/ -v --cov=polaris --cov-report=xml --cov-report=term-missing --cov-fail-under=60
 
 # Code formatting
 format:
-	black --line-length=100 polaris/ tests/ examples/
-	isort --line-length=100 polaris/ tests/ examples/
+	$(PYTHON) -m black $(BLACK_ARGS) polaris/ tests/ examples/
+	$(PYTHON) -m isort $(ISORT_ARGS) polaris/ tests/ examples/
 
 format-check:
-	black --check --diff --line-length=100 polaris/ tests/ examples/
-	isort --check-only --diff --line-length=100 polaris/ tests/ examples/
+	$(PYTHON) -m black --check --diff $(BLACK_ARGS) polaris/ tests/ examples/
+	$(PYTHON) -m isort --check-only --diff $(ISORT_ARGS) polaris/ tests/ examples/
 
 # Linting and quality
 lint:
-	flake8 polaris/ examples/ --max-line-length=100 --extend-ignore=E203,W503,E221,E225,E231,E272,E501,E201,E202
+	$(PYTHON) -m flake8 $(FLAKE8_ARGS)
 
 type-check:
-	mypy polaris/ --ignore-missing-imports
+	$(PYTHON) -m mypy $(MYPY_ARGS) polaris/
+
+dependency-check:
+	$(PYTHON) -m pip check
 
 # Development workflow
 install-hooks:
@@ -73,12 +83,15 @@ clean:
 	find . -type f -name "*.pyc" -delete
 
 build: clean
-	python -m build --wheel --sdist .
+	$(PYTHON) -m build --wheel --sdist .
+
+# Pre-commit-aligned local check
+pre-commit-check: format-check lint type-check test dependency-check
 
 # Full CI pipeline locally
-ci: format lint type-check test-all
+ci: format-check lint type-check test-all dependency-check
 	@echo "All CI checks passed!"
 
 # Quick check before commit
-pre-commit: format-check lint type-check test
+pre-commit: pre-commit-check
 	@echo "Pre-commit checks completed!"

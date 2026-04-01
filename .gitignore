@@ -31,3 +31,5 @@ wildfire/
 .mypy
 .mypy_cache
 .benchmarks
+coverage.xml
+dist/
