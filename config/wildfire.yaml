@@ -91,7 +91,7 @@ monitoring:
 strategy:
   type: "agentic_llm"
 
-  agentic_llm:
+  params:
     # Use Google's models (fast, cost-effective for real-time control)
     provider: ollama
     base_url: "http://10.10.16.46:11435"  # Ollama local server

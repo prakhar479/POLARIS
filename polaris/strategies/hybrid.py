@@ -219,12 +219,10 @@ class HybridStrategy(AdaptationStrategy):
         # Select based on mode
         selected = None
         selected_idx = None
-        best_idx = None  # This variable is introduced by the provided snippet
 
         if self.selection_mode == "first":
             # Return first proposal (highest priority)
             selected, _, _, selected_idx = proposals[0]
-            best_idx = selected_idx
 
         elif self.selection_mode == "priority":
             # Use highest priority strategy with valid action
@@ -232,7 +230,6 @@ class HybridStrategy(AdaptationStrategy):
                 if conf >= self.min_confidence:
                     selected = action_list
                     selected_idx = idx
-                    best_idx = selected_idx
                     break
 
         elif self.selection_mode == "confidence":
@@ -240,7 +237,6 @@ class HybridStrategy(AdaptationStrategy):
             valid = [(al, c, p, i) for al, c, p, i in proposals if c >= self.min_confidence]
             if valid:
                 selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
-                best_idx = selected_idx
 
         # Track which strategy was used.
         # Only update cooldown timestamp when a cooldown-restricted strategy fires.
@@ -260,7 +256,7 @@ class HybridStrategy(AdaptationStrategy):
                 tags={
                     "system_id": state.system_id,
                     "mode": self.selection_mode,
-                    "strategy_index": str(best_idx),
+                    "strategy_index": str(selected_idx),
                 },
             )
 
@@ -349,8 +345,13 @@ class HybridStrategy(AdaptationStrategy):
         if parameter_path.startswith("strategy_"):
             # Parse strategy index and delegate
             parts = parameter_path.split(".", 1)
-            strategy_idx = int(parts[0].split("_")[1])
-            sub_path = parts[1] if len(parts) > 1 else ""
+            if len(parts) != 2:
+                return False
+            try:
+                strategy_idx = int(parts[0].split("_")[1])
+            except (IndexError, ValueError):
+                return False
+            sub_path = parts[1]
 
             if strategy_idx < len(self.strategies):
                 return await self.strategies[strategy_idx][0].update_parameter(sub_path, new_value)
@@ -381,48 +382,17 @@ class HybridStrategy(AdaptationStrategy):
 
         new_subs = config.get("strategies", [])
         if isinstance(new_subs, list) and len(new_subs) == len(self.strategies):
-            for sub_conf, (sub_strategy, _prio) in zip(new_subs, self.strategies):
+            for sub_conf, (sub_strategy, _priority) in zip(new_subs, self.strategies):
                 if not isinstance(sub_conf, dict):
                     continue
-                s_type = sub_conf.get("type")
-                if s_type == "threshold":
-                    th = sub_conf.get("threshold", {}) or {}
-                    cd = th.get("cooldown_seconds")
-                    if cd is not None and hasattr(sub_strategy, "update_parameter"):
-                        await sub_strategy.update_parameter("cooldown_seconds", cd)
-                    thresh = th.get("thresholds", {}) or {}
-                    for metric, vals in thresh.items():
-                        if not isinstance(vals, dict):
-                            continue
-                        if "high" in vals:
-                            await sub_strategy.update_parameter(
-                                f"thresholds.{metric}.high", vals["high"]
-                            )
-                        if "low" in vals:
-                            await sub_strategy.update_parameter(
-                                f"thresholds.{metric}.low", vals["low"]
-                            )
-                elif s_type == "llm_reasoning":
-                    llm_cfg = sub_conf.get("llm_reasoning", {}) or {}
-                    if "temperature" in llm_cfg and hasattr(sub_strategy, "update_parameter"):
-                        await sub_strategy.update_parameter("temperature", llm_cfg["temperature"])
-                    if "system_description" in llm_cfg and hasattr(
-                        sub_strategy, "update_parameter"
-                    ):
-                        await sub_strategy.update_parameter(
-                            "system_description", llm_cfg["system_description"]
-                        )
-                    resil = llm_cfg.get("resilience")
-                    llm_obj = getattr(sub_strategy, "llm", None)
-                    if resil and llm_obj is not None and hasattr(llm_obj, "update_resilience"):
-                        try:
-                            llm_obj.update_resilience(resil)
-                        except Exception as e:
-                            if self._logger:
-                                self._logger.warning(
-                                    "Failed to hot-update sub-strategy LLM resilience",
-                                    error=str(e),
-                                )
+
+                sub_params = sub_conf.get("params", {})
+                if sub_params is None:
+                    sub_params = {}
+                if not isinstance(sub_params, dict):
+                    continue
+
+                await sub_strategy.apply_config_update(sub_params)
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

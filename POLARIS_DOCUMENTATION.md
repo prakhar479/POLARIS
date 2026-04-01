@@ -235,6 +235,9 @@ class MyMetaLearner(MetaLearner):
 
 ### YAML Configuration Example
 
+Polaris uses a canonical strategy schema: set `strategy.type`, then put
+strategy-specific fields under `strategy.params`.
+
 ```yaml
 systems:
   - id: my_system
@@ -245,12 +248,12 @@ systems:
       port: 8080
 
 strategy:
-  type: threshold
-  threshold:
-    thresholds:
-      cpu_usage: {high: 80.0, low: 20.0}
-      memory_usage: {high: 85.0, low: 25.0}
-    cooldown_seconds: 60
+    type: threshold
+    params:
+        thresholds:
+            cpu_usage: {high: 80.0, low: 20.0}
+            memory_usage: {high: 85.0, low: 25.0}
+        cooldown_seconds: 60
 
 observability:
   logging:

@@ -191,7 +191,7 @@ class TestThresholdReactiveStrategy:
 
     @pytest.mark.asyncio
     async def test_invalid_metric_value(self, strategy, context):
-        """Test handling of non-numeric metric values."""
+        """Configured threshold metrics must be numeric at runtime (fail-fast)."""
         state = SystemState(
             system_id="test-system",
             timestamp=datetime.now(timezone.utc),
@@ -199,9 +199,8 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        actions = await strategy.assess(state, context)
-        assert isinstance(actions, list)
-        assert len(actions) == 0
+        with pytest.raises(ValueError, match="expected numeric metric value"):
+            await strategy.assess(state, context)
 
     @pytest.mark.asyncio
     async def test_server_count_logic(self, strategy, context):

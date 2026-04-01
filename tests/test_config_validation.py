@@ -121,7 +121,7 @@ def test_threshold_action_templates_accept_valid_structure():
         {
             "strategy": {
                 "type": "threshold",
-                "threshold": {
+                "params": {
                     "thresholds": {"latency": {"high": 250.0, "low": 50.0}},
                     "action_templates": {
                         "default": {
@@ -153,7 +153,7 @@ def test_thread_agentic_accepts_dict_block():
         {
             "strategy": {
                 "type": "thread_agentic",
-                "thread_agentic": {
+                "params": {
                     "provider": "google",
                     "max_thread_depth": 2,
                 },

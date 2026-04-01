@@ -18,6 +18,7 @@ class MockSubStrategy:
         self.confidence = confidence
         self.hybrid_cooldown_exempt = cooldown_exempt
         self.on_action_executed = AsyncMock()
+        self.apply_config_update = AsyncMock()
 
     async def assess(self, state, context):
         return self.actions
@@ -217,12 +218,7 @@ async def test_hybrid_strategy_parameter_updates():
 async def test_hybrid_strategy_apply_config_update():
     """Test applying a broader config update to itself and sub-strategies."""
 
-    class MockUpdateStrategy(MockSubStrategy):
-        def __init__(self, actions=None, confidence=0.8):
-            super().__init__(actions, confidence)
-            self.update_parameter = AsyncMock()
-
-    strat = MockUpdateStrategy()
+    strat = MockSubStrategy()
     hybrid = HybridStrategy(strategies=[(strat, 1)])
 
     config = {
@@ -231,7 +227,7 @@ async def test_hybrid_strategy_apply_config_update():
         "strategies": [
             {
                 "type": "threshold",
-                "threshold": {"cooldown_seconds": 30, "thresholds": {"cpu": {"high": 80}}},
+                "params": {"cooldown_seconds": 30, "thresholds": {"cpu": {"high": 80}}},
             }
         ],
     }
@@ -240,8 +236,9 @@ async def test_hybrid_strategy_apply_config_update():
 
     assert hybrid.selection_mode == "first"
     assert hybrid.min_confidence == 0.9
-    strat.update_parameter.assert_any_call("cooldown_seconds", 30)
-    strat.update_parameter.assert_any_call("thresholds.cpu.high", 80)
+    strat.apply_config_update.assert_called_once_with(
+        {"cooldown_seconds": 30, "thresholds": {"cpu": {"high": 80}}}
+    )
 
 
 @pytest.mark.asyncio
@@ -371,9 +368,6 @@ async def test_hybrid_strategy_get_tunable_parameters():
 @pytest.mark.asyncio
 async def test_hybrid_strategy_apply_config_update_llm_reasoning():
     strat = MockSubStrategy()
-    strat.update_parameter = AsyncMock()
-    strat.llm = Mock()
-    strat.llm.update_resilience = Mock()
 
     hybrid = HybridStrategy(strategies=[(strat, 1)])
 
@@ -382,7 +376,7 @@ async def test_hybrid_strategy_apply_config_update_llm_reasoning():
         "strategies": [
             {
                 "type": "llm_reasoning",
-                "llm_reasoning": {
+                "params": {
                     "temperature": 0.5,
                     "system_description": "test desc",
                     "resilience": {"retries": 3},
@@ -394,23 +388,24 @@ async def test_hybrid_strategy_apply_config_update_llm_reasoning():
     await hybrid.apply_config_update(config)
 
     assert hybrid.cooldown_seconds == 42
-    strat.update_parameter.assert_any_call("temperature", 0.5)
-    strat.update_parameter.assert_any_call("system_description", "test desc")
-    strat.llm.update_resilience.assert_called_with({"retries": 3})
+    strat.apply_config_update.assert_called_once_with(
+        {
+            "temperature": 0.5,
+            "system_description": "test desc",
+            "resilience": {"retries": 3},
+        }
+    )
 
 
 @pytest.mark.asyncio
 async def test_hybrid_strategy_apply_config_update_threshold_missing_nested():
     strat = MockSubStrategy()
-    strat.update_parameter = AsyncMock()
 
     hybrid = HybridStrategy(strategies=[(strat, 1)])
 
-    config = {
-        "strategies": [{"type": "threshold", "threshold": {"thresholds": {"cpu": {"low": 10}}}}]
-    }
+    config = {"strategies": [{"type": "threshold", "params": {"thresholds": {"cpu": {"low": 10}}}}]}
     await hybrid.apply_config_update(config)
-    strat.update_parameter.assert_called_with("thresholds.cpu.low", 10)
+    strat.apply_config_update.assert_called_once_with({"thresholds": {"cpu": {"low": 10}}})
 
 
 @pytest.mark.asyncio

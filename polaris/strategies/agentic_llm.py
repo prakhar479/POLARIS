@@ -25,7 +25,12 @@ from polaris.core.models import AdaptationAction, SystemState
 from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
-from polaris.strategies.action_resolution import ConnectorActionResolver, StrictContractViolation
+from polaris.strategies.action_resolution import (
+    ConnectorActionResolver,
+    StrictContractViolation,
+    require_supported_action_contract,
+    resolve_strict_action_payload,
+)
 from polaris.strategies.utils import (
     DEFAULT_ALLOWED_TOOLS,
     format_system_state_for_llm,
@@ -83,6 +88,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
         temperature: LLM temperature parameter for response randomness
         allowed_tools: List of tools the LLM can use
     """
+
+    requires_system_contract: bool = True
 
     def __init__(
         self,
@@ -158,15 +165,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self.metrics.increment(
             "polaris.strategy.agentic.assessments", tags={"system_id": state.system_id}
         )
-        system_contract = context.system_contract
-        supported_action_types = (
-            system_contract.supported_actions_list() if system_contract is not None else []
+        _contract, supported_action_types, action_aliases = require_supported_action_contract(
+            context,
+            strategy_name="agentic",
         )
-        if not supported_action_types:
-            raise StrictContractViolation(
-                "Missing connector-supported action contract for strict agentic strategy"
-            )
-        action_aliases = dict(system_contract.action_aliases) if system_contract else {}
         start = datetime.now(timezone.utc)
         messages: List[LLMMessage] = [
             LLMMessage(
@@ -231,38 +233,34 @@ class AgenticLLMStrategy(AdaptationStrategy):
 
                     proposed_actions: List[AdaptationAction] = []
                     for ab in final.actions:
-                        if not isinstance(ab.type, str) or not ab.type.strip():
-                            raise StrictContractViolation(
-                                "Agentic action requires non-empty 'type'"
-                            )
-                        if not isinstance(ab.parameters, dict):
-                            raise StrictContractViolation(
-                                "Agentic action requires object 'parameters'"
-                            )
-
-                        resolved_action_type = self._action_resolver.resolve_action_type(
-                            ab.type,
-                            supported_action_types,
-                            action_aliases,
+                        resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                            resolver=self._action_resolver,
+                            action_type=ab.type,
+                            parameters=ab.parameters,
+                            supported_action_types=supported_action_types,
+                            action_aliases=action_aliases,
+                            system_id=state.system_id,
+                            missing_type_error="Agentic action requires non-empty 'type'",
+                            invalid_parameters_error="Agentic action requires object 'parameters'",
                         )
-                        if resolved_action_type is None:
-                            raise StrictContractViolation(
-                                f"Unsupported action type '{ab.type}' for system '{state.system_id}'"
-                            )
 
                         proposed_actions.append(
                             AdaptationAction(
                                 action_id=str(uuid.uuid4()),
                                 action_type=resolved_action_type,
                                 target_system=state.system_id,
-                                parameters={**ab.parameters, "llm_reasoning": final.reasoning},
+                                parameters={
+                                    **resolved_parameters,
+                                    "llm_reasoning": final.reasoning,
+                                },
                             )
                         )
 
                     if self.logger:
                         self.logger.info(
-                            f"Agentic decision: propose {len(proposed_actions)} actions",
+                            "Agentic decision: propose actions",
                             system_id=state.system_id,
+                            action_count=len(proposed_actions),
                         )
                     for action in proposed_actions:
                         self.metrics.increment(
@@ -496,7 +494,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                         allowed_tools=", ".join(self.allowed_tools),
                         supported_actions=supported_actions_text,
                     )
-                except Exception:
+                except (KeyError, IndexError, ValueError):
                     return override
 
         tools = ", ".join(self.allowed_tools)
@@ -509,7 +507,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     allowed_tools=tools,
                     supported_actions=supported_actions_text,
                 )
-            except Exception:
+            except (KeyError, IndexError, ValueError):
                 return self._system_prompt_template
 
         tool_descriptions = self._get_tool_descriptions()
@@ -554,7 +552,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
 
         try:
             max_chars = int(os.getenv("POLARIS_LOG_LLM_RAW_MAX_CHARS", "4000"))
-        except Exception:
+        except (TypeError, ValueError):
             max_chars = 4000
 
         safe = content or ""

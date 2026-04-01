@@ -4,6 +4,7 @@ Uses LLM to analyze system state and decide on adaptations.
 """
 
 import json
+import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -14,7 +15,12 @@ from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 from polaris.infrastructure.constants import DEFAULT_JSON_INDENT, DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
-from polaris.strategies.action_resolution import ConnectorActionResolver, StrictContractViolation
+from polaris.strategies.action_resolution import (
+    ConnectorActionResolver,
+    StrictContractViolation,
+    require_supported_action_contract,
+    resolve_strict_action_payload,
+)
 
 
 class LLMReasoningStrategy(AdaptationStrategy):
@@ -24,11 +30,13 @@ class LLMReasoningStrategy(AdaptationStrategy):
     language reasoning.
     """
 
+    requires_system_contract: bool = True
+
     def __init__(
         self,
         llm_client: LLMClient,
-        system_description: str = "A web application server",
-        adaptation_goals: str = "Maintain performance and availability",
+        system_description: str = "Managed system",
+        adaptation_goals: str = "Maintain reliability, performance, and policy objectives",
         temperature: float = 0.1,
         system_prompt: Optional[str] = None,
         per_system_prompts: Optional[Dict[str, str]] = None,
@@ -68,27 +76,35 @@ class LLMReasoningStrategy(AdaptationStrategy):
             tags={"system_id": state.system_id},
         )
         if self.logger:
-            self.logger.debug(f"[LLM Reasoner] Starting assessment for system: {state.system_id}")
-            self.logger.debug(f"[LLM Reasoner] System health: {state.health_status.value}")
-            self.logger.debug(f"[LLM Reasoner] Metrics count: {len(state.metrics)}")
+            self.logger.debug(
+                "LLM reasoning assessment started",
+                system_id=state.system_id,
+                health_status=state.health_status.value,
+                metric_count=len(state.metrics),
+            )
             for metric_name, metric_value in state.metrics.items():
                 self.logger.debug(
-                    f"[LLM Reasoner]   - {metric_name}: {metric_value.value} {metric_value.unit or ''}"
+                    "LLM reasoning metric snapshot",
+                    system_id=state.system_id,
+                    metric=metric_name,
+                    value=getattr(metric_value, "value", None),
+                    unit=getattr(metric_value, "unit", None),
                 )
 
         # Build prompt with system state
         prompt = self._build_prompt(state, context)
         if self.logger:
             self.logger.debug(
-                f"[LLM Reasoner] Built assessment prompt (length: {len(prompt)} chars)"
+                "LLM reasoning prompt built",
+                system_id=state.system_id,
+                prompt_length=len(prompt),
             )
 
         # Call LLM
-        system_contract = context.system_contract
-        supported_action_types = (
-            system_contract.supported_actions_list() if system_contract is not None else []
+        _contract, supported_action_types, action_aliases = require_supported_action_contract(
+            context,
+            strategy_name="LLM",
         )
-        action_aliases = dict(system_contract.action_aliases) if system_contract else {}
 
         messages = [
             LLMMessage(
@@ -100,18 +116,16 @@ class LLMReasoningStrategy(AdaptationStrategy):
 
         if self.logger:
             self.logger.debug(
-                f"[LLM Reasoner] Sending request to LLM with temperature={self.temperature}"
-            )
-            self.logger.debug(
-                f"[LLM Reasoner] System prompt length: {len(messages[0].content)} chars"
-            )
-            self.logger.debug(
-                f"[LLM Reasoner] User prompt length: {len(messages[1].content)} chars"
+                "LLM reasoning request prepared",
+                system_id=state.system_id,
+                temperature=self.temperature,
+                system_prompt_length=len(messages[0].content),
+                user_prompt_length=len(messages[1].content),
             )
 
         try:
             if self.logger:
-                self.logger.info(f"[LLM Reasoner] Calling LLM API for system {state.system_id}...")
+                self.logger.info("LLM reasoning request started", system_id=state.system_id)
 
             llm_start = datetime.now(timezone.utc)
             response = await self.llm.generate(
@@ -127,11 +141,15 @@ class LLMReasoningStrategy(AdaptationStrategy):
 
             if self.logger:
                 self.logger.debug(
-                    f"[LLM Reasoner] Received LLM response (length: {len(response.content)} chars)"
+                    "LLM reasoning response received",
+                    system_id=state.system_id,
+                    response_length=len(response.content),
                 )
-                self.logger.debug("[LLM Reasoner] LLM Response content:")
+                self.logger.debug("LLM reasoning response lines", system_id=state.system_id)
                 for line in response.content.split("\n"):
-                    self.logger.debug(f"[LLM Reasoner] {line}")
+                    self.logger.debug(
+                        "LLM reasoning response line", system_id=state.system_id, line=line
+                    )
 
             # Parse LLM response
             actions = self._parse_response(
@@ -144,12 +162,24 @@ class LLMReasoningStrategy(AdaptationStrategy):
             if actions:
                 if self.logger:
                     self.logger.info(
-                        f"[LLM Reasoner] Adaptation decision: YES ({len(actions)} actions)"
+                        "LLM reasoning adaptation decision",
+                        system_id=state.system_id,
+                        needs_adaptation=True,
+                        action_count=len(actions),
                     )
                     for action in actions:
-                        self.logger.info(f"[LLM Reasoner] Action type: {action.action_type}")
+                        self.logger.info(
+                            "LLM reasoning action proposed",
+                            system_id=state.system_id,
+                            action_type=action.action_type,
+                        )
                         self.logger.debug(
-                            f"[LLM Reasoner] Action parameters: {json.dumps(action.parameters, indent=DEFAULT_JSON_INDENT)}"
+                            "LLM reasoning action parameters",
+                            system_id=state.system_id,
+                            action_parameters=json.dumps(
+                                action.parameters,
+                                indent=DEFAULT_JSON_INDENT,
+                            ),
                         )
                 for action in actions:
                     self.metrics.increment(
@@ -158,7 +188,12 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     )
             else:
                 if self.logger:
-                    self.logger.info("[LLM Reasoner] Adaptation decision: NO")
+                    self.logger.info(
+                        "LLM reasoning adaptation decision",
+                        system_id=state.system_id,
+                        needs_adaptation=False,
+                        action_count=0,
+                    )
                 self.metrics.increment(
                     "polaris.strategy.llm.no_action_needed",
                     tags={"system_id": state.system_id},
@@ -169,11 +204,16 @@ class LLMReasoningStrategy(AdaptationStrategy):
         except Exception as exc:
             if self.logger:
                 self.logger.error(
-                    f"[LLM Reasoner] Error during LLM assessment: {type(exc).__name__}: {str(exc)}"
+                    "LLM reasoning assessment failed",
+                    system_id=state.system_id,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                 )
-                import traceback
-
-                self.logger.debug(f"[LLM Reasoner] Traceback: {traceback.format_exc()}")
+                self.logger.debug(
+                    "LLM reasoning traceback",
+                    system_id=state.system_id,
+                    traceback=traceback.format_exc(),
+                )
             self.metrics.increment(
                 "polaris.strategy.llm.assessment_errors",
                 tags={"system_id": state.system_id},
@@ -203,7 +243,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
                         adaptation_goals=self.adaptation_goals,
                         supported_actions=supported_actions_text,
                     )
-                except Exception:
+                except (KeyError, IndexError, ValueError):
                     return override
 
         # Global template override, optionally formatted
@@ -215,7 +255,7 @@ class LLMReasoningStrategy(AdaptationStrategy):
                     adaptation_goals=self.adaptation_goals,
                     supported_actions=supported_actions_text,
                 )
-            except Exception:
+            except (KeyError, IndexError, ValueError):
                 # If formatting fails, fall back to the raw template
                 return self._system_prompt_template
 
@@ -325,29 +365,23 @@ Should this system be adapted right now? Analyze the state and provide your deci
             if not isinstance(action_data, dict):
                 raise StrictContractViolation("Each action entry must be a JSON object")
 
-            action_type = action_data.get("type")
-            parameters = action_data.get("parameters", {})
-            if not isinstance(action_type, str) or not action_type.strip():
-                raise StrictContractViolation("Each action requires non-empty string 'type'")
-            if not isinstance(parameters, dict):
-                raise StrictContractViolation("Each action requires object 'parameters'")
-
-            resolved_action_type = self._action_resolver.resolve_action_type(
-                action_type,
-                supported_action_types,
-                action_aliases,
+            resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                resolver=self._action_resolver,
+                action_type=action_data.get("type"),
+                parameters=action_data.get("parameters", {}),
+                supported_action_types=supported_action_types,
+                action_aliases=action_aliases,
+                system_id=system_id,
+                missing_type_error="Each action requires non-empty string 'type'",
+                invalid_parameters_error="Each action requires object 'parameters'",
             )
-            if resolved_action_type is None:
-                raise StrictContractViolation(
-                    f"Unsupported action type '{action_type}' for system '{system_id}'"
-                )
 
             adaptation_actions.append(
                 AdaptationAction(
                     action_id=str(uuid.uuid4()),
                     action_type=resolved_action_type,
                     target_system=system_id,
-                    parameters={**parameters, "llm_reasoning": reasoning},
+                    parameters={**resolved_parameters, "llm_reasoning": reasoning},
                 )
             )
 
@@ -374,14 +408,20 @@ Should this system be adapted right now? Analyze the state and provide your deci
         )
 
         if self.logger:
-            status_str = "SUCCESS" if is_success else "FAILED"
-            self.logger.info(f"[LLM Reasoner] Action execution result: {status_str}")
-            self.logger.debug(f"[LLM Reasoner] Action ID: {action.action_id}")
-            self.logger.debug(f"[LLM Reasoner] Action type: {action.action_type}")
-            self.logger.debug(f"[LLM Reasoner] Total adaptations: {self._adaptation_count}")
-            self.logger.debug(f"[LLM Reasoner] Successful adaptations: {self._success_count}")
+            self.logger.info(
+                "LLM reasoning action execution result",
+                action_id=action.action_id,
+                action_type=action.action_type,
+                status="SUCCESS" if is_success else "FAILED",
+                total_adaptations=self._adaptation_count,
+                successful_adaptations=self._success_count,
+            )
             if hasattr(result, "error_message"):
-                self.logger.debug(f"[LLM Reasoner] Error message: {result.error_message}")
+                self.logger.debug(
+                    "LLM reasoning action execution error message",
+                    action_id=action.action_id,
+                    error_message=result.error_message,
+                )
 
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
         """LLM strategy parameters."""
@@ -409,7 +449,10 @@ Should this system be adapted right now? Analyze the state and provide your deci
             self.temperature = float(new_value)
             if self.logger:
                 self.logger.info(
-                    f"[LLM Reasoner] Updated temperature: {old_value} -> {self.temperature}"
+                    "LLM reasoning parameter updated",
+                    parameter="temperature",
+                    old_value=old_value,
+                    new_value=self.temperature,
                 )
             return True
         elif parameter_path == "system_description":
@@ -417,11 +460,17 @@ Should this system be adapted right now? Analyze the state and provide your deci
             self.system_description = str(new_value)
             if self.logger:
                 self.logger.info(
-                    f"[LLM Reasoner] Updated system_description: {old_desc} -> {self.system_description}"
+                    "LLM reasoning parameter updated",
+                    parameter="system_description",
+                    old_value=old_desc,
+                    new_value=self.system_description,
                 )
             return True
         if self.logger:
-            self.logger.warning(f"[LLM Reasoner] Unknown parameter: {parameter_path}")
+            self.logger.warning(
+                "LLM reasoning unknown parameter update",
+                parameter=parameter_path,
+            )
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
@@ -440,10 +489,11 @@ Should this system be adapted right now? Analyze the state and provide your deci
         if resil and hasattr(self.llm, "update_resilience"):
             try:
                 self.llm.update_resilience(resil)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 if self.logger:
                     self.logger.warning(
-                        f"[LLM Reasoner] Failed to hot-update LLM resilience: {exc}"
+                        "LLM reasoning resilience hot-update failed",
+                        error=str(exc),
                     )
 
     async def get_performance_metrics(self) -> Dict[str, float]:

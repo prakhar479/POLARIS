@@ -182,15 +182,13 @@ class ComponentBuilder:
                     ks_cfg.get("max_states_per_system", DEFAULT_MAX_STATES_PER_SYSTEM),
                 )
             )
-        elif ks_type == "memory":
-            memory_cfg = ks_cfg.get("memory", {}) if isinstance(ks_cfg.get("memory"), dict) else {}
-            max_states = int(
-                memory_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 1000))
-            )
-        else:
-            raise ValueError(f"Unknown knowledge store type '{ks_type}'")
 
-        if db_path:
+            if not db_path:
+                raise ValueError(
+                    "knowledge_store type 'sqlite' requires 'knowledge_store.sqlite.db_path' "
+                    "(or legacy 'knowledge_store.db_path')"
+                )
+
             from polaris.knowledge.sqlite_store import SQLiteKnowledgeStore
 
             return SQLiteKnowledgeStore(
@@ -199,6 +197,13 @@ class ComponentBuilder:
                 logger=logger,
                 metrics=ks_metrics,
             )
+        elif ks_type == "memory":
+            memory_cfg = ks_cfg.get("memory", {}) if isinstance(ks_cfg.get("memory"), dict) else {}
+            max_states = int(
+                memory_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 1000))
+            )
+        else:
+            raise ValueError(f"Unknown knowledge store type '{ks_type}'")
 
         from polaris.knowledge import InMemoryKnowledgeStore
 

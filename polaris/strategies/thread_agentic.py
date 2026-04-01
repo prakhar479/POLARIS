@@ -30,7 +30,12 @@ from polaris.core.models import AdaptationAction, SystemState
 from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS_REASONING
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
-from polaris.strategies.action_resolution import ConnectorActionResolver, StrictContractViolation
+from polaris.strategies.action_resolution import (
+    ConnectorActionResolver,
+    StrictContractViolation,
+    require_supported_action_contract,
+    resolve_strict_action_payload,
+)
 from polaris.strategies.utils import (
     DEFAULT_ALLOWED_TOOLS,
     format_system_state_for_llm,
@@ -125,6 +130,8 @@ class _ThreadRuntime:
 
 class ThreadAgenticStrategy(AdaptationStrategy):
     """Recursive THREAD-style adaptation strategy with join synchronization."""
+
+    requires_system_contract: bool = True
 
     def __init__(
         self,
@@ -247,15 +254,10 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             tags={"system_id": state.system_id},
         )
 
-        system_contract = context.system_contract
-        supported_action_types = (
-            system_contract.supported_actions_list() if system_contract is not None else []
+        _contract, supported_action_types, action_aliases = require_supported_action_contract(
+            context,
+            strategy_name="thread-agentic",
         )
-        if not supported_action_types:
-            raise StrictContractViolation(
-                "Missing connector-supported action contract for strict thread-agentic strategy"
-            )
-        action_aliases = dict(system_contract.action_aliases) if system_contract else {}
 
         start = now
         runtime = _ThreadRuntime()
@@ -510,22 +512,18 @@ class ThreadAgenticStrategy(AdaptationStrategy):
 
         normalized_actions: List[ActionBlock] = []
         for action in final.actions:
-            if not isinstance(action.type, str) or not action.type.strip():
-                raise StrictContractViolation("Each root action requires non-empty 'type'")
-            if not isinstance(action.parameters, dict):
-                raise StrictContractViolation("Each root action requires object 'parameters'")
-
-            resolved = self._action_resolver.resolve_action_type(
-                action.type,
-                supported,
-                action_aliases,
+            resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                resolver=self._action_resolver,
+                action_type=action.type,
+                parameters=action.parameters,
+                supported_action_types=supported,
+                action_aliases=action_aliases,
+                system_id=system_id,
+                missing_type_error="Each root action requires non-empty 'type'",
+                invalid_parameters_error="Each root action requires object 'parameters'",
             )
-            if resolved is None:
-                raise StrictContractViolation(
-                    f"Unsupported action type '{action.type}' for system '{system_id}'"
-                )
             normalized_actions.append(
-                ActionBlock(type=resolved, parameters=dict(action.parameters))
+                ActionBlock(type=resolved_action_type, parameters=resolved_parameters)
             )
 
         final.actions = normalized_actions
@@ -701,7 +699,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                         return_token=self.return_token,
                         supported_actions=supported_actions_text,
                     )
-                except Exception:
+                except (KeyError, IndexError, ValueError):
                     return override
 
         if self._system_prompt_template:
@@ -714,7 +712,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                     return_token=self.return_token,
                     supported_actions=supported_actions_text,
                 )
-            except Exception:
+            except (KeyError, IndexError, ValueError):
                 return self._system_prompt_template
 
         return (

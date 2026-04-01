@@ -13,6 +13,15 @@ import yaml
 
 from polaris.infrastructure.config import PolarisConfig
 
+_LEGACY_STRATEGY_BLOCK_KEYS = (
+    "threshold",
+    "llm_reasoning",
+    "agentic_llm",
+    "thread_agentic",
+    "multi_agent",
+    "hybrid",
+)
+
 
 @dataclass
 class Diagnostic:
@@ -55,34 +64,59 @@ def _extract_llm_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]
     strategy = raw_config.get("strategy")
     if isinstance(strategy, dict):
         strategy_type = str(strategy.get("type", "threshold")).lower()
+        strategy_params = strategy.get("params", {})
+        if not isinstance(strategy_params, dict):
+            strategy_params = {}
+
+        def add_multi_agent_role_requirements(path_prefix: str, cfg: Dict[str, Any]) -> None:
+            shared_provider = _normalize_provider(cfg.get("provider", "google"))
+            for role in ("diagnostician", "planner", "validator"):
+                role_cfg = cfg.get(role)
+                if not isinstance(role_cfg, dict):
+                    continue
+                merged = dict(role_cfg)
+                merged.setdefault("provider", shared_provider)
+                add_llm(f"{path_prefix}.{role}", merged)
+
         if strategy_type == "llm_reasoning":
-            add_llm("strategy.llm_reasoning", strategy.get("llm_reasoning"))
+            add_llm("strategy.params", strategy_params)
         elif strategy_type == "agentic_llm":
-            add_llm("strategy.agentic_llm", strategy.get("agentic_llm"))
+            add_llm("strategy.params", strategy_params)
         elif strategy_type == "thread_agentic":
-            add_llm("strategy.thread_agentic", strategy.get("thread_agentic"))
+            add_llm("strategy.params", strategy_params)
+        elif strategy_type == "multi_agent":
+            add_llm("strategy.params", strategy_params)
+            add_multi_agent_role_requirements("strategy.params", strategy_params)
         elif strategy_type == "hybrid":
-            hybrid_cfg = strategy.get("hybrid")
-            if isinstance(hybrid_cfg, dict):
-                for index, sub in enumerate(hybrid_cfg.get("strategies", [])):
+            sub_defs = strategy_params.get("strategies", [])
+            if isinstance(sub_defs, list):
+                for index, sub in enumerate(sub_defs):
                     if not isinstance(sub, dict):
                         continue
                     sub_type = str(sub.get("type", "")).lower()
+                    sub_params = sub.get("params", {})
+                    if not isinstance(sub_params, dict):
+                        continue
+
                     if sub_type == "llm_reasoning":
                         add_llm(
-                            f"strategy.hybrid.strategies[{index}].llm_reasoning",
-                            sub.get("llm_reasoning"),
+                            f"strategy.params.strategies[{index}].params",
+                            sub_params,
                         )
                     elif sub_type == "agentic_llm":
                         add_llm(
-                            f"strategy.hybrid.strategies[{index}].agentic_llm",
-                            sub.get("agentic_llm"),
+                            f"strategy.params.strategies[{index}].params",
+                            sub_params,
                         )
                     elif sub_type == "thread_agentic":
                         add_llm(
-                            f"strategy.hybrid.strategies[{index}].thread_agentic",
-                            sub.get("thread_agentic"),
+                            f"strategy.params.strategies[{index}].params",
+                            sub_params,
                         )
+                    elif sub_type == "multi_agent":
+                        base_path = f"strategy.params.strategies[{index}].params"
+                        add_llm(base_path, sub_params)
+                        add_multi_agent_role_requirements(base_path, sub_params)
 
     meta_learner = raw_config.get("meta_learner")
     if isinstance(meta_learner, dict) and bool(meta_learner.get("enabled", False)):
@@ -106,6 +140,36 @@ def _extract_connectors(raw_config: Dict[str, Any]) -> Set[str]:
         if connector_type:
             connector_types.add(str(connector_type).lower())
     return connector_types
+
+
+def _find_legacy_strategy_schema_paths(raw_config: Dict[str, Any]) -> List[str]:
+    """Return paths that still use deprecated type-keyed strategy blocks."""
+    paths: List[str] = []
+
+    strategy = raw_config.get("strategy")
+    if not isinstance(strategy, dict):
+        return paths
+
+    for key in _LEGACY_STRATEGY_BLOCK_KEYS:
+        if key in strategy:
+            paths.append(f"strategy.{key}")
+
+    params = strategy.get("params")
+    if not isinstance(params, dict):
+        return paths
+
+    sub_defs = params.get("strategies")
+    if not isinstance(sub_defs, list):
+        return paths
+
+    for index, sub in enumerate(sub_defs):
+        if not isinstance(sub, dict):
+            continue
+        for key in _LEGACY_STRATEGY_BLOCK_KEYS:
+            if key in sub:
+                paths.append(f"strategy.params.strategies[{index}].{key}")
+
+    return paths
 
 
 def _diagnose_config(config_path: str, diagnostics: List[Diagnostic]) -> Optional[Dict[str, Any]]:
@@ -172,6 +236,19 @@ def _diagnose_config(config_path: str, diagnostics: List[Diagnostic]) -> Optiona
         raw_data = yaml.safe_load(raw_content) or {}
         if not isinstance(raw_data, dict):
             raise ValueError("Config root must be a mapping")
+
+        legacy_paths = _find_legacy_strategy_schema_paths(raw_data)
+        if legacy_paths:
+            diagnostics.append(
+                Diagnostic(
+                    "FAIL",
+                    "config",
+                    "Legacy strategy schema detected at "
+                    f"{', '.join(legacy_paths)}. "
+                    "Use strategy.params and, for hybrid sub-strategies, "
+                    "strategy.params.strategies[].params.",
+                )
+            )
     except Exception as exc:
         diagnostics.append(
             Diagnostic(

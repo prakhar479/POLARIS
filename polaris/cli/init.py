@@ -16,6 +16,71 @@ def _prompt_choice(prompt: str, allowed: list[str], default: str, attempts: int 
     raise ValueError(f"Failed to provide a valid value after {attempts} attempts")
 
 
+def _build_strategy_params_block(strategy: str, llm_connector: str, llm_model: str) -> str:
+    """Build a strategy.params block for generated starter configs."""
+    llm_backed_strategies = {"llm_reasoning", "agentic_llm", "thread_agentic", "multi_agent"}
+
+    if strategy == "threshold":
+        return (
+            "  params:\n"
+            "    thresholds:\n"
+            "      cpu_usage:\n"
+            "        high: 80.0\n"
+            "        low: 20.0\n"
+            "    cooldown_seconds: 60\n"
+        )
+
+    if strategy == "hybrid":
+        return (
+            "  params:\n"
+            '    selection_mode: "first"\n'
+            "    min_confidence: 0.7\n"
+            "    strategies:\n"
+            '      - type: "threshold"\n'
+            "        priority: 0.9\n"
+            "        params:\n"
+            "          thresholds:\n"
+            "            cpu_usage:\n"
+            "              high: 80.0\n"
+            "              low: 20.0\n"
+            "          cooldown_seconds: 60\n"
+            '      - type: "agentic_llm"\n'
+            "        priority: 0.6\n"
+            "        params:\n"
+            f'          provider: "{llm_connector}"\n'
+            f'          model: "{llm_model}"\n'
+            "          temperature: 0.1\n"
+        )
+
+    if strategy in llm_backed_strategies:
+        return (
+            "  params:\n"
+            f'    provider: "{llm_connector}"\n'
+            f'    model: "{llm_model}"\n'
+            "    temperature: 0.1\n"
+        )
+
+    return "  params: {}\n"
+
+
+def _build_connection_block(system_type: str) -> str:
+    """Build connector-specific connection settings for generated configs."""
+    if system_type == "swim":
+        return '      host: "localhost"\n' "      port: 4242\n"
+
+    if system_type == "wildfire":
+        return '      base_url: "http://localhost:5000"\n' "      timeout: 5.0\n"
+
+    if system_type == "kubernetes":
+        return (
+            '      namespace: "default"\n'
+            "      in_cluster: false\n"
+            '      kubeconfig_path: "~/.kube/config"\n'
+        )
+
+    return '      host: "localhost"\n' "      port: 4242\n"
+
+
 def run_init_cli(args: list[str]) -> int:
     """Run the interactive init wizard."""
     parser = argparse.ArgumentParser(description="Initialize a new Polaris configuration file")
@@ -60,19 +125,6 @@ def run_init_cli(args: list[str]) -> int:
         input("Enable metrics collection and background export? (Y/n): ").strip().lower() != "n"
     )
 
-    provider_types = ["google", "openai", "openrouter", "groq", "ollama"]
-    default_provider = "openai"
-    try:
-        llm_connector = _prompt_choice(
-            "Which LLM provider to use? (google/openai/openrouter/groq/ollama) [openai]: ",
-            provider_types,
-            default_provider,
-        )
-    except ValueError as exc:
-        print(str(exc))
-        return 1
-    llm_model = input("Which model version? [gpt-4o]: ").strip() or "gpt-4o"
-
     strategy_types = registered_strategy_types()
     if not strategy_types:
         print("No strategy types are registered. Cannot initialize config.")
@@ -90,43 +142,68 @@ def run_init_cli(args: list[str]) -> int:
         print(str(exc))
         return 1
 
-    config_content = f"""################################################################################
-# Polaris Generated Configuration ({output_path.name})
-################################################################################
+    llm_connector = "openai"
+    llm_model = "gpt-4o"
+    llm_needed = strategy in {
+        "llm_reasoning",
+        "agentic_llm",
+        "thread_agentic",
+        "multi_agent",
+        "hybrid",
+    }
+    if llm_needed:
+        provider_types = ["google", "openai", "openrouter", "groq", "ollama"]
+        default_provider = "openai"
+        try:
+            llm_connector = _prompt_choice(
+                "Which LLM provider to use? (google/openai/openrouter/groq/ollama) [openai]: ",
+                provider_types,
+                default_provider,
+            )
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        llm_model = input("Which model version? [gpt-4o]: ").strip() or "gpt-4o"
 
-systems:
-  - id: "{system_type}"
-    connector_type: "{system_type}"
-    enabled: true
-    connection:
-      host: "localhost"
-      port: 4242
-    monitoring:
-      collection_interval: {interval}
+    strategy_params_block = _build_strategy_params_block(strategy, llm_connector, llm_model)
+    connection_block = _build_connection_block(system_type)
 
-observability:
-  metrics:
-    enabled: {str(enable_metrics).lower()}
-    export:
-      enabled: {str(enable_metrics).lower()}
-      format: "both"
-      directory: "metrics"
-      auto_export_interval_minutes: 5
-
-llm_reasoning:
-  provider: "{llm_connector}"
-  model: "{llm_model}"
-
-strategy:
-  type: "{strategy}"
-  {strategy}:
-    temperature: 0.1
-"""
+    config_content = (
+        "################################################################################\n"
+        f"# Polaris Generated Configuration ({output_path.name})\n"
+        "################################################################################\n\n"
+        "systems:\n"
+        f'  - id: "{system_type}"\n'
+        f'    connector_type: "{system_type}"\n'
+        "    enabled: true\n"
+        "    connection:\n"
+        f"{connection_block}"
+        "    monitoring:\n"
+        f"      collection_interval: {interval}\n"
+        "      # Effective cadence = max(global interval_seconds, collection_interval)\n\n"
+        "monitoring:\n"
+        "  interval_seconds: 30\n\n"
+        "observability:\n"
+        "  logging:\n"
+        '    type: "human"\n'
+        '    level: "INFO"\n'
+        "  metrics:\n"
+        f"    enabled: {str(enable_metrics).lower()}\n"
+        "    export:\n"
+        f"      enabled: {str(enable_metrics).lower()}\n"
+        '      formats: ["json", "csv"]\n'
+        '      output_dir: "metrics"\n'
+        "      auto_export_interval_minutes: 5\n\n"
+        "strategy:\n"
+        f'  type: "{strategy}"\n'
+        f"{strategy_params_block}"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(config_content)
 
     print("\n" + "=" * 50)
     print(f"Success! Configuration generated at: {output_path}")
+    print(f"Validate config with: python -m polaris.cli doctor --config {output_path}")
     print(f"Run Polaris with: python -m polaris.cli --config {output_path}")
     print("=" * 50 + "\n")
 

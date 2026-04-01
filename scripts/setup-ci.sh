@@ -13,9 +13,16 @@ if [ ! -f "pyproject.toml" ] || [ ! -d "polaris" ]; then
     exit 1
 fi
 
+PYTHON_BIN="python"
+if [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN=".venv/bin/python"
+fi
+
+echo "Using Python interpreter: $PYTHON_BIN"
+
 # Install dependencies
 echo "Installing dependencies..."
-pip install -e .[dev]
+"$PYTHON_BIN" -m pip install -e .[dev]
 
 # Setup pre-commit hooks
 echo "Setting up pre-commit hooks..."
@@ -43,7 +50,7 @@ echo "Running initial quality checks..."
 echo ""
 
 echo "=== Black Formatting Check ==="
-if black --check polaris/ tests/ examples/; then
+if "$PYTHON_BIN" -m black --check --line-length=100 polaris/ tests/ examples/; then
     echo "✓ Code is properly formatted with Black"
 else
     echo "⚠ Code needs formatting. Run 'make format' to fix"
@@ -51,7 +58,7 @@ fi
 
 echo ""
 echo "=== isort Import Sorting Check ==="
-if isort --check-only polaris/ tests/ examples/; then
+if "$PYTHON_BIN" -m isort --check-only --line-length=100 polaris/ tests/ examples/; then
     echo "✓ Imports are properly sorted"
 else
     echo "⚠ Imports need sorting. Run 'make format' to fix"
@@ -59,7 +66,7 @@ fi
 
 echo ""
 echo "=== mypy Type Checking ==="
-if mypy polaris/ --ignore-missing-imports; then
+if "$PYTHON_BIN" -m mypy polaris/ --ignore-missing-imports; then
     echo "✓ Type checking passed"
 else
     echo "⚠ Type checking issues found"
@@ -67,7 +74,7 @@ fi
 
 echo ""
 echo "=== Test Suite ==="
-if pytest tests/ -v --tb=short; then
+if "$PYTHON_BIN" -m pytest tests/ -v --tb=short; then
     echo "✓ All tests passed"
 else
     echo "⚠ Some tests failed"

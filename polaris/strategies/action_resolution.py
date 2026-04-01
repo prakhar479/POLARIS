@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple
 
 from polaris.abstractions.connector_capabilities import normalize_action_token
+
+if TYPE_CHECKING:
+    from polaris.abstractions.strategy import AdaptationContext
+    from polaris.abstractions.system_contract import SystemContract
 
 
 class StrictContractViolation(RuntimeError):
@@ -56,3 +60,64 @@ class ConnectorActionResolver:
             return supported_map[alias_norm]
 
         return None
+
+
+def require_supported_action_contract(
+    context: "AdaptationContext",
+    strategy_name: str,
+) -> Tuple["SystemContract", list[str], Dict[str, str]]:
+    """Extract and validate the strict connector action contract from context.
+
+    Returns:
+        Tuple of (system_contract, supported_action_types, action_aliases)
+
+    Raises:
+        StrictContractViolation: If no contract exists or no supported actions are available.
+    """
+    system_contract = context.system_contract
+    supported_action_types = (
+        system_contract.supported_actions_list() if system_contract is not None else []
+    )
+    if not supported_action_types:
+        raise StrictContractViolation(
+            "Missing connector-supported action contract for strict "
+            f"{strategy_name} strategy (system_id='{context.system_id}')"
+        )
+    if not system_contract:
+        raise StrictContractViolation(
+            "Missing system contract for strict "
+            f"{strategy_name} strategy (system_id='{context.system_id}')"
+        )
+    action_aliases = dict(system_contract.action_aliases)
+    return system_contract, supported_action_types, action_aliases
+
+
+def resolve_strict_action_payload(
+    *,
+    resolver: ConnectorActionResolver,
+    action_type: Any,
+    parameters: Any,
+    supported_action_types: Sequence[str],
+    action_aliases: Optional[Dict[str, str]],
+    system_id: str,
+    missing_type_error: str,
+    invalid_parameters_error: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """Validate and resolve a strict action payload into canonical action contract form."""
+    if not isinstance(action_type, str) or not action_type.strip():
+        raise StrictContractViolation(missing_type_error)
+
+    if not isinstance(parameters, dict):
+        raise StrictContractViolation(invalid_parameters_error)
+
+    resolved_action_type = resolver.resolve_action_type(
+        action_type,
+        supported_action_types,
+        action_aliases,
+    )
+    if resolved_action_type is None:
+        raise StrictContractViolation(
+            f"Unsupported action type '{action_type}' for system '{system_id}'"
+        )
+
+    return resolved_action_type, dict(parameters)

@@ -74,7 +74,7 @@ polaris --config config/wildfire.yaml
 Polaris supports OpenRouter via an OpenAI-compatible client.
 
 - Set `OPENROUTER_API_KEY`
-- In YAML, set `provider: openrouter` under `strategy.*` and/or `meta_learner.llm`
+- In YAML, set `provider: openrouter` under `strategy.params` and/or `meta_learner.llm`
 
 See [CONFIGURATION.md](./CONFIGURATION.md#using-openrouter-openai-compatible-gateway) for details.
 
@@ -183,7 +183,7 @@ Example (multi-agent strategy with per-agent LLM config):
 ```yaml
 strategy:
   type: multi_agent
-  multi_agent:
+  params:
     provider: google           # Shared default provider
     temperature: 0.1
     steps_limit: 3             # Max reasoning steps per agent (new)
@@ -210,7 +210,7 @@ Example (agentic LLM strategy):
 ```yaml
 strategy:
   type: agentic_llm
-  agentic_llm:
+  params:
     provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
     steps_limit: 3
     temperature: 0.1
@@ -236,7 +236,7 @@ Example (THREAD recursive strategy):
 ```yaml
 strategy:
   type: thread_agentic
-  thread_agentic:
+  params:
     provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
     steps_limit: 4
     max_thread_depth: 3
@@ -251,7 +251,8 @@ strategy:
         - list_supported_actions
 ```
 
-For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `thread_agentic`, use `strategy.thread_agentic.provider`. For `hybrid`, each sub-strategy can specify its own provider. The `multi_agent` strategy also supports `hybrid` as a container.
+For `llm_reasoning`, `agentic_llm`, `thread_agentic`, and `multi_agent`, specify provider under `strategy.params.provider`.
+For `hybrid`, each sub-strategy config lives under `strategy.params.strategies[].params` and can set its own provider.
 
 The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
 
@@ -396,13 +397,19 @@ make install-hooks
 Run tests with:
 
 ```bash
-pytest tests/
+python -m pytest tests/
 ```
 
 or use the provided script:
 
 ```bash
 python run_tests.py
+```
+
+Validate config/schema/env wiring before runtime:
+
+```bash
+python -m polaris.cli doctor --config config/default.yaml
 ```
 
 For comprehensive testing and quality checks:

@@ -351,6 +351,13 @@ class SQLiteKnowledgeStore(KnowledgeStore):
                         " ORDER BY created_at ASC",
                         (system_id, start),
                     )
+                elif end:
+                    cur = con.execute(
+                        "SELECT * FROM adaptation_actions"
+                        " WHERE target_system=? AND created_at<=?"
+                        " ORDER BY created_at ASC",
+                        (system_id, end),
+                    )
                 else:
                     cur = con.execute(
                         "SELECT * FROM adaptation_actions"

@@ -100,6 +100,7 @@ class ConfigReloader:
             "hybrid": "HybridStrategy",
             "agentic_llm": "AgenticLLMStrategy",
             "thread_agentic": "ThreadAgenticStrategy",
+            "multi_agent": "MultiAgentStrategy",
         }
 
         current_class = type(self._strategy).__name__
@@ -110,20 +111,9 @@ class ConfigReloader:
             self._logger.info("Strategy type changed in config; restart required to apply.")
             return
 
-        # Build a type-specific configuration payload and delegate to the strategy
-        config_payload: Dict[str, Any]
-        if desired_type == "threshold":
-            config_payload = strategy_config.threshold or {}
-        elif desired_type == "llm_reasoning":
-            config_payload = strategy_config.llm_reasoning or {}
-        elif desired_type == "hybrid":
-            config_payload = strategy_config.hybrid or {}
-        elif desired_type == "agentic_llm":
-            config_payload = strategy_config.agentic_llm or {}
-        elif desired_type == "thread_agentic":
-            config_payload = strategy_config.thread_agentic or {}
-        else:
-            config_payload = {}
+        # StrategyConfig uses canonical params payload for all strategy types.
+        raw_params = getattr(strategy_config, "params", {})
+        config_payload = dict(raw_params) if isinstance(raw_params, dict) else {}
 
         try:
             await self._strategy.apply_config_update(config_payload)

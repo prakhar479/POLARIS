@@ -38,7 +38,12 @@ from polaris.infrastructure.constants import (
 )
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
-from polaris.strategies.action_resolution import ConnectorActionResolver, StrictContractViolation
+from polaris.strategies.action_resolution import (
+    ConnectorActionResolver,
+    StrictContractViolation,
+    require_supported_action_contract,
+    resolve_strict_action_payload,
+)
 from polaris.strategies.utils import (
     DEFAULT_ALLOWED_TOOLS,
     format_system_state_for_llm,
@@ -226,13 +231,15 @@ class MultiAgentStrategy(AdaptationStrategy):
         validator_config: Per-agent config for the SafetyValidator (optional).
     """
 
+    requires_system_contract: bool = True
+
     def __init__(
         self,
         llm_client: LLMClient,
         knowledge_store: KnowledgeStore,
         world_model: WorldModel,
         temperature: float = 0.1,
-        system_description: str = "A generic managed cloud system",
+        system_description: str = "Managed system",
         steps_limit: int = 3,
         allowed_tools: Optional[List[str]] = None,
         # Per-agent overrides
@@ -319,7 +326,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                     allowed_tools=tools,
                     supported_actions=supported_actions_text,
                 )
-            except Exception:
+            except (KeyError, IndexError, ValueError):
                 return cfg.system_prompt
         return default_tmpl.format(
             system_description=self.system_description,
@@ -363,15 +370,10 @@ class MultiAgentStrategy(AdaptationStrategy):
 
         start_time = datetime.now(timezone.utc)
         system_context_str = self._format_system_context(state, context)
-        system_contract = context.system_contract
-        supported_action_types = (
-            system_contract.supported_actions_list() if system_contract is not None else []
+        _contract, supported_action_types, action_aliases = require_supported_action_contract(
+            context,
+            strategy_name="multi-agent",
         )
-        if not supported_action_types:
-            raise StrictContractViolation(
-                "Missing connector-supported action contract for strict multi-agent strategy"
-            )
-        action_aliases = dict(system_contract.action_aliases) if system_contract else {}
 
         try:
             # ----------------------------------------------------------
@@ -447,26 +449,23 @@ class MultiAgentStrategy(AdaptationStrategy):
             # Convert approved actions to AdaptationAction objects
             final_actions: List[AdaptationAction] = []
             for action_block in validation.safe_actions:
-                if not isinstance(action_block.type, str) or not action_block.type.strip():
-                    raise StrictContractViolation("Validator action requires non-empty 'type'")
-                if not isinstance(action_block.parameters, dict):
-                    raise StrictContractViolation("Validator action requires object 'parameters'")
-                resolved_action_type = self._action_resolver.resolve_action_type(
-                    action_block.type,
-                    supported_action_types,
-                    action_aliases,
+                resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                    resolver=self._action_resolver,
+                    action_type=action_block.type,
+                    parameters=action_block.parameters,
+                    supported_action_types=supported_action_types,
+                    action_aliases=action_aliases,
+                    system_id=state.system_id,
+                    missing_type_error="Validator action requires non-empty 'type'",
+                    invalid_parameters_error="Validator action requires object 'parameters'",
                 )
-                if resolved_action_type is None:
-                    raise StrictContractViolation(
-                        f"Unsupported action type '{action_block.type}' for system '{state.system_id}'"
-                    )
                 final_actions.append(
                     AdaptationAction(
                         action_id=str(uuid.uuid4()),
                         action_type=resolved_action_type,
                         target_system=state.system_id,
                         parameters={
-                            **action_block.parameters,
+                            **resolved_parameters,
                             "llm_diagnosis": diagnosis.issues,
                             "llm_rationale": plan.rationale,
                             "llm_validator_reasoning": validation.reasoning,
@@ -615,7 +614,9 @@ class MultiAgentStrategy(AdaptationStrategy):
                     except Exception as exc:
                         if self.logger:
                             self.logger.warning(
-                                f"Multi-agent {role} resilience update failed", error=str(exc)
+                                "Multi-agent resilience update failed",
+                                role=role,
+                                error=str(exc),
                             )
 
         # Shared resilience
@@ -729,7 +730,10 @@ class MultiAgentStrategy(AdaptationStrategy):
                 except Exception as exc:
                     if self.logger:
                         self.logger.error(
-                            f"MultiAgent tool error in {role}", tool=tool, error=str(exc)
+                            "MultiAgent tool execution failed",
+                            role=role,
+                            tool=tool,
+                            error=str(exc),
                         )
                     from polaris.tools import ToolError
 

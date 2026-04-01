@@ -1,5 +1,7 @@
 """Tests for interactive init wizard behavior."""
 
+import yaml
+
 import polaris.cli.init as init_module
 
 
@@ -25,9 +27,9 @@ def test_init_cli_uses_registered_connector_and_strategy_types(monkeypatch, tmp_
             "custom_connector",
             "7",
             "y",
+            "thread_agentic",
             "openai",
             "gpt-4o",
-            "thread_agentic",
         ],
     )
 
@@ -36,8 +38,13 @@ def test_init_cli_uses_registered_connector_and_strategy_types(monkeypatch, tmp_
 
     assert result == 0
     content = output_path.read_text()
+    parsed = yaml.safe_load(content)
     assert 'connector_type: "custom_connector"' in content
     assert 'type: "thread_agentic"' in content
+    assert 'formats: ["json", "csv"]' in content
+    assert 'output_dir: "metrics"' in content
+    assert parsed["strategy"]["type"] == "thread_agentic"
+    assert parsed["strategy"]["params"]["provider"] == "openai"
 
 
 def test_init_cli_falls_back_to_registered_defaults_for_unknown_values(monkeypatch, tmp_path):
@@ -57,8 +64,6 @@ def test_init_cli_falls_back_to_registered_defaults_for_unknown_values(monkeypat
             "",  # fallback to kubernetes
             "5",
             "n",
-            "openai",
-            "gpt-4o",
             "",  # fallback to threshold
         ],
     )
@@ -68,5 +73,10 @@ def test_init_cli_falls_back_to_registered_defaults_for_unknown_values(monkeypat
 
     assert result == 0
     content = output_path.read_text()
+    parsed = yaml.safe_load(content)
     assert 'connector_type: "kubernetes"' in content
     assert 'type: "threshold"' in content
+    assert 'namespace: "default"' in content
+    assert "in_cluster: false" in content
+    assert parsed["systems"][0]["connection"]["namespace"] == "default"
+    assert parsed["strategy"]["type"] == "threshold"

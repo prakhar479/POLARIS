@@ -4,7 +4,7 @@ import pytest
 
 from polaris.core.polaris import Polaris
 from polaris.infrastructure.config import PolarisConfig
-from polaris.infrastructure.llm.client import create_llm_client
+from polaris.infrastructure.llm.client import ResilientLLMClient, create_llm_client
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ async def test_llm_reasoning_provider_selection(monkeypatch):
         {
             "strategy": {
                 "type": "llm_reasoning",
-                "llm_reasoning": {"provider": "openai", "temperature": 0.1},
+                "params": {"provider": "openai", "temperature": 0.1},
             }
         }
     )
@@ -58,7 +58,7 @@ async def test_agentic_llm_provider_selection(monkeypatch):
         {
             "strategy": {
                 "type": "agentic_llm",
-                "agentic_llm": {"provider": "google", "steps_limit": 2},
+                "params": {"provider": "google", "steps_limit": 2},
             }
         }
     )
@@ -88,14 +88,14 @@ async def test_hybrid_sub_llm_provider_selection(monkeypatch):
         {
             "strategy": {
                 "type": "hybrid",
-                "hybrid": {
+                "params": {
                     "selection_mode": "first",
                     "strategies": [
-                        {"type": "threshold", "priority": 0.9},
+                        {"type": "threshold", "priority": 0.9, "params": {}},
                         {
                             "type": "llm_reasoning",
                             "priority": 0.5,
-                            "llm_reasoning": {"provider": "openai"},
+                            "params": {"provider": "openai"},
                         },
                     ],
                 },
@@ -125,7 +125,7 @@ async def test_default_provider_is_google(monkeypatch):
     monkeypatch.setattr("polaris.infrastructure.llm.create_llm_client", dummy_create_llm_client)
 
     # No provider specified -> should default to google
-    cfg = PolarisConfig.from_dict({"strategy": {"type": "agentic_llm", "agentic_llm": {}}})
+    cfg = PolarisConfig.from_dict({"strategy": {"type": "agentic_llm", "params": {}}})
 
     _ = Polaris(config=cfg)
     assert captured.get("provider") == "google"
@@ -149,3 +149,25 @@ def test_openrouter_provider_creates_openrouter_client(monkeypatch):
     client = create_llm_client("openrouter")
     assert isinstance(client, DummyOpenRouterClient)
     assert captured.get("called") is True
+
+
+def test_openrouter_multi_keys_creates_resilient_client(monkeypatch):
+    captured = []
+
+    class DummyOpenRouterClient:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr("polaris.infrastructure.llm.client.OpenRouterClient", DummyOpenRouterClient)
+    monkeypatch.delenv("LLM_RESILIENCE_ENABLED", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "key-1,key-2")
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
+    monkeypatch.delenv("GROQ_API_KEYS", raising=False)
+
+    client = create_llm_client("openrouter")
+
+    assert isinstance(client, ResilientLLMClient)
+    assert len(client._clients) == 2
+    assert [entry.get("api_key") for entry in captured] == ["key-1", "key-2"]

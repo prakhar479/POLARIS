@@ -744,6 +744,10 @@ class ResilientLLMClient(LLMClient):
         else:
             if self.provider == "openai" and os.getenv("OPENAI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("OPENAI_API_KEYS", "").split(",") if k.strip()]
+            if self.provider == "openrouter" and os.getenv("OPENROUTER_API_KEYS"):
+                keys = [
+                    k.strip() for k in os.getenv("OPENROUTER_API_KEYS", "").split(",") if k.strip()
+                ]
             if self.provider == "google" and os.getenv("GEMINI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
             if self.provider == "groq" and os.getenv("GROQ_API_KEYS"):

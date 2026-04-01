@@ -61,7 +61,7 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
             logger: Logger instance for structured logging
             metrics: Metrics collector for tracking strategy performance
         """
-        self.thresholds = thresholds or {}
+        self.thresholds = self._normalize_thresholds(thresholds)
         self.action_templates = self._normalize_action_templates(action_templates)
         self.cooldown_seconds = cooldown_seconds
         self.logger = logger
@@ -87,6 +87,53 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
 
         self.metrics.increment("polaris.strategy.threshold.initialized")
         self.metrics.gauge("polaris.strategy.threshold.cooldown_seconds", cooldown_seconds)
+
+    def _normalize_thresholds(
+        self,
+        thresholds: Optional[Dict[str, Dict[str, float]]],
+    ) -> Dict[str, Dict[str, float]]:
+        """Normalize and validate threshold definitions.
+
+        Raises:
+            ValueError: If threshold definitions are malformed.
+        """
+        if thresholds is None:
+            return {}
+        if not isinstance(thresholds, dict):
+            raise ValueError("thresholds must be a dictionary")
+
+        normalized: Dict[str, Dict[str, float]] = {}
+        for metric_name, bounds in thresholds.items():
+            if not isinstance(metric_name, str) or not metric_name.strip():
+                raise ValueError("threshold metric names must be non-empty strings")
+            if not isinstance(bounds, dict):
+                raise ValueError(
+                    f"threshold bounds for metric '{metric_name}' must be a dictionary"
+                )
+
+            metric_bounds: Dict[str, float] = {}
+            for threshold_type in ("high", "low"):
+                if threshold_type not in bounds:
+                    continue
+                raw_value = bounds[threshold_type]
+                if not isinstance(raw_value, (int, float)):
+                    raise ValueError(
+                        f"threshold {threshold_type} bound for metric '{metric_name}' must be numeric"
+                    )
+                metric_bounds[threshold_type] = float(raw_value)
+
+            if (
+                "high" in metric_bounds
+                and "low" in metric_bounds
+                and metric_bounds["high"] <= metric_bounds["low"]
+            ):
+                raise ValueError(
+                    f"threshold high bound for metric '{metric_name}' must be greater than low bound"
+                )
+
+            normalized[metric_name.strip()] = metric_bounds
+
+        return normalized
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
@@ -141,8 +188,8 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                 value = float(metric.value)
             except (ValueError, TypeError) as e:
                 if self.logger:
-                    self.logger.warning(
-                        "Failed to parse metric value",
+                    self.logger.error(
+                        "Configured threshold metric value is non-numeric",
                         metric=metric_name,
                         value=metric.value,
                         error=str(e),
@@ -152,7 +199,10 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
                     "polaris.strategy.threshold.metric_parse_errors",
                     tags={"metric": metric_name, "system_id": state.system_id},
                 )
-                continue
+                raise ValueError(
+                    f"Threshold strategy expected numeric metric value for '{metric_name}' "
+                    f"on system '{state.system_id}', got {metric.value!r}"
+                ) from e
 
             thresholds = self.thresholds[metric_name]
 
@@ -369,16 +419,35 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
         """Update a parameter."""
         if parameter_path == "cooldown_seconds":
-            self.cooldown_seconds = int(new_value)
+            cooldown_seconds = int(new_value)
+            if cooldown_seconds < 0:
+                raise ValueError("cooldown_seconds must be >= 0")
+            self.cooldown_seconds = cooldown_seconds
             return True
 
         elif parameter_path.startswith("thresholds."):
             parts = parameter_path.split(".")
             if len(parts) == 3:
                 metric, threshold_type = parts[1], parts[2]
-                if metric in self.thresholds:
-                    self.thresholds[metric][threshold_type] = float(new_value)
-                    return True
+                if threshold_type not in {"high", "low"}:
+                    return False
+
+                metric_thresholds = self.thresholds.setdefault(metric, {})
+                previous_value = metric_thresholds.get(threshold_type)
+                metric_thresholds[threshold_type] = float(new_value)
+
+                high = metric_thresholds.get("high")
+                low = metric_thresholds.get("low")
+                if isinstance(high, (int, float)) and isinstance(low, (int, float)) and high <= low:
+                    if previous_value is None:
+                        metric_thresholds.pop(threshold_type, None)
+                    else:
+                        metric_thresholds[threshold_type] = previous_value
+                    raise ValueError(
+                        f"threshold high bound for metric '{metric}' must be greater than low bound"
+                    )
+
+                return True
 
         return False
 
@@ -389,6 +458,8 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
             await self.update_parameter("cooldown_seconds", cooldown)
 
         thresholds = config.get("thresholds", {}) or {}
+        if not isinstance(thresholds, dict):
+            raise ValueError("thresholds must be a dictionary")
         for metric, vals in thresholds.items():
             if not isinstance(vals, dict):
                 continue
@@ -397,8 +468,14 @@ class ThresholdReactiveStrategy(AdaptationStrategy):
             if "low" in vals:
                 await self.update_parameter(f"thresholds.{metric}.low", vals["low"])
 
-        if "action_templates" in config and isinstance(config["action_templates"], dict):
-            self.action_templates = self._normalize_action_templates(config["action_templates"])
+        if "action_templates" in config:
+            templates = config.get("action_templates")
+            if templates is None:
+                self.action_templates = {}
+            elif isinstance(templates, dict):
+                self.action_templates = self._normalize_action_templates(templates)
+            else:
+                raise ValueError("action_templates must be a dictionary")
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

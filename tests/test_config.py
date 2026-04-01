@@ -7,9 +7,16 @@ import pytest
 from polaris.infrastructure.config import PolarisConfig, StrategyConfig, load_config
 
 
-def test_populate_params_non_dict():
-    res = StrategyConfig.populate_params("not a dict")
-    assert res == "not a dict"
+def test_strategy_config_rejects_legacy_type_keyed_blocks():
+    with pytest.raises(ValueError, match="Extra inputs are not permitted|extra_forbidden"):
+        PolarisConfig.from_dict(
+            {
+                "strategy": {
+                    "type": "llm_reasoning",
+                    "llm_reasoning": {"provider": "openai"},
+                }
+            }
+        )
 
 
 def test_strategy_config_hybrid_validation():
@@ -25,6 +32,44 @@ def test_strategy_config_hybrid_validation():
     # valid
     cfg = StrategyConfig(type="hybrid", params={"selection_mode": "first", "min_confidence": 0.5})
     assert cfg.params["selection_mode"] == "first"
+
+
+def test_strategy_config_hybrid_rejects_legacy_sub_strategy_blocks():
+    with pytest.raises(ValueError, match="unsupported keys"):
+        StrategyConfig(
+            type="hybrid",
+            params={
+                "strategies": [
+                    {
+                        "type": "threshold",
+                        "threshold": {"thresholds": {"cpu": {"high": 80.0}}},
+                    }
+                ]
+            },
+        )
+
+
+def test_strategy_config_threshold_bounds_validation():
+    with pytest.raises(ValueError, match="must be greater than low bound"):
+        StrategyConfig(
+            type="threshold",
+            params={"thresholds": {"cpu": {"high": 40.0, "low": 50.0}}},
+        )
+
+
+def test_strategy_config_llm_provider_validation():
+    with pytest.raises(ValueError, match="provider must be one of"):
+        StrategyConfig(type="agentic_llm", params={"provider": "unknown"})
+
+
+def test_strategy_config_thread_phi_mode_validation():
+    with pytest.raises(ValueError, match="phi_mode"):
+        StrategyConfig(type="thread_agentic", params={"phi_mode": "invalid_mode"})
+
+
+def test_strategy_config_tools_shape_validation():
+    with pytest.raises(ValueError, match="enabled must be a list"):
+        StrategyConfig(type="multi_agent", params={"tools": {"enabled": "tool-a"}})
 
 
 def test_normalize_max_concurrent_connectors_invalid():
@@ -63,3 +108,50 @@ def test_load_config(tmp_path):
     f.write_text("max_concurrent_connectors: 5\n")
     cfg = load_config(str(f))
     assert cfg.max_concurrent_connectors == 5
+
+
+def test_system_collection_interval_validation():
+    with pytest.raises(
+        ValueError,
+        match=r"systems\[\]\.monitoring\.collection_interval",
+    ):
+        PolarisConfig.from_dict(
+            {
+                "systems": [
+                    {
+                        "id": "sys-1",
+                        "connector_type": "unknown",
+                        "monitoring": {"collection_interval": 0},
+                    }
+                ]
+            }
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=r"systems\[\]\.monitoring\.collection_interval",
+    ):
+        PolarisConfig.from_dict(
+            {
+                "systems": [
+                    {
+                        "id": "sys-1",
+                        "connector_type": "unknown",
+                        "monitoring": {"collection_interval": "5"},
+                    }
+                ]
+            }
+        )
+
+    cfg = PolarisConfig.from_dict(
+        {
+            "systems": [
+                {
+                    "id": "sys-1",
+                    "connector_type": "unknown",
+                    "monitoring": {"collection_interval": 5},
+                }
+            ]
+        }
+    )
+    assert cfg.systems[0].monitoring["collection_interval"] == 5

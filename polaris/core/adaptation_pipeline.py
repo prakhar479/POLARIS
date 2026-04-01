@@ -78,6 +78,17 @@ class AdaptationPipeline:
         """
         from polaris.abstractions.strategy import AdaptationContext
         from polaris.core.events import AdaptationEvent
+        from polaris.strategies.action_resolution import StrictContractViolation
+
+        if getattr(self._strategy, "requires_system_contract", False):
+            supported = (
+                list(system_contract.supported_action_types) if system_contract is not None else []
+            )
+            if not supported:
+                raise StrictContractViolation(
+                    "Missing connector-supported action contract for strict strategy "
+                    f"{type(self._strategy).__name__} (system_id='{state.system_id}')"
+                )
 
         # Fetch recent history so strategies can reason about trends.
         historical_states = []
@@ -104,8 +115,6 @@ class AdaptationPipeline:
             ),
             system_contract=system_contract,
         )
-
-        from polaris.strategies.action_resolution import StrictContractViolation
 
         # Assess
         try:

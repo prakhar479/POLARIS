@@ -63,7 +63,7 @@ async def test_invalid_configs():
         config_data = {
             "strategy": {
                 "type": "threshold",
-                "threshold": {
+                "params": {
                     "thresholds": {"cpu_usage": {"high": 20.0, "low": 80.0}}
                 },  # High < Low (invalid)
             }

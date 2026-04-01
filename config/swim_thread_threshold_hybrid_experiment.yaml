@@ -16,7 +16,7 @@ monitoring:
 
 strategy:
   type: "hybrid"
-  hybrid:
+  params:
     selection_mode: "first"
     min_confidence: 0.75
     # Applies to cooldown-restricted sub-strategies (THREAD/agentic).
@@ -24,7 +24,7 @@ strategy:
     strategies:
       - type: "threshold"
         priority: 1.0
-        threshold:
+        params:
           thresholds:
             average_response_time:
               high: 500.0
@@ -32,7 +32,7 @@ strategy:
 
       - type: "thread_agentic"
         priority: 0.6
-        thread_agentic:
+        params:
           provider: "google"
           model: "gemini-2.5-flash"
           steps_limit: 4

@@ -120,6 +120,18 @@ def test_build_knowledge_store_sqlite_uses_nested_config(tmp_path, mock_logger, 
     assert store._metrics is None
 
 
+def test_build_knowledge_store_sqlite_requires_db_path(mock_logger):
+    config = _cfg(
+        knowledge_store={
+            "type": "sqlite",
+            "sqlite": {},
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires 'knowledge_store.sqlite.db_path'"):
+        ComponentBuilder.build_knowledge_store(config, mock_logger, None)
+
+
 def test_build_knowledge_store_unknown_type_raises_error(mock_logger):
     config = _cfg(
         knowledge_store={

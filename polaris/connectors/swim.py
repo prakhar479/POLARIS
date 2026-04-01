@@ -467,6 +467,7 @@ class SWIMConnector(Connector):
             Response from SWIM
         """
         start_time = time.monotonic()
+        writer = None
         try:
             # Open connection
             reader, writer = await asyncio.wait_for(
@@ -481,10 +482,6 @@ class SWIMConnector(Connector):
             line = await asyncio.wait_for(reader.readline(), timeout=self.timeout)
             response = line.decode(errors="replace").strip()
 
-            # Close connection
-            writer.close()
-            await writer.wait_closed()
-
             if not response:
                 raise ConnectionError(f"Command '{command}' returned empty response")
 
@@ -497,17 +494,25 @@ class SWIMConnector(Connector):
                 )
             return response
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             if self._metrics:
                 self._metrics.increment(
                     "polaris.connector.swim.command_timeouts",
                     tags={"command": command},
                 )
-            raise TimeoutError(f"Command '{command}' timed out")
+            raise TimeoutError(f"Command '{command}' timed out") from exc
         except Exception as exc:
             if self._metrics:
                 self._metrics.increment(
                     "polaris.connector.swim.command_errors",
                     tags={"command": command},
                 )
-            raise ConnectionError(f"Command '{command}' failed: {exc}")
+            raise ConnectionError(f"Command '{command}' failed: {exc}") from exc
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    # Best effort cleanup; close failures should not mask primary errors.
+                    pass

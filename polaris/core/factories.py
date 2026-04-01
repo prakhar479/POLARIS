@@ -385,7 +385,10 @@ def _register_default_strategy_factories() -> None:
         return LLMReasoningStrategy(
             llm_client=llm_client,
             system_description=params.get("system_description", "Managed system"),
-            adaptation_goals=params.get("adaptation_goals", "Maintain optimal performance"),
+            adaptation_goals=params.get(
+                "adaptation_goals",
+                "Maintain reliability, performance, and policy objectives",
+            ),
             temperature=params.get("temperature", 0.1),
             system_prompt=params.get("system_prompt"),
             per_system_prompts=params.get("per_system_prompts"),
@@ -412,16 +415,25 @@ def _register_default_strategy_factories() -> None:
         for s in sub_defs:
             s_type = s.get("type", "threshold")
             priority = float(s.get("priority", 0.5))
+            sub_params = s.get("params", {})
+            if sub_params is None:
+                sub_params = {}
 
             sub_factory = get_strategy_factory(s_type)
             if not sub_factory:
                 logger.error(f"Unknown sub-strategy type '{s_type}' in hybrid config")
                 continue
 
+            if not isinstance(sub_params, dict):
+                logger.error(
+                    f"Invalid params for hybrid sub-strategy '{s_type}': params must be a dictionary"
+                )
+                continue
+
             from polaris.infrastructure.config import StrategyConfig
 
             try:
-                sub_cfg = StrategyConfig(**s)
+                sub_cfg = StrategyConfig(type=s_type, params=sub_params)
                 sub_strategy = sub_factory(
                     sub_cfg, logger, metrics, knowledge_store, world_model, registry
                 )
@@ -557,7 +569,7 @@ def _register_default_strategy_factories() -> None:
 
         agent_conf = getattr(strategy_cfg, "params", {})
         temperature = float(agent_conf.get("temperature", 0.1))
-        system_description = agent_conf.get("system_description", "A generic managed cloud system")
+        system_description = agent_conf.get("system_description", "Managed system")
 
         provider = agent_conf.get("provider", "google")
         resilience_cfg = agent_conf.get("resilience")
@@ -565,6 +577,15 @@ def _register_default_strategy_factories() -> None:
         llm_kwargs.pop("provider", None)
         llm_kwargs.pop("resilience", None)
         shared_llm = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+
+        def _parse_tools_config(raw_tools: Any) -> Optional[List[str]]:
+            if isinstance(raw_tools, list):
+                return [tool for tool in raw_tools if isinstance(tool, str)]
+            if isinstance(raw_tools, dict):
+                enabled = raw_tools.get("enabled")
+                if isinstance(enabled, list):
+                    return [tool for tool in enabled if isinstance(tool, str)]
+            return None
 
         def _build_agent_config(role_cfg: Optional[dict]) -> Optional[AgentConfig]:
             if not isinstance(role_cfg, dict) or not role_cfg:
@@ -585,18 +606,20 @@ def _register_default_strategy_factories() -> None:
                 role_client = _llm.create_llm_client(
                     provider, resilience=role_resilience, **llm_kwargs
                 )
+            role_tools = _parse_tools_config(role_cfg.get("tools"))
             return AgentConfig(
                 llm_client=role_client,
                 temperature=role_cfg.get("temperature"),
                 system_prompt=role_cfg.get("system_prompt"),
                 max_tokens=role_cfg.get("max_tokens"),
                 steps_limit=role_cfg.get("steps_limit"),
-                allowed_tools=role_cfg.get("tools"),
+                allowed_tools=role_tools,
             )
 
         diagnostician_config = _build_agent_config(agent_conf.get("diagnostician"))
         planner_config = _build_agent_config(agent_conf.get("planner"))
         validator_config = _build_agent_config(agent_conf.get("validator"))
+        shared_tools = _parse_tools_config(agent_conf.get("tools"))
 
         return MultiAgentStrategy(
             llm_client=shared_llm,
@@ -605,7 +628,7 @@ def _register_default_strategy_factories() -> None:
             temperature=temperature,
             system_description=system_description,
             steps_limit=int(agent_conf.get("steps_limit", 3)),
-            allowed_tools=agent_conf.get("tools"),
+            allowed_tools=shared_tools,
             diagnostician_config=diagnostician_config,
             planner_config=planner_config,
             validator_config=validator_config,

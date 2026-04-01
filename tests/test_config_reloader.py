@@ -32,6 +32,14 @@ class _StrategyThreadAgentic:
 _StrategyThreadAgentic.__name__ = "ThreadAgenticStrategy"
 
 
+class _StrategyMultiAgent:
+    async def apply_config_update(self, payload):
+        self.payload = payload
+
+
+_StrategyMultiAgent.__name__ = "MultiAgentStrategy"
+
+
 class _Metrics:
     def __init__(self):
         self.calls = []
@@ -88,10 +96,7 @@ async def test_maybe_reload_success_applies_strategy_and_emits_metrics(monkeypat
     initial_cfg = _cfg(core_framework_enabled=True)
     new_strategy_cfg = SimpleNamespace(
         type="threshold",
-        threshold={"thresholds": {"cpu": {"high": 90}}},
-        llm_reasoning=None,
-        hybrid=None,
-        agentic_llm=None,
+        params={"thresholds": {"cpu": {"high": 90}}},
     )
     new_cfg = SimpleNamespace(strategy=new_strategy_cfg, observability=initial_cfg.observability)
 
@@ -160,10 +165,7 @@ async def test_apply_strategy_hot_reload_type_change_requires_restart(mock_logge
     )
     desired = SimpleNamespace(
         type="llm_reasoning",
-        threshold=None,
-        llm_reasoning={"temperature": 0.2},
-        hybrid=None,
-        agentic_llm=None,
+        params={"temperature": 0.2},
     )
 
     await reloader._apply_strategy_hot_reload(desired)
@@ -186,10 +188,7 @@ async def test_apply_strategy_hot_reload_strategy_update_failure_logs_warning(mo
     )
     desired = SimpleNamespace(
         type="threshold",
-        threshold={"thresholds": {"latency": {"high": 300}}},
-        llm_reasoning=None,
-        hybrid=None,
-        agentic_llm=None,
+        params={"thresholds": {"latency": {"high": 300}}},
     )
 
     await reloader._apply_strategy_hot_reload(desired)
@@ -213,11 +212,7 @@ async def test_apply_strategy_hot_reload_thread_agentic_payload(mock_logger):
 
     desired = SimpleNamespace(
         type="thread_agentic",
-        threshold=None,
-        llm_reasoning=None,
-        hybrid=None,
-        agentic_llm=None,
-        thread_agentic={
+        params={
             "temperature": 0.2,
             "max_thread_depth": 4,
         },
@@ -226,6 +221,30 @@ async def test_apply_strategy_hot_reload_thread_agentic_payload(mock_logger):
     await reloader._apply_strategy_hot_reload(desired)
 
     assert strategy.payload == {"temperature": 0.2, "max_thread_depth": 4}
+
+
+@pytest.mark.asyncio
+async def test_apply_strategy_hot_reload_multi_agent_payload(mock_logger):
+    strategy = _StrategyMultiAgent()
+    reloader = ConfigReloader(
+        config_path=None,
+        strategy=strategy,
+        logger=mock_logger,
+        metrics=None,
+        config=_cfg(),
+    )
+
+    desired = SimpleNamespace(
+        type="multi_agent",
+        params={
+            "temperature": 0.2,
+            "steps_limit": 4,
+        },
+    )
+
+    await reloader._apply_strategy_hot_reload(desired)
+
+    assert strategy.payload == {"temperature": 0.2, "steps_limit": 4}
 
 
 def test_emit_respects_component_metrics_toggle(mock_logger):
