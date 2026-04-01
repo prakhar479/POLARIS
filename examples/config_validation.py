@@ -101,16 +101,14 @@ async def test_environment_variables():
     import tempfile
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        f.write(
-            """
+        f.write("""
     systems:
     - id: "test"
         connector_type: "swim"
         connection:
         host: "${MISSING_VAR}"
         port: 4242
-    """
-        )
+    """)
         temp_config = f.name
 
     try:
