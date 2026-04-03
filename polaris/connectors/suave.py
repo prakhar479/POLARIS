@@ -1,4 +1,4 @@
-"""
+r"""
 SUAVE system connector — corrected to follow the SUAVE README exactly.
 
 Key corrections vs. previous version
@@ -56,12 +56,18 @@ import math
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
-import roslibpy
+try:
+    import roslibpy
+except ImportError:
+    roslibpy = None
 
 from polaris.abstractions.connector import Connector
 from polaris.abstractions.observability import Logger, MetricsCollector
+
+if TYPE_CHECKING:
+    import roslibpy as _roslibpy
 from polaris.core.models import (
     AdaptationAction,
     ExecutionResult,
@@ -88,7 +94,7 @@ TASK_FOLLOW_PIPELINE_LEGACY = "follow_pipeline"
 # Valid modes per function node (Table V, SEAMS 2023 paper)
 _VALID_MODES: Dict[str, List[str]] = {
     "f_maintain_motion": [
-        "fd_all_thrusters",      # → inactive lifecycle state (normal operation)
+        "fd_all_thrusters",  # → inactive lifecycle state (normal operation)
         "fd_recover_thrusters",  # → active lifecycle state  (recovery running)
         "fd_unground",
     ],
@@ -96,11 +102,11 @@ _VALID_MODES: Dict[str, List[str]] = {
         "fd_spiral_low",
         "fd_spiral_medium",
         "fd_spiral_high",
-        "fd_unground",           # → inactive
+        "fd_unground",  # → inactive
     ],
     "f_follow_pipeline": [
-        "fd_follow_pipeline",    # → active
-        "fd_unground",           # → inactive
+        "fd_follow_pipeline",  # → active
+        "fd_unground",  # → inactive
     ],
 }
 
@@ -156,25 +162,32 @@ class SUAVEConnector(Connector):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ) -> None:
+        """Initialize SUAVEConnector with rosbridge parameters."""
+        if roslibpy is None:
+            raise ImportError(
+                "roslibpy is required for SUAVEConnector. "
+                "Install it with: pip install roslibpy"
+            )
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
         self.service_timeout = service_timeout
         self._logger = logger
         self._metrics = metrics
-        self._client: Optional[roslibpy.Ros] = None
+        self._client: Optional["_roslibpy.Ros"] = None
         self._connected = False
 
         # Cached state updated by background subscriptions
         self._pipeline_detected: bool = False
         self._mission_running: bool = False
-        self._pipeline_topic: Optional[roslibpy.Topic] = None
+        self._pipeline_topic: Optional["_roslibpy.Topic"] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def connect(self) -> bool:
+        """Connect to rosbridge and set up subscriptions."""
         try:
             self._client = roslibpy.Ros(host=self.host, port=self.port)
             t = threading.Thread(target=self._client.run, daemon=True)
@@ -183,18 +196,14 @@ class SUAVEConnector(Connector):
             deadline = time.monotonic() + self.connect_timeout
             while not self._client.is_connected:
                 if time.monotonic() > deadline:
-                    raise TimeoutError(
-                        f"rosbridge did not connect within {self.connect_timeout}s"
-                    )
+                    raise TimeoutError(f"rosbridge did not connect within {self.connect_timeout}s")
                 time.sleep(0.1)
 
             self._connected = True
             self._subscribe_pipeline_detected()
 
             if self._logger:
-                self._logger.info(
-                    "SUAVEConnector connected", host=self.host, port=self.port
-                )
+                self._logger.info("SUAVEConnector connected", host=self.host, port=self.port)
             if self._metrics:
                 self._metrics.increment("polaris.connector.suave.connected")
             return True
@@ -208,6 +217,7 @@ class SUAVEConnector(Connector):
             return False
 
     async def disconnect(self) -> bool:
+        """Disconnect from rosbridge and clean up subscriptions."""
         try:
             if self._pipeline_topic is not None:
                 try:
@@ -221,9 +231,7 @@ class SUAVEConnector(Connector):
                 self._client = None
             self._connected = False
             if self._logger:
-                self._logger.info(
-                    "SUAVEConnector disconnected", host=self.host, port=self.port
-                )
+                self._logger.info("SUAVEConnector disconnected", host=self.host, port=self.port)
             if self._metrics:
                 self._metrics.increment("polaris.connector.suave.disconnected")
             return True
@@ -233,6 +241,7 @@ class SUAVEConnector(Connector):
             return False
 
     async def get_system_id(self) -> str:
+        """Return the system ID for SUAVE connector."""
         return "suave"
 
     # ------------------------------------------------------------------
@@ -252,9 +261,7 @@ class SUAVEConnector(Connector):
         if self._client is None:
             return
 
-        self._pipeline_topic = roslibpy.Topic(
-            self._client, "/pipeline/detected", "std_msgs/Bool"
-        )
+        self._pipeline_topic = roslibpy.Topic(self._client, "/pipeline/detected", "std_msgs/Bool")
 
         def _on_pipeline(msg: dict) -> None:
             detected = bool(msg.get("data", False))
@@ -296,9 +303,7 @@ class SUAVEConnector(Connector):
 
         if not self._connected:
             if self._logger:
-                self._logger.warning(
-                    "SUAVEConnector collect_telemetry called while not connected"
-                )
+                self._logger.warning("SUAVEConnector collect_telemetry called while not connected")
             return SystemState(
                 system_id="suave",
                 timestamp=datetime.now(timezone.utc),
@@ -314,9 +319,7 @@ class SUAVEConnector(Connector):
         accumulated: Dict[str, dict] = {}
         stop_event = threading.Event()
 
-        topic = roslibpy.Topic(
-            self._client, "/diagnostics", "diagnostic_msgs/DiagnosticArray"
-        )
+        topic = roslibpy.Topic(self._client, "/diagnostics", "diagnostic_msgs/DiagnosticArray")
 
         def _on_diag(msg: dict) -> None:
             for s in msg.get("status", []):
@@ -371,9 +374,9 @@ class SUAVEConnector(Connector):
                 system_id="suave",
                 timestamp=now,
                 metrics=metrics,
-                health_status=HealthStatus.HEALTHY
-                if self._mission_running
-                else HealthStatus.UNHEALTHY,
+                health_status=(
+                    HealthStatus.HEALTHY if self._mission_running else HealthStatus.UNHEALTHY
+                ),
                 metadata={"warning": "No SUAVE monitor diagnostics received"},
             )
 
@@ -415,8 +418,7 @@ class SUAVEConnector(Connector):
                     if isinstance(raw_val, str):
                         fval = (
                             0.0
-                            if raw_val.strip().lower()
-                            in ("failure", "error", "false", "0")
+                            if raw_val.strip().lower() in ("failure", "error", "false", "0")
                             else 1.0
                         )
                         metrics[metric_name] = MetricValue(
@@ -501,6 +503,7 @@ class SUAVEConnector(Connector):
     # ------------------------------------------------------------------
 
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
+        """Execute an adaptation action on the SUAVE system."""
         if not self._connected:
             return ExecutionResult(
                 action_id=action.action_id,
@@ -521,9 +524,7 @@ class SUAVEConnector(Connector):
                 result = await self._execute_change_mode(action)
             else:
                 if self._metrics:
-                    self._metrics.increment(
-                        "polaris.connector.suave.actions_unsupported"
-                    )
+                    self._metrics.increment("polaris.connector.suave.actions_unsupported")
                 return ExecutionResult(
                     action_id=action.action_id,
                     status=ExecutionStatus.FAILED,
@@ -569,6 +570,7 @@ class SUAVEConnector(Connector):
             )
 
     async def validate_action(self, action: AdaptationAction) -> bool:
+        """Validate that an action is supported by SUAVE."""
         action_type = action.action_type.lower()
         if action_type in (_ACTION_START_MISSION, _ACTION_STOP_MISSION):
             return True
@@ -580,6 +582,7 @@ class SUAVEConnector(Connector):
         return False
 
     async def get_supported_actions(self) -> List[AdaptationAction]:
+        """Return list of adaptation actions supported by SUAVE."""
         actions = [
             AdaptationAction(
                 action_id="",
@@ -622,9 +625,7 @@ class SUAVEConnector(Connector):
     # Internal — action helpers
     # ------------------------------------------------------------------
 
-    async def _execute_start_mission(
-        self, action: AdaptationAction
-    ) -> ExecutionResult:
+    async def _execute_start_mission(self, action: AdaptationAction) -> ExecutionResult:
         """
         Start the mission via /task/request (suave_msgs/Task).
 
@@ -643,9 +644,7 @@ class SUAVEConnector(Connector):
         if task_name == TASK_FOLLOW_PIPELINE_LEGACY:
             task_name = TASK_INSPECT_PIPELINE
 
-        svc = roslibpy.Service(
-            self._client, "/task/request", "suave_msgs/Task"
-        )
+        svc = roslibpy.Service(self._client, "/task/request", "suave_msgs/Task")
         req = roslibpy.ServiceRequest({"task_name": task_name})
 
         try:
@@ -673,9 +672,7 @@ class SUAVEConnector(Connector):
             result_data={"task": task_name, "response": response},
         )
 
-    async def _execute_stop_mission(
-        self, action: AdaptationAction
-    ) -> ExecutionResult:
+    async def _execute_stop_mission(self, action: AdaptationAction) -> ExecutionResult:
         """
         Cancel the current task via /task/cancel (suave_msgs/Task).
 
@@ -687,9 +684,7 @@ class SUAVEConnector(Connector):
         if task_name == TASK_FOLLOW_PIPELINE_LEGACY:
             task_name = TASK_INSPECT_PIPELINE
 
-        svc = roslibpy.Service(
-            self._client, "/task/cancel", "suave_msgs/Task"
-        )
+        svc = roslibpy.Service(self._client, "/task/cancel", "suave_msgs/Task")
         req = roslibpy.ServiceRequest({"task_name": task_name})
 
         try:
@@ -718,9 +713,7 @@ class SUAVEConnector(Connector):
             result_data={"task": task_name, "response": response},
         )
 
-    async def _execute_change_mode(
-        self, action: AdaptationAction
-    ) -> ExecutionResult:
+    async def _execute_change_mode(self, action: AdaptationAction) -> ExecutionResult:
         """
         Change a function node's mode via system_modes ChangeMode service.
 
@@ -747,9 +740,7 @@ class SUAVEConnector(Connector):
 
         if function_node not in _VALID_MODES:
             if self._metrics:
-                self._metrics.increment(
-                    "polaris.connector.suave.actions_validation_failed"
-                )
+                self._metrics.increment("polaris.connector.suave.actions_validation_failed")
             return ExecutionResult(
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
@@ -762,9 +753,7 @@ class SUAVEConnector(Connector):
 
         if mode not in _VALID_MODES[function_node]:
             if self._metrics:
-                self._metrics.increment(
-                    "polaris.connector.suave.actions_validation_failed"
-                )
+                self._metrics.increment("polaris.connector.suave.actions_validation_failed")
             return ExecutionResult(
                 action_id=action.action_id,
                 status=ExecutionStatus.FAILED,
@@ -776,9 +765,7 @@ class SUAVEConnector(Connector):
             )
 
         service_name = f"/{function_node}/change_mode"
-        svc = roslibpy.Service(
-            self._client, service_name, "system_modes_msgs/ChangeMode"
-        )
+        svc = roslibpy.Service(self._client, service_name, "system_modes_msgs/ChangeMode")
         req = roslibpy.ServiceRequest({"mode_name": mode})
         response = await self._call_service(svc, req)
 
@@ -807,8 +794,8 @@ class SUAVEConnector(Connector):
 
     async def _call_service(
         self,
-        service: roslibpy.Service,
-        request: roslibpy.ServiceRequest,
+        service: "_roslibpy.Service",
+        request: "_roslibpy.ServiceRequest",
     ) -> dict:
         """Wrap roslibpy's callback-based service call into an awaitable."""
         loop = asyncio.get_event_loop()

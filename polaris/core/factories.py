@@ -277,58 +277,6 @@ def _register_default_connector_factories() -> None:
         if namespace is not None and not isinstance(namespace, str):
             raise ValueError("Kubernetes namespace must be a string")
 
-    def _validate_port(port: Any, connector_name: str) -> None:
-        if not isinstance(port, int):
-            raise ValueError(f"{connector_name} connection port must be an integer")
-        if not (MIN_PORT <= port <= MAX_PORT):
-            raise ValueError(
-                f"{connector_name} connection port must be between {MIN_PORT} and {MAX_PORT}"
-            )
-
-    def _validate_swim_connection(connection: Dict[str, Any]) -> None:
-        if not isinstance(connection, dict):
-            raise ValueError("SWIM connection config must be a dictionary")
-
-        host = connection.get("host")
-        if host is not None and not isinstance(host, str):
-            raise ValueError("SWIM connection host must be a string")
-
-        port = connection.get("port")
-        if port is not None:
-            _validate_port(port, "SWIM")
-
-    def _validate_wildfire_connection(connection: Dict[str, Any]) -> None:
-        if not isinstance(connection, dict):
-            raise ValueError("Wildfire connection config must be a dictionary")
-
-        base_url = connection.get("base_url")
-        if base_url is not None and not isinstance(base_url, str):
-            raise ValueError("Wildfire base_url must be a string")
-
-        host = connection.get("host")
-        if host is not None and not isinstance(host, str):
-            raise ValueError("Wildfire host must be a string")
-
-        port = connection.get("port")
-        if port is not None:
-            _validate_port(port, "Wildfire")
-
-    def _validate_kubernetes_connection(connection: Dict[str, Any]) -> None:
-        if not isinstance(connection, dict):
-            raise ValueError("Kubernetes connection config must be a dictionary")
-
-        kubeconfig_path = connection.get("kubeconfig_path")
-        if kubeconfig_path is not None and not isinstance(kubeconfig_path, str):
-            raise ValueError("Kubernetes kubeconfig_path must be a string")
-
-        in_cluster = connection.get("in_cluster")
-        if in_cluster is not None and not isinstance(in_cluster, bool):
-            raise ValueError("Kubernetes in_cluster must be a boolean")
-
-        namespace = connection.get("namespace")
-        if namespace is not None and not isinstance(namespace, str):
-            raise ValueError("Kubernetes namespace must be a string")
-
     def _swim_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
     ) -> "Connector":
@@ -541,7 +489,9 @@ def _register_default_strategy_factories() -> None:
                 thr_metric_names = st_cfg.get("thruster_failure_metric_names")
                 perf_metric_names = st_cfg.get("performance_metric_names")
 
-                trigger_cfg = st_cfg.get("trigger", {}) if isinstance(st_cfg.get("trigger"), dict) else {}
+                trigger_cfg = (
+                    st_cfg.get("trigger", {}) if isinstance(st_cfg.get("trigger"), dict) else {}
+                )
                 mode_cfg = st_cfg.get("modes", {}) if isinstance(st_cfg.get("modes"), dict) else {}
                 vis_mode_cfg = (
                     mode_cfg.get("visibility", {})
@@ -558,9 +508,7 @@ def _register_default_strategy_factories() -> None:
                     visibility_metric_names=vis_metric_names,
                     thruster_failure_metric_names=thr_metric_names,
                     performance_metric_names=perf_metric_names,
-                    trigger_visibility_below=float(
-                        trigger_cfg.get("visibility_below", 1.0)
-                    ),
+                    trigger_visibility_below=float(trigger_cfg.get("visibility_below", 1.0)),
                     trigger_performance_at_or_above=float(
                         trigger_cfg.get("performance_above_or_equal", 1.0)
                     ),
@@ -570,9 +518,7 @@ def _register_default_strategy_factories() -> None:
                     visibility_medium_at_or_above=float(
                         vis_mode_cfg.get("medium_at_or_above", 1.0)
                     ),
-                    visibility_high_at_or_above=float(
-                        vis_mode_cfg.get("high_at_or_above", 2.0)
-                    ),
+                    visibility_high_at_or_above=float(vis_mode_cfg.get("high_at_or_above", 2.0)),
                     search_path_function_node=str(
                         mode_cfg.get("search_path_function_node", "f_generate_search_path")
                     ),
@@ -580,16 +526,12 @@ def _register_default_strategy_factories() -> None:
                         mode_cfg.get("maintain_motion_function_node", "f_maintain_motion")
                     ),
                     spiral_low_mode=str(vis_mode_cfg.get("low_mode", "fd_spiral_low")),
-                    spiral_medium_mode=str(
-                        vis_mode_cfg.get("medium_mode", "fd_spiral_medium")
-                    ),
+                    spiral_medium_mode=str(vis_mode_cfg.get("medium_mode", "fd_spiral_medium")),
                     spiral_high_mode=str(vis_mode_cfg.get("high_mode", "fd_spiral_high")),
                     recover_thrusters_mode=str(
                         motion_mode_cfg.get("failure_mode", "fd_recover_thrusters")
                     ),
-                    all_thrusters_mode=str(
-                        motion_mode_cfg.get("healthy_mode", "fd_all_thrusters")
-                    ),
+                    all_thrusters_mode=str(motion_mode_cfg.get("healthy_mode", "fd_all_thrusters")),
                     cooldown_seconds=int(st_cfg.get("cooldown_seconds", 0)),
                     logger=logger,
                     metrics=metrics,
@@ -632,7 +574,6 @@ def _register_default_strategy_factories() -> None:
                     llm_client=llm_client,
                     knowledge_store=knowledge_store,
                     world_model=world_model,
-                    connector_getter=registry.get,
                     steps_limit=steps_limit,
                     temperature=temperature,
                     allowed_tools=allowed_tools,
@@ -686,7 +627,6 @@ def _register_default_strategy_factories() -> None:
                     diagnostician_config=_build_agent_cfg_hybrid(ma_cfg.get("diagnostician")),
                     planner_config=_build_agent_cfg_hybrid(ma_cfg.get("planner")),
                     validator_config=_build_agent_cfg_hybrid(ma_cfg.get("validator")),
-                    agent_prompts=ma_cfg.get("agent_prompts"),
                     logger=logger,
                     metrics=metrics,
                 )

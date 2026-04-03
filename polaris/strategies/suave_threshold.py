@@ -46,6 +46,7 @@ class SuaveThresholdStrategy(AdaptationStrategy):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
+        """Initialize SUAVE threshold strategy with visibility and thruster parameters."""
         self.visibility_metric_names = list(
             visibility_metric_names
             or [
@@ -129,15 +130,11 @@ class SuaveThresholdStrategy(AdaptationStrategy):
         performance = self._extract_metric_float(state, self.performance_metric_names)
 
         thruster_failed = (
-            thruster_raw is not None
-            and thruster_raw >= self.trigger_thruster_failure_at_or_above
+            thruster_raw is not None and thruster_raw >= self.trigger_thruster_failure_at_or_above
         )
-        visibility_bad = (
-            visibility is not None and visibility < self.trigger_visibility_below
-        )
+        visibility_bad = visibility is not None and visibility < self.trigger_visibility_below
         performance_bad = (
-            performance is not None
-            and performance >= self.trigger_performance_at_or_above
+            performance is not None and performance >= self.trigger_performance_at_or_above
         )
 
         if not (thruster_failed or visibility_bad or performance_bad):
@@ -217,6 +214,7 @@ class SuaveThresholdStrategy(AdaptationStrategy):
         return self.spiral_low_mode
 
     async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
+        """Record metrics when an action is executed."""
         self._adaptation_count += 1
         if result.status.value == "success":
             self._success_count += 1
@@ -231,6 +229,7 @@ class SuaveThresholdStrategy(AdaptationStrategy):
         )
 
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
+        """Return the tunable parameters for SUAVE threshold strategy."""
         return {
             "trigger_visibility_below": ParameterSpec(
                 current_value=self.trigger_visibility_below,
@@ -278,6 +277,7 @@ class SuaveThresholdStrategy(AdaptationStrategy):
         }
 
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
+        """Update a tunable parameter value."""
         if parameter_path == "trigger_visibility_below":
             self.trigger_visibility_below = float(new_value)
             return True
@@ -299,6 +299,7 @@ class SuaveThresholdStrategy(AdaptationStrategy):
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
+        """Apply configuration updates to strategy parameters."""
         for key in [
             "trigger_visibility_below",
             "trigger_performance_at_or_above",
@@ -311,6 +312,7 @@ class SuaveThresholdStrategy(AdaptationStrategy):
                 await self.update_parameter(key, config[key])
 
     async def get_performance_metrics(self) -> Dict[str, float]:
+        """Get performance metrics for the strategy."""
         if self._adaptation_count == 0:
             return {"success_rate": 0.0}
         return {
