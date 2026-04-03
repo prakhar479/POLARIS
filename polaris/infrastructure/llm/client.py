@@ -1,5 +1,4 @@
-"""
-LLM Client for Polaris.
+"""LLM Client for Polaris.
 
 Provides abstraction over different LLM providers (Google Gemini, OpenAI, etc.)
 """
@@ -12,9 +11,16 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from polaris.infrastructure.constants import DEFAULT_GOOGLE_MODEL, DEFAULT_MAX_TOKENS
+
+CANONICAL_LLM_PROVIDERS = {"google", "openai", "openrouter", "groq", "ollama"}
+
+try:
+    import httpx
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -168,8 +174,8 @@ class GoogleGeminiClient(LLMClient):
     def _flatten_anyof(anyof_list: List[Dict[str, Any]]) -> Any:
         """Flatten anyOf to a single schema that Gemini understands.
 
-        For nullable fields (type + null), we use the non-null type.
-        For multiple object types, we merge their properties.
+        For nullable fields (type + null), we use the non-null type. For multiple object
+        types, we merge their properties.
 
         Returns:
             Schema object (can be dict or empty)
@@ -382,14 +388,14 @@ class OpenAIClient(LLMClient):
 class OpenRouterClient(LLMClient):
     """OpenRouter LLM client.
 
-    OpenRouter exposes an OpenAI-compatible Chat Completions API.
-    Docs: https://openrouter.ai/docs
+    OpenRouter exposes an OpenAI-compatible Chat Completions API. Docs:
+    https://openrouter.ai/docs
 
     Environment variables:
-      - OPENROUTER_API_KEY (required if api_key not passed)
-      - OPENROUTER_BASE_URL (optional, default: https://openrouter.ai/api/v1)
-      - OPENROUTER_SITE_URL (optional, sent as HTTP-Referer)
-      - OPENROUTER_APP_NAME (optional, sent as X-Title)
+    - OPENROUTER_API_KEY (required if api_key not passed)
+    - OPENROUTER_BASE_URL (optional, default: https://openrouter.ai/api/v1)
+    - OPENROUTER_SITE_URL (optional, sent as HTTP-Referer)
+    - OPENROUTER_APP_NAME (optional, sent as X-Title)
     """
 
     def __init__(
@@ -400,9 +406,12 @@ class OpenRouterClient(LLMClient):
         site_url: Optional[str] = None,
         app_name: Optional[str] = None,
     ) -> None:
+        """Initialize OpenRouter client with configuration."""
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.model = model
-        self.base_url = base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        self.base_url = (
+            base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        )
         self.site_url = site_url or os.getenv("OPENROUTER_SITE_URL")
         self.app_name = app_name or os.getenv("OPENROUTER_APP_NAME")
 
@@ -473,6 +482,157 @@ class OpenRouterClient(LLMClient):
             raise RuntimeError(f"OpenRouter API error: {e}") from e
 
 
+class OllamaClient(LLMClient):
+    """Ollama LLM client.
+
+    Ollama can expose an OpenAI-compatible Chat Completions API at:
+    - {base_url}/v1/chat/completions
+
+    Common defaults:
+    - base_url: http://10.10.16.46:11435
+    - model: llama3.1
+
+    Environment variables:
+    - OLLAMA_BASE_URL (optional)
+    - OLLAMA_MODEL (optional)
+
+    Note: Ollama typically runs locally and doesn't require an API key. If your
+    deployment uses a gateway that requires auth, you can pass api_key.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-oss:20b",
+        base_url: Optional[str] = None,
+        generate_mode: str = "openai_compat",
+        http_client: Optional[Any] = None,
+    ) -> None:
+        """Initialize Ollama client with optional overrides."""
+        self.api_key = api_key or os.getenv("OLLAMA_API_KEY")
+        self.model = model or os.getenv("OLLAMA_MODEL") or "gpt-oss:20b"
+        self.base_url = base_url or os.getenv("OLLAMA_BASE_URL") or "http://10.10.16.46:11435"
+
+        # Supported modes:
+        #  - openai_compat: uses /v1/chat/completions
+        #  - native: uses /api/generate (Ollama's JSON format)
+        self.generate_mode = (generate_mode or "openai_compat").strip().lower()
+        if self.generate_mode in ("openai", "openai-compatible", "openai_compatible"):
+            self.generate_mode = "openai_compat"
+
+        self._openai_client = None
+        self._http_client = http_client
+        if self.generate_mode == "openai_compat":
+            try:
+                import openai
+
+                # If api_key is None, openai client still requires a string; use a dummy.
+                effective_key = self.api_key or "ollama"
+
+                self._openai_client = openai.AsyncOpenAI(
+                    api_key=effective_key,
+                    base_url=self.base_url.rstrip("/") + "/v1",
+                )
+            except ImportError:
+                raise ImportError("openai package not installed. Install with: pip install openai")
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+    ) -> LLMResponse:
+        """Generate response using Ollama (OpenAI-compatible) with error handling."""
+        try:
+            if self.generate_mode == "native":
+                # Native Ollama endpoint: POST /api/generate
+                # Uses a single prompt string (we flatten chat into a readable prompt).
+                prompt = "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
+
+                payload: Dict[str, Any] = {
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    # map temperature into options so it behaves similarly
+                    "options": {"temperature": temperature},
+                }
+
+                if response_schema is not None:
+                    logging.getLogger("polaris.llm").warning(
+                        "OllamaClient.generate(native): response_schema was provided but is not "
+                        "supported by /api/generate. The response will be unstructured text."
+                    )
+
+                url = self.base_url.rstrip("/") + "/api/generate"
+
+                if self._http_client is not None:
+                    resp = await self._http_client.post(url, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                else:
+                    if httpx is None:
+                        raise ImportError(
+                            "httpx package not installed. Install with: pip install httpx"
+                        )
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post(url, json=payload)
+                        resp.raise_for_status()
+                        data = resp.json()
+
+                text = data.get("response")
+                if not text:
+                    raise ValueError("Empty response from Ollama /api/generate")
+
+                return LLMResponse(
+                    content=text,
+                    model=self.model,
+                    tokens_used=data.get("eval_count"),
+                    finish_reason="stop",
+                )
+
+            # Default: OpenAI-compatible endpoint
+            if self._openai_client is None:
+                raise RuntimeError(
+                    "OllamaClient is configured for openai_compat but the OpenAI client "
+                    "could not be initialized."
+                )
+
+            openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": openai_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+
+            if response_schema is not None:
+                logging.getLogger("polaris.llm").warning(
+                    "OllamaClient.generate(openai_compat): response_schema was provided but is not yet "
+                    "implemented. The response will be unstructured text."
+                )
+
+            response = await self._openai_client.chat.completions.create(**kwargs)
+
+            if not response.choices or not response.choices[0].message.content:
+                raise ValueError("Empty response from Ollama API")
+
+            return LLMResponse(
+                content=response.choices[0].message.content,
+                model=self.model,
+                tokens_used=response.usage.total_tokens if response.usage else None,
+                finish_reason=response.choices[0].finish_reason,
+            )
+
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"Ollama API error: {e}") from e
+
+
 class GroqClient(LLMClient):
     """Groq LLM client."""
 
@@ -510,11 +670,13 @@ class GroqClient(LLMClient):
             groq_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
+            # Mypy cannot safely infer non-streaming mode return types inexecutor.
+            # Cast to Any for both messages and response to fix union-attr errors.
+            response: Any = await loop.run_in_executor(
                 None,
                 lambda: self.client.chat.completions.create(
                     model=self.model,
-                    messages=groq_messages,
+                    messages=cast(Any, groq_messages),
                     temperature=temperature,
                     max_completion_tokens=max_tokens,
                     top_p=1,
@@ -582,7 +744,11 @@ class ResilientLLMClient(LLMClient):
         else:
             if self.provider == "openai" and os.getenv("OPENAI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("OPENAI_API_KEYS", "").split(",") if k.strip()]
-            if self.provider in ("google", "gemini") and os.getenv("GEMINI_API_KEYS"):
+            if self.provider == "openrouter" and os.getenv("OPENROUTER_API_KEYS"):
+                keys = [
+                    k.strip() for k in os.getenv("OPENROUTER_API_KEYS", "").split(",") if k.strip()
+                ]
+            if self.provider == "google" and os.getenv("GEMINI_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
             if self.provider == "groq" and os.getenv("GROQ_API_KEYS"):
                 keys = [k.strip() for k in os.getenv("GROQ_API_KEYS", "").split(",") if k.strip()]
@@ -618,30 +784,47 @@ class ResilientLLMClient(LLMClient):
             return OpenRouterClient(
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", "openai/gpt-4o-mini")),
-                base_url=str(self.inner_kwargs.get("base_url"))
-                if self.inner_kwargs.get("base_url")
-                else None,
-                site_url=str(self.inner_kwargs.get("site_url"))
-                if self.inner_kwargs.get("site_url")
-                else None,
-                app_name=str(self.inner_kwargs.get("app_name"))
-                if self.inner_kwargs.get("app_name")
-                else None,
+                base_url=(
+                    str(self.inner_kwargs.get("base_url"))
+                    if self.inner_kwargs.get("base_url")
+                    else None
+                ),
+                site_url=(
+                    str(self.inner_kwargs.get("site_url"))
+                    if self.inner_kwargs.get("site_url")
+                    else None
+                ),
+                app_name=(
+                    str(self.inner_kwargs.get("app_name"))
+                    if self.inner_kwargs.get("app_name")
+                    else None
+                ),
             )
         elif self.provider == "groq":
             return GroqClient(
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", "openai/gpt-oss-120b")),
             )
-        elif self.provider in ("google", "gemini"):
+        elif self.provider == "google":
             return GoogleGeminiClient(
                 api_key=api_key,
                 model=str(self.model or self.inner_kwargs.get("model", DEFAULT_GOOGLE_MODEL)),
             )
+        elif self.provider == "ollama":
+            # Ollama typically doesn't require API keys. If provided, it's passed through.
+            return OllamaClient(
+                api_key=api_key,
+                model=str(self.model or self.inner_kwargs.get("model", "gpt-oss:20b")),
+                base_url=(
+                    str(self.inner_kwargs.get("base_url"))
+                    if self.inner_kwargs.get("base_url")
+                    else None
+                ),
+            )
         else:
             raise ValueError(
                 f"Unknown LLM provider: '{self.provider}'. "
-                "Supported values are: 'openai', 'openrouter', 'groq', 'google', 'gemini'."
+                "Supported values are: 'google', 'openai', 'openrouter', 'groq', 'ollama'."
             )
 
     def _current_client(self) -> LLMClient:
@@ -718,6 +901,7 @@ class ResilientLLMClient(LLMClient):
                         preview = resp.content if len(resp.content) <= 2000 else resp.content[:2000]
                         self._logger.info("response_preview=%s", preview)
                     except Exception:
+                        # Silently ignore preview logging failures - not critical
                         pass
                     return resp
 
@@ -753,14 +937,13 @@ class ResilientLLMClient(LLMClient):
     def update_resilience(self, new_resilience: Dict[str, Any]) -> None:
         """Hot-update resilience parameters at runtime.
 
-        Safe to call while requests are in-flight. New settings apply to
-        subsequent calls.
+        Safe to call while requests are in-flight. New settings apply to subsequent
+        calls.
 
-        Note on concurrency: when the concurrency limit is changed, in-flight
-        requests hold a reference to the old Semaphore and will release it
-        correctly.  New requests will acquire the new
-        Semaphore.  There is a brief window where both old and new semaphores
-        are live; this is intentional and safe.
+        Note on concurrency: when the concurrency limit is changed, in-flight requests
+        hold a reference to the old Semaphore and will release it correctly.  New
+        requests will acquire the new Semaphore.  There is a brief window where both old
+        and new semaphores are live; this is intentional and safe.
         """
         self.resilience.update(new_resilience)
 
@@ -770,12 +953,14 @@ class ResilientLLMClient(LLMClient):
                 self._capacity = new_cap
                 self._tokens = min(self._tokens, float(self._capacity))
             except Exception:
+                # Silently ignore invalid burst value - keep existing setting
                 pass
 
         if "rps" in new_resilience:
             try:
                 self._refill_rate = float(new_resilience["rps"])
             except Exception:
+                # Silently ignore invalid rps value - keep existing setting
                 pass
 
         for k in ("max_retries", "base_backoff_ms", "max_backoff_ms"):
@@ -783,6 +968,7 @@ class ResilientLLMClient(LLMClient):
                 try:
                     setattr(self, k, int(new_resilience[k]))
                 except Exception:
+                    # Silently ignore invalid resilience value - keep existing setting
                     pass
 
         if "concurrency" in new_resilience:
@@ -791,6 +977,7 @@ class ResilientLLMClient(LLMClient):
                 if new_conc > 0:
                     self._semaphore = asyncio.Semaphore(new_conc)
             except Exception:
+                # Silently ignore invalid concurrency value - keep existing setting
                 pass
 
 
@@ -798,17 +985,23 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
     """Create LLM client for specified provider.
 
     Args:
-        provider: 'google'/'gemini', 'openai', 'openrouter', or 'groq'
-        **kwargs: Additional arguments for the client
+        provider: 'google', 'openai', 'openrouter', 'groq', or 'ollama'
+            **kwargs: Additional arguments for the client
 
     Returns:
         LLMClient instance
     """
-    provider_norm = provider.lower()
-    if provider_norm == "gemini":
-        provider_norm = "google"
-    if provider_norm in ("open-router", "open_router"):
-        provider_norm = "openrouter"
+    provider_norm = str(provider or "").strip().lower()
+
+    # Support aliases for Ollama
+    if provider_norm in ("ollama-openai", "ollama_openai"):
+        provider_norm = "ollama"
+
+    if provider_norm not in CANONICAL_LLM_PROVIDERS:
+        raise ValueError(
+            f"Unknown LLM provider: {provider_norm}. "
+            "Supported values are: google, openai, openrouter, groq, ollama."
+        )
 
     resilience: Optional[Dict[str, Any]] = kwargs.pop("resilience", None)
     model = kwargs.get("model")
@@ -819,6 +1012,7 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
         or (provider_norm == "openrouter" and os.getenv("OPENROUTER_API_KEYS"))
         or (provider_norm == "google" and os.getenv("GEMINI_API_KEYS"))
         or (provider_norm == "groq" and os.getenv("GROQ_API_KEYS"))
+        # Ollama is typically local and doesn't use key rotation.
     )
 
     if resilience or enabled_env or has_multi_keys:
@@ -834,5 +1028,6 @@ def create_llm_client(provider: str = "google", **kwargs: Any) -> LLMClient:
         return OpenRouterClient(**kwargs)
     elif provider_norm == "groq":
         return GroqClient(**kwargs)
-    else:
-        raise ValueError(f"Unknown LLM provider: {provider_norm}")
+    elif provider_norm == "ollama":
+        return OllamaClient(**kwargs)
+    raise ValueError(f"Unknown LLM provider: {provider_norm}")

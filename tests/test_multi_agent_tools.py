@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from polaris.abstractions.strategy import AdaptationContext
+from polaris.abstractions.system_contract import SystemContract
 from polaris.core.models import HealthStatus, MetricValue, SystemState
 from polaris.infrastructure.llm import LLMResponse
+from polaris.strategies.action_resolution import StrictContractViolation
 from polaris.strategies.multi_agent import (
     ActionBlock,
     AgentConfig,
@@ -47,7 +49,15 @@ async def test_diagnostician_uses_tool(mock_llm, mock_store, mock_world):
         health_status=HealthStatus.HEALTHY,
         timestamp=datetime.now(timezone.utc),
     )
-    context = AdaptationContext(system_id="test-sys", historical_states=[])
+    context = AdaptationContext(
+        system_id="test-sys",
+        historical_states=[],
+        system_contract=SystemContract(
+            system_id="test-sys",
+            connector_type="MockConnector",
+            supported_action_types=("scale_up", "scale_down"),
+        ),
+    )
 
     # Round 1: Diagnostician asks for a tool
     resp1 = LLMResponse(
@@ -126,11 +136,20 @@ async def test_per_agent_steps_limit(mock_llm, mock_store, mock_world):
         content=json.dumps({"tool": "get_recent_states", "args": {}}), model="test-model"
     )
 
-    actions = await strategy.assess(
-        state, AdaptationContext(system_id="test-sys", historical_states=[])
-    )
-    assert actions == []
-    assert mock_llm.generate.call_count == 1
+    with pytest.raises(
+        StrictContractViolation, match="reached step limit without producing a final decision"
+    ):
+        await strategy.assess(
+            state,
+            AdaptationContext(
+                system_id="test-sys",
+                historical_states=[],
+                system_contract=SystemContract(
+                    system_id="test-sys",
+                    supported_action_types=("scale_up",),
+                ),
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -174,8 +193,17 @@ async def test_per_agent_tools_restriction(mock_llm, mock_store, mock_world):
     )
     mock_llm.generate.side_effect = [resp1, resp2]
 
-    await strategy.assess(state, AdaptationContext(system_id="test-sys", historical_states=[]))
-
-    second_call_msgs = mock_llm.generate.call_args_list[1][0][0]
-    tool_result_msg = next(msg for msg in second_call_msgs if "tool_result" in msg.content)
-    assert "tool_not_allowed" in tool_result_msg.content
+    with pytest.raises(
+        StrictContractViolation, match="requested disallowed tool 'predict_outcome'"
+    ):
+        await strategy.assess(
+            state,
+            AdaptationContext(
+                system_id="test-sys",
+                historical_states=[],
+                system_contract=SystemContract(
+                    system_id="test-sys",
+                    supported_action_types=("foo",),
+                ),
+            ),
+        )

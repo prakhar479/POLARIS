@@ -1,5 +1,4 @@
-"""
-Example: Creating a custom adaptation strategy.
+"""Example: Creating a custom adaptation strategy.
 
 Shows how to implement custom adaptation logic.
 """
@@ -13,8 +12,7 @@ from polaris.core.models import AdaptationAction, SystemState
 
 
 class CustomStrategy(AdaptationStrategy):
-    """
-    Custom strategy that adapts based on custom logic.
+    """Custom strategy that adapts based on custom logic.
 
     Example: Proactive scaling based on time of day.
     """

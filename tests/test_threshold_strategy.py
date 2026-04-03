@@ -27,6 +27,9 @@ class TestThresholdReactiveStrategy:
                 "cpu_usage": {"high": 80.0, "low": 20.0},
                 "memory_usage": {"high": 85.0, "low": 25.0},
             },
+            action_templates={
+                "default": {"high": {"type": "scale_up"}, "low": {"type": "scale_down"}}
+            },
             cooldown_seconds=60,
             logger=mock_logger,
             metrics=mock_metrics,
@@ -54,13 +57,8 @@ class TestThresholdReactiveStrategy:
     def test_default_thresholds(self):
         """Test default threshold configuration."""
         strategy = ThresholdReactiveStrategy()
-
-        expected_thresholds = {
-            "cpu_usage": {"high": 80.0, "low": 20.0},
-            "memory_usage": {"high": 85.0, "low": 25.0},
-        }
-        assert strategy.thresholds == expected_thresholds
-        assert strategy.cooldown_seconds == 60
+        assert strategy.thresholds == {}
+        assert strategy.action_templates == {}
 
     @pytest.mark.asyncio
     async def test_high_threshold_exceeded(self, strategy, context):
@@ -193,7 +191,7 @@ class TestThresholdReactiveStrategy:
 
     @pytest.mark.asyncio
     async def test_invalid_metric_value(self, strategy, context):
-        """Test handling of non-numeric metric values."""
+        """Configured threshold metrics must be numeric at runtime (fail-fast)."""
         state = SystemState(
             system_id="test-system",
             timestamp=datetime.now(timezone.utc),
@@ -201,15 +199,18 @@ class TestThresholdReactiveStrategy:
             health_status=HealthStatus.HEALTHY,
         )
 
-        actions = await strategy.assess(state, context)
-        assert isinstance(actions, list)
-        assert len(actions) == 0
+        with pytest.raises(ValueError, match="expected numeric metric value"):
+            await strategy.assess(state, context)
 
     @pytest.mark.asyncio
     async def test_server_count_logic(self, strategy, context):
         """Test inverted logic for server_count metric."""
         # Add server_count threshold
         strategy.thresholds["server_count"] = {"high": 10, "low": 2}
+        strategy.action_templates["server_count"] = {
+            "high": {"type": "scale_down"},
+            "low": {"type": "scale_up"},
+        }
 
         # Low server count should trigger scale_up
         state_low = SystemState(
@@ -243,6 +244,61 @@ class TestThresholdReactiveStrategy:
         assert isinstance(actions_high, list)
         assert len(actions_high) == 1
         assert actions_high[0].action_type == "scale_down"
+
+    @pytest.mark.asyncio
+    async def test_custom_action_templates_override_defaults(
+        self, context, mock_logger, mock_metrics
+    ):
+        """Custom threshold action templates should control emitted action types."""
+        strategy = ThresholdReactiveStrategy(
+            thresholds={"latency": {"high": 250.0, "low": 50.0}},
+            action_templates={
+                "default": {
+                    "high": {"type": "expand_capacity", "parameters": {"step": 2}},
+                    "low": {"type": "shrink_capacity", "parameters": {"step": 1}},
+                }
+            },
+            logger=mock_logger,
+            metrics=mock_metrics,
+        )
+
+        high_state = SystemState(
+            system_id="test-system",
+            timestamp=datetime.now(timezone.utc),
+            metrics={"latency": MetricValue("latency", 300.0, "ms")},
+            health_status=HealthStatus.HEALTHY,
+        )
+
+        actions = await strategy.assess(high_state, context)
+        assert len(actions) == 1
+        assert actions[0].action_type == "expand_capacity"
+        assert actions[0].parameters["step"] == 2
+
+    @pytest.mark.asyncio
+    async def test_apply_config_update_replaces_action_templates(self, strategy, context):
+        """Hot-reload config updates should reconfigure threshold action templates."""
+        await strategy.apply_config_update(
+            {
+                "action_templates": {
+                    "default": {
+                        "high": {"type": "scale_out", "parameters": {"instances": 3}},
+                        "low": {"type": "scale_in", "parameters": {"instances": 1}},
+                    }
+                }
+            }
+        )
+
+        state = SystemState(
+            system_id="test-system",
+            timestamp=datetime.now(timezone.utc),
+            metrics={"cpu_usage": MetricValue("cpu_usage", 90.0, "percent")},
+            health_status=HealthStatus.HEALTHY,
+        )
+
+        actions = await strategy.assess(state, context)
+        assert len(actions) == 1
+        assert actions[0].action_type == "scale_out"
+        assert actions[0].parameters["instances"] == 3
 
     @pytest.mark.asyncio
     async def test_on_action_executed(self, strategy):

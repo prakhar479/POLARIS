@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from polaris.abstractions.system_contract import SystemContract
 from polaris.cli.interactive import PolarisInteractiveCLI
 from polaris.core.models import HealthStatus, MetricValue, SystemState
 
@@ -10,12 +11,23 @@ from polaris.core.models import HealthStatus, MetricValue, SystemState
 class _DummyRegistry:
     def __init__(self) -> None:
         self._systems = {"system-a", "system-b"}
+        self._contracts = {
+            "system-a": SystemContract(
+                system_id="system-a",
+                connector_type="MockConnector",
+                supported_action_types=("scale_deployment", "restart_deployment"),
+                action_aliases={"restart deployment": "restart_deployment"},
+            )
+        }
 
     def system_ids(self):
         return self._systems
 
     def all(self):
         return []
+
+    def get_contract(self, system_id):
+        return self._contracts.get(system_id)
 
 
 class _DummyMetrics:
@@ -107,6 +119,25 @@ def test_system_id_completion_for_knowledge() -> None:
     assert "system-b" in completions
 
 
+def test_predict_completion_uses_contract_actions() -> None:
+    cli = PolarisInteractiveCLI(_DummyPolaris())
+
+    line = "predict system-a sc"
+    completions = cli.complete_predict("sc", line, len("predict system-a "), len(line))
+
+    assert "scale_deployment" in completions
+    assert "scale_up" not in completions
+
+
+def test_predict_completion_without_contract_returns_no_actions() -> None:
+    cli = PolarisInteractiveCLI(_DummyPolaris())
+
+    line = "predict system-b "
+    completions = cli.complete_predict("", line, len(line), len(line))
+
+    assert completions == []
+
+
 def test_unknown_command_shows_suggestion() -> None:
     cli = PolarisInteractiveCLI(_DummyPolaris())
     output: List[str] = []
@@ -114,4 +145,4 @@ def test_unknown_command_shows_suggestion() -> None:
 
     cli.default("sttus")
 
-    assert any("Did you mean" in line and "status" in line for line in output)
+    assert any("Auto-correcting" in line and "status" in line for line in output)

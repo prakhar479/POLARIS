@@ -7,6 +7,9 @@ on:
     branches: [ main, develop ]
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: write
+
 jobs:
   auto-format:
     runs-on: ubuntu-latest
@@ -22,54 +25,27 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: 3.9
+        python-version: '3.10'
 
     - name: Install formatting tools
       run: |
         python -m pip install --upgrade pip
-        pip install "black>=25.0.0" isort
+        pip install -e .[dev]
 
     - name: Check if formatting is needed
       id: check-format
       run: |
-        # Check Black formatting
-        black_needed=false
-        if ! black --check --diff --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
-          black_needed=true
-        fi
-
-        # Check isort formatting
-        isort_needed=false
-        if ! isort --check-only --diff --profile=black --line-length=100 polaris/ tests/ examples/ 2>/dev/null; then
-          isort_needed=true
-        fi
-
-        # Set outputs
-        echo "black_needed=$black_needed" >> $GITHUB_OUTPUT
-        echo "isort_needed=$isort_needed" >> $GITHUB_OUTPUT
-
-        if [ "$black_needed" = "true" ] || [ "$isort_needed" = "true" ]; then
-          echo "formatting_needed=true" >> $GITHUB_OUTPUT
-        else
+        if make format-check; then
           echo "formatting_needed=false" >> $GITHUB_OUTPUT
+        else
+          echo "formatting_needed=true" >> $GITHUB_OUTPUT
         fi
 
     - name: Format code
       if: steps.check-format.outputs.formatting_needed == 'true'
       run: |
         echo "Formatting code..."
-
-        # Run Black formatting
-        if [ "${{ steps.check-format.outputs.black_needed }}" = "true" ]; then
-          echo "Running Black formatter..."
-          black --line-length=100 polaris/ tests/ examples/
-        fi
-
-        # Run isort
-        if [ "${{ steps.check-format.outputs.isort_needed }}" = "true" ]; then
-          echo "Running isort..."
-          isort --profile=black --line-length=100 polaris/ tests/ examples/
-        fi
+        make format
 
     - name: Commit and push formatting changes
       if: steps.check-format.outputs.formatting_needed == 'true'
@@ -93,8 +69,6 @@ jobs:
     - name: Summary
       run: |
         echo "=== Auto-format Summary ==="
-        echo "Black formatting needed: ${{ steps.check-format.outputs.black_needed }}"
-        echo "isort formatting needed: ${{ steps.check-format.outputs.isort_needed }}"
         echo "Overall formatting needed: ${{ steps.check-format.outputs.formatting_needed }}"
 
         if [ "${{ steps.check-format.outputs.formatting_needed }}" = "true" ]; then

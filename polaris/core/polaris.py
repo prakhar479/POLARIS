@@ -1,7 +1,6 @@
 """Main Polaris framework orchestrator.
 
-The ``Polaris`` class is a thin orchestrator that wires together focused
-sub-modules:
+The ``Polaris`` class is a thin orchestrator that wires together focused sub-modules:
 
 - :mod:`polaris.core.component_builder` — factory helpers for all components
 - :mod:`polaris.core.monitoring_loop` — telemetry collection + adaptation cycle
@@ -36,17 +35,12 @@ class Polaris:
 
     Simple usage (all defaults)::
 
-        polaris = Polaris(config_path="config.yaml")
-        await polaris.run()
+    polaris = Polaris(config_path="config.yaml") await polaris.run()
 
     Custom components::
 
-        polaris = Polaris(
-            strategy=MyStrategy(),
-            world_model=MyWorldModel(),
-            meta_learner=MyMetaLearner(),
-        )
-        await polaris.run()
+    polaris = Polaris( strategy=MyStrategy(), world_model=MyWorldModel(),
+    meta_learner=MyMetaLearner(), ) await polaris.run()
     """
 
     def __init__(
@@ -71,7 +65,7 @@ class Polaris:
         """Initialise Polaris with custom or default components."""
         self.cli_overrides: Dict[str, Any] = cli_overrides or {}
 
-        # ── Configuration ────────────────────────────────────────────────
+        # Configuration
         if config_path:
             from polaris.infrastructure.config import load_config
 
@@ -81,7 +75,7 @@ class Polaris:
             self.config = config or PolarisConfig()
             self._config_path = None
 
-        # ── Infrastructure ───────────────────────────────────────────────
+        # Infrastructure
         self.logger: "Logger" = logger or ComponentBuilder.build_logger(
             self.config, self.cli_overrides
         )
@@ -92,7 +86,7 @@ class Polaris:
             self.config, self.metrics, self.logger
         )
 
-        # ── Core domain components ───────────────────────────────────────
+        # Core domain components
         self.knowledge_store: "KnowledgeStore" = knowledge_store or (
             ComponentBuilder.build_knowledge_store(self.config, self.logger, self.metrics)
         )
@@ -108,7 +102,7 @@ class Polaris:
         self.registry: ConnectorRegistry = ConnectorRegistry(metrics=registry_metrics)
         self._connectors: List["Connector"] = connectors or []
 
-        # ── Strategy ─────────────────────────────────────────────────────
+        # Strategy
         self.strategy: Optional["AdaptationStrategy"] = strategy
         if not self.strategy and hasattr(self.config, "strategy") and self.config.strategy:
             self.strategy = ComponentBuilder.build_strategy(
@@ -125,7 +119,7 @@ class Polaris:
 
             self.strategy = ThresholdReactiveStrategy()
 
-        # ── Meta-learner ─────────────────────────────────────────────────
+        # Meta-learner
         self.meta_learner: Optional["MetaLearner"] = meta_learner
         self._meta_learning_interval_seconds: float = 3600.0
         meta_cfg = getattr(self.config, "meta_learner", None)
@@ -153,27 +147,27 @@ class Polaris:
                     )
                 )
 
-        # ── Connectors from config ───────────────────────────────────────
+        # Connectors from config
         if hasattr(self.config, "systems") and self.config.systems and not connectors:
             self._connectors = ComponentBuilder.build_connectors(
                 self.config.systems, self.logger, self.metrics, self.config
             )
 
-        # ── Monitoring interval ──────────────────────────────────────────
+        # Monitoring interval
         self._monitoring_interval: float = ComponentBuilder.resolve_monitoring_interval(
             self.config, self.cli_overrides, self.logger
         )
 
-        # ── Metrics export config ────────────────────────────────────────
+        # Metrics export config
         self._metrics_export_config: Dict[str, Any] = ComponentBuilder.build_metrics_export_config(
             self.config, self.cli_overrides, self.metrics
         )
 
-        # ── Internal state ───────────────────────────────────────────────
+        # Internal state
         self._running: bool = False
         self._tasks: List[asyncio.Task[Any]] = []
 
-        # ── Log summary ──────────────────────────────────────────────────
+        # Log summary
         self.logger.info(
             "Polaris components initialized",
             has_strategy=self.strategy is not None,
@@ -203,9 +197,12 @@ class Polaris:
         await self.event_bus.start()
 
         # Connect all configured connectors
+        from polaris.infrastructure.contract_builder import build_system_contract
+
         for connector in self._connectors:
             system_id = await connector.get_system_id()
-            await self.registry.register(connector)
+            contract = await build_system_contract(connector, logger=self.logger)
+            await self.registry.register(connector, contract=contract)
             connected = await connector.connect()
             if connected:
                 self.logger.info(f"Connected to system: {system_id}")
@@ -226,6 +223,9 @@ class Polaris:
             metrics=self.metrics,
             config=self.config,
         )
+
+        # Allow hot-reload to update meta-learner settings (e.g., auto_apply).
+        config_reloader.update_meta_learner(self.meta_learner)
 
         if self.strategy is not None:
             pipeline = AdaptationPipeline(

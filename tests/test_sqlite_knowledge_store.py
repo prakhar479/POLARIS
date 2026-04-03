@@ -142,6 +142,40 @@ class TestSQLiteKnowledgeStore:
 
         asyncio.run(_run())
 
+    def test_query_actions_with_end_time_only_filters_results(
+        self, store: SQLiteKnowledgeStore
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        older_action = AdaptationAction(
+            action_id="older-action",
+            action_type="scale_up",
+            target_system="web-01",
+            created_at=now - timedelta(hours=2),
+            parameters={"replicas": 2},
+        )
+        newer_action = AdaptationAction(
+            action_id="newer-action",
+            action_type="scale_up",
+            target_system="web-01",
+            created_at=now - timedelta(minutes=5),
+            parameters={"replicas": 3},
+        )
+        result = ExecutionResult(
+            action_id="older-action",
+            status=ExecutionStatus.SUCCESS,
+            result_data={},
+        )
+
+        async def _run() -> None:
+            await store.store_action(older_action, result)
+            await store.store_action(newer_action, result)
+
+            cutoff = now - timedelta(hours=1)
+            pairs = await store.query_actions("web-01", None, cutoff)
+            assert [action.action_id for action, _ in pairs] == ["older-action"]
+
+        asyncio.run(_run())
+
     def test_max_states_pruning(self) -> None:
         store = SQLiteKnowledgeStore(db_path=":memory:", max_states_per_system=3)
 

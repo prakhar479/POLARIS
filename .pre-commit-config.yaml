@@ -1,3 +1,6 @@
+default_language_version:
+  python: python3.10
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
@@ -11,10 +14,9 @@ repos:
       - id: check-docstring-first
 
   - repo: https://github.com/psf/black
-    rev: 25.11.0
+    rev: 26.3.1
     hooks:
       - id: black
-        language_version: python3
         args: [--line-length=100]
 
   - repo: https://github.com/pycqa/isort
@@ -42,15 +44,18 @@ repos:
     rev: v1.19.1
     hooks:
       - id: mypy
-        entry: .venv/bin/mypy
+        language_version: python3.10
         args: [--ignore-missing-imports]
         exclude: ^(tests/|examples/)
+        additional_dependencies:
+          - pydantic>=2.0.0
+          - types-PyYAML
 
   - repo: local
     hooks:
       - id: pytest-check
         name: pytest-check
-        entry: pytest
+        entry: python -m pytest
         language: system
         pass_filenames: false
         always_run: true
@@ -58,7 +63,7 @@ repos:
 
       - id: requirements-check
         name: requirements-check
-        entry: python -c "import subprocess; subprocess.run(['pip', 'check'])"
+        entry: python -m pip check
         language: system
         pass_filenames: false
         always_run: true

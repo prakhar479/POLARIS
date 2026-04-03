@@ -1,11 +1,11 @@
 """Adaptation pipeline: assess → validate → execute → store → notify.
 
-Extracted from ``Polaris._process_system_iteration`` so the decision-and-
-execution logic can be tested and reused independently of the monitoring loop.
+Extracted from ``Polaris._process_system_iteration`` so the decision-and- execution
+logic can be tested and reused independently of the monitoring loop.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from polaris.abstractions import (
@@ -16,9 +16,11 @@ if TYPE_CHECKING:
         MetricsCollector,
         WorldModel,
     )
+    from polaris.abstractions.system_contract import SystemContract
     from polaris.core.events import EventBus
     from polaris.core.models import SystemState
     from polaris.infrastructure.config import PolarisConfig
+
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
@@ -27,15 +29,14 @@ class AdaptationPipeline:
 
     Given a ``SystemState`` and the connector that produced it, the pipeline:
 
-    1. Builds an ``AdaptationContext`` (with world-model insights).
-    2. Asks the strategy to ``assess`` the state.
-    3. If actions are proposed, validates each against the connector.
-    4. Executes the actions and stores the results in the knowledge store.
-    5. Notifies the strategy via ``on_action_executed`` for each.
-    6. Publishes ``AdaptationEvent``s on the event bus.
+    1. Builds an ``AdaptationContext`` (with world-model insights). 2. Asks the strategy
+    to ``assess`` the state. 3. If actions are proposed, validates each against the
+    connector. 4. Executes the actions and stores the results in the knowledge store. 5.
+    Notifies the strategy via ``on_action_executed`` for each. 6. Publishes
+    ``AdaptationEvent``s on the event bus.
 
-    Returns ``True`` if at least one action was successfully executed (or would
-    have been in dry-run mode), ``False`` otherwise.
+    Returns ``True`` if at least one action was successfully executed (or would have
+    been in dry-run mode), ``False`` otherwise.
     """
 
     def __init__(
@@ -63,6 +64,7 @@ class AdaptationPipeline:
         self,
         state: "SystemState",
         connector: "Connector",
+        system_contract: Optional["SystemContract"] = None,
     ) -> bool:
         """Execute the full assess→execute pipeline.
 
@@ -71,10 +73,22 @@ class AdaptationPipeline:
             connector: The connector for the managed system.
 
         Returns:
-            ``True`` if at least one adaptation action was executed, ``False`` otherwise.
+            ``True`` if at least one adaptation action was executed, ``False``
+                otherwise.
         """
         from polaris.abstractions.strategy import AdaptationContext
         from polaris.core.events import AdaptationEvent
+        from polaris.strategies.action_resolution import StrictContractViolation
+
+        if getattr(self._strategy, "requires_system_contract", False):
+            supported = (
+                list(system_contract.supported_action_types) if system_contract is not None else []
+            )
+            if not supported:
+                raise StrictContractViolation(
+                    "Missing connector-supported action contract for strict strategy "
+                    f"{type(self._strategy).__name__} (system_id='{state.system_id}')"
+                )
 
         # Fetch recent history so strategies can reason about trends.
         historical_states = []
@@ -99,20 +113,34 @@ class AdaptationPipeline:
             world_model_insights=(
                 await self._world_model.get_insights() if self._world_model else None
             ),
+            system_contract=system_contract,
         )
 
         # Assess
-        actions = await self._strategy.assess(state, context)
+        try:
+            actions = await self._strategy.assess(state, context)
+        except StrictContractViolation:
+            # Fatal contract errors should propagate
+            raise
+        except Exception as exc:
+            self._logger.error(
+                "Error in adaptation assessment", system_id=state.system_id, error=str(exc)
+            )
+            self._emit(
+                "polaris.adaptations.assessment_errors",
+                tags={"system_id": state.system_id},
+                component="core_framework",
+            )
+            return False
+
         self._emit(
             "polaris.strategy.assessments",
             tags={"system_id": state.system_id},
             component="strategy",
         )
 
-        # Wildfire simulations are often step-driven: we may need to advance the
-        # simulation clock even when adaptations happen.
-        # This behavior is opt-in via config to avoid affecting other connectors.
-        actions = self._apply_wildfire_step_policy(state, actions)
+        # Apply per-system action policies (for example, optional action injection).
+        actions = self._apply_action_policies(state, actions)
 
         if not actions:
             return False
@@ -208,68 +236,114 @@ class AdaptationPipeline:
 
         return executed_any
 
-    def _apply_wildfire_step_policy(self, state: "SystemState", actions):
-        """Apply wildfire step policy.
+    def _apply_action_policies(self, state: "SystemState", actions: Any) -> Any:
+        """Apply optional per-system action policies.
 
-        Supported policies (wildfire config):
-          - always_step_each_cycle: when true, append wildfire_step every cycle
-          - auto_step_when_no_adaptation: when true, inject wildfire_step only when
-            strategy returned no actions (legacy behavior)
+        Supported policies (under ``systems[].action_policy``):
+        - ``append_each_cycle``: append one configured action every cycle.
+        - ``inject_when_no_actions``: inject one configured action only when
+          the strategy returned no actions.
         """
-
-        if state.system_id.lower() != "wildfire":
+        policy = self._resolve_system_action_policy(state.system_id)
+        if not policy:
             return actions
 
-        try:
-            wildfire_cfg = None
-            # PolarisConfig is a pydantic model; connector-specific blocks like `wildfire:`
-            # are preserved in config.extra.
-            extra = getattr(self._config, "extra", {})
-            if isinstance(extra, dict) and isinstance(extra.get("wildfire"), dict):
-                wildfire_cfg = extra.get("wildfire")
-            wildfire_cfg = wildfire_cfg or {}
-        except Exception:
-            wildfire_cfg = {}
-
-        always_step = bool(wildfire_cfg.get("always_step_each_cycle", False))
-        step_when_no_actions = bool(wildfire_cfg.get("auto_step_when_no_adaptation", False))
-
-        from polaris.core.models import AdaptationAction
         import uuid
 
-        def make_step(reason: str) -> AdaptationAction:
+        from polaris.core.models import AdaptationAction
+
+        def _make_policy_action(
+            policy_block: Any, default_reason: str
+        ) -> Optional[AdaptationAction]:
+            if not isinstance(policy_block, dict):
+                return None
+            action_cfg = policy_block.get("action")
+            if not isinstance(action_cfg, dict):
+                return None
+
+            action_type = action_cfg.get("type")
+            if not isinstance(action_type, str) or not action_type.strip():
+                return None
+
+            parameters = action_cfg.get("parameters", {})
+            if not isinstance(parameters, dict):
+                parameters = {}
+
+            final_parameters = dict(parameters)
+            if "reason" not in final_parameters:
+                final_parameters["reason"] = default_reason
+
             return AdaptationAction(
                 action_id=str(uuid.uuid4()),
-                action_type="wildfire_step",
+                action_type=action_type.strip(),
                 target_system=state.system_id,
-                parameters={"reason": reason},
+                parameters=final_parameters,
             )
 
-        if always_step:
+        append_policy = policy.get("append_each_cycle")
+        if isinstance(append_policy, dict) and bool(append_policy.get("enabled", False)):
             if actions is None:
                 actions = []
             if not isinstance(actions, list):
                 return actions
-            actions = list(actions)
-            step_action = make_step("always_step_each_cycle")
-            actions.append(step_action)
-            self._logger.info(
-                "Wildfire step appended",
-                system_id=state.system_id,
-                reason="always_step_each_cycle",
-                total_actions=len(actions),
-                actions=[a.action_type for a in actions if hasattr(a, "action_type")],
-            )
-            return actions
 
-        if not actions and step_when_no_actions:
-            self._logger.debug(
-                "Auto-stepping wildfire (no adaptation proposed)",
-                system_id=state.system_id,
-            )
-            return [make_step("auto_step_when_no_adaptation")]
+            actions = list(actions)
+            appended_action = _make_policy_action(append_policy, "append_each_cycle")
+            if appended_action is not None:
+                actions.append(appended_action)
+                self._logger.info(
+                    "Action policy appended action",
+                    system_id=state.system_id,
+                    action_type=appended_action.action_type,
+                    policy="append_each_cycle",
+                    total_actions=len(actions),
+                )
+
+        inject_policy = policy.get("inject_when_no_actions")
+        if (
+            not actions
+            and isinstance(inject_policy, dict)
+            and bool(inject_policy.get("enabled", False))
+        ):
+            injected_action = _make_policy_action(inject_policy, "inject_when_no_actions")
+            if injected_action is not None:
+                self._logger.debug(
+                    "Action policy injected action",
+                    system_id=state.system_id,
+                    action_type=injected_action.action_type,
+                    policy="inject_when_no_actions",
+                )
+                return [injected_action]
 
         return actions
+
+    def _resolve_system_action_policy(self, system_id: str) -> dict:
+        """Resolve action policy config for a system ID."""
+        systems = getattr(self._config, "systems", None)
+        if not isinstance(systems, list):
+            return {}
+
+        for system_cfg in systems:
+            cfg_id = getattr(system_cfg, "id", None)
+            if not isinstance(cfg_id, str) or cfg_id.lower() != system_id.lower():
+                continue
+
+            action_policy = getattr(system_cfg, "action_policy", None)
+            if action_policy is None:
+                return {}
+
+            # Pydantic model case.
+            if hasattr(action_policy, "model_dump"):
+                try:
+                    dumped = action_policy.model_dump(exclude_none=True)
+                except Exception:
+                    return {}
+                return dumped if isinstance(dumped, dict) else {}
+
+            # Fallback for tests/custom config objects.
+            return action_policy if isinstance(action_policy, dict) else {}
+
+        return {}
 
     # ------------------------------------------------------------------
     # Internal helpers

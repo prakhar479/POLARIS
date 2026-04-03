@@ -44,6 +44,57 @@ def test_doctor_reports_missing_llm_credentials(tmp_path: Path, monkeypatch) -> 
             [
                 "strategy:",
                 "  type: llm_reasoning",
+                "  params:",
+                "    provider: openai",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = doctor_cli.run_doctor(str(config_file))
+
+    assert any(
+        item.status == "FAIL" and "strategy.params: missing credentials" in item.message
+        for item in diagnostics
+    )
+
+
+def test_doctor_reports_missing_thread_agentic_credentials(tmp_path: Path, monkeypatch) -> None:
+    """thread_agentic configs should also report missing provider credentials."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "strategy:",
+                "  type: thread_agentic",
+                "  params:",
+                "    provider: openai",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = doctor_cli.run_doctor(str(config_file))
+
+    assert any(
+        item.status == "FAIL" and "strategy.params: missing credentials" in item.message
+        for item in diagnostics
+    )
+
+
+def test_doctor_flags_legacy_strategy_schema_paths(tmp_path: Path) -> None:
+    """Doctor should report deprecated type-keyed strategy blocks with explicit paths."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "strategy:",
+                "  type: llm_reasoning",
                 "  llm_reasoning:",
                 "    provider: openai",
             ]
@@ -55,7 +106,9 @@ def test_doctor_reports_missing_llm_credentials(tmp_path: Path, monkeypatch) -> 
     diagnostics = doctor_cli.run_doctor(str(config_file))
 
     assert any(
-        item.status == "FAIL" and "strategy.llm_reasoning: missing credentials" in item.message
+        item.status == "FAIL"
+        and "Legacy strategy schema detected" in item.message
+        and "strategy.llm_reasoning" in item.message
         for item in diagnostics
     )
 

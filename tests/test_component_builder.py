@@ -84,7 +84,8 @@ def test_build_metrics_honors_disable_flags():
     )
     assert isinstance(ComponentBuilder.build_metrics(config_disabled, {}), NullMetricsCollector)
     assert isinstance(ComponentBuilder.build_metrics(config_enabled, {}), SimpleMetricsCollector)
-    assert isinstance(ComponentBuilder.build_metrics(config_unknown, {}), SimpleMetricsCollector)
+    with pytest.raises(ValueError, match="Unknown metrics collector type 'other'"):
+        ComponentBuilder.build_metrics(config_unknown, {})
 
 
 def test_build_event_bus_respects_per_component_metrics_toggle(mock_logger, mock_metrics):
@@ -119,85 +120,55 @@ def test_build_knowledge_store_sqlite_uses_nested_config(tmp_path, mock_logger, 
     assert store._metrics is None
 
 
-def test_build_knowledge_store_unknown_type_falls_back_to_memory(mock_logger):
+def test_build_knowledge_store_sqlite_requires_db_path(mock_logger):
     config = _cfg(
         knowledge_store={
-            "type": "unknown",
-            "memory": {"max_states_per_system": 7},
+            "type": "sqlite",
+            "sqlite": {},
         }
     )
 
-    store = ComponentBuilder.build_knowledge_store(config, mock_logger, None)
+    with pytest.raises(ValueError, match="requires 'knowledge_store.sqlite.db_path'"):
+        ComponentBuilder.build_knowledge_store(config, mock_logger, None)
 
-    assert isinstance(store, InMemoryKnowledgeStore)
-    assert store.max_states == 7
-    assert any(
-        level == "warning" and "Unknown knowledge store type" in message
-        for level, message, _ in mock_logger.logs
+
+def test_build_knowledge_store_unknown_type_raises_error(mock_logger):
+    config = _cfg(
+        knowledge_store={
+            "type": "unknown",
+        }
     )
+    with pytest.raises(ValueError, match="Unknown knowledge store type 'unknown'"):
+        ComponentBuilder.build_knowledge_store(config, mock_logger, None)
 
 
-def test_build_world_model_applies_defaults_and_sanitizes_window(mock_logger):
+def test_build_world_model_unknown_type_raises_error(mock_logger):
     knowledge_store = InMemoryKnowledgeStore()
     config = _cfg(
-        observability={"metrics": {"components": {"world_model": False}}},
         world_model={
             "type": "custom",
-            "statistical": {
-                "use_kalman": True,
-                "window_size": "not-an-int",
-            },
         },
     )
-
-    world_model = ComponentBuilder.build_world_model(config, knowledge_store, mock_logger, object())
-
-    assert isinstance(world_model, StatisticalWorldModel)
-    assert world_model._use_kalman is True
-    assert world_model._window_size == 100
-    assert world_model._metrics is None
-    assert any(
-        level == "warning" and "Unknown world model type" in message
-        for level, message, _ in mock_logger.logs
-    )
+    with pytest.raises(ValueError, match="Unknown world model type 'custom'"):
+        ComponentBuilder.build_world_model(config, knowledge_store, mock_logger, object())
 
 
-def test_build_strategy_handles_missing_and_failing_factories(mock_logger, monkeypatch):
+def test_build_strategy_unknown_type_raises_error(mock_logger):
     knowledge_store = InMemoryKnowledgeStore()
     world_model = StatisticalWorldModel(knowledge_store)
     config = _cfg()
     strategy_config = SimpleNamespace(type="custom")
 
-    fallback = ComponentBuilder.build_strategy(
-        strategy_config,
-        mock_logger,
-        None,
-        knowledge_store,
-        world_model,
-        SimpleNamespace(),
-        config,
-    )
-    assert isinstance(fallback, ThresholdReactiveStrategy)
-
-    def bad_factory(*_args, **_kwargs):
-        raise RuntimeError("factory failed")
-
-    monkeypatch.setattr("polaris.core.factories.get_strategy_factory", lambda _type: bad_factory)
-    fallback_after_error = ComponentBuilder.build_strategy(
-        strategy_config,
-        mock_logger,
-        None,
-        knowledge_store,
-        world_model,
-        SimpleNamespace(),
-        config,
-    )
-
-    assert isinstance(fallback_after_error, ThresholdReactiveStrategy)
-    assert any(
-        level == "warning" and "Failed to initialize strategy" in message
-        for level, message, _ in mock_logger.logs
-    )
+    with pytest.raises(ValueError, match="No strategy factory registered for type 'custom'"):
+        ComponentBuilder.build_strategy(
+            strategy_config,
+            mock_logger,
+            None,
+            knowledge_store,
+            world_model,
+            SimpleNamespace(),
+            config,
+        )
 
 
 def test_build_meta_learner_statistical_defaults_invalid_acquisition(mock_logger, mock_metrics):

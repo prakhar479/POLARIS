@@ -1,7 +1,7 @@
 """SQLite-backed persistent knowledge store.
 
-Zero external dependencies — uses Python's built-in ``sqlite3`` module.
-States and actions survive process restarts.
+Zero external dependencies — uses Python's built-in ``sqlite3`` module. States and
+actions survive process restarts.
 
 Usage::
 
@@ -29,7 +29,7 @@ from polaris.core.models import (
 )
 from polaris.infrastructure.constants import DEFAULT_MAX_STATES_PER_SYSTEM
 
-# SQL DDL ──────────────────────────────────────────────────────────────────────
+# SQL DDL
 
 _CREATE_STATES = """
 CREATE TABLE IF NOT EXISTS system_states (
@@ -64,15 +64,15 @@ CREATE INDEX IF NOT EXISTS idx_actions_system ON adaptation_actions (target_syst
 class SQLiteKnowledgeStore(KnowledgeStore):
     """Persistent knowledge store backed by SQLite.
 
-    All blocking I/O is dispatched to a thread-pool executor so the asyncio
-    event loop remains free.
+    All blocking I/O is dispatched to a thread-pool executor so the asyncio event loop
+    remains free.
 
     Args:
-        db_path: Path to the SQLite database file.  The parent directory is
-            created automatically.  Pass ``":memory:"`` for an in-process
-            ephemeral store (useful for testing).
-        max_states_per_system: How many states to retain per system.  Older
-            rows are pruned automatically after each ``store_state`` call.
+        db_path: Path to the SQLite database file.  The parent directory is created
+            automatically.  Pass ``":memory:"`` for an in-process ephemeral store
+            (useful for testing).
+        max_states_per_system: How many states to retain per system.  Older rows are
+            pruned automatically after each ``store_state`` call.
         logger: Optional structured logger.
         metrics: Optional metrics collector.
     """
@@ -115,14 +115,14 @@ class SQLiteKnowledgeStore(KnowledgeStore):
         if self._metrics:
             self._metrics.increment("polaris.knowledge.sqlite.initialized")
 
-    # ── helpers ──────────────────────────────────────────────────────────────
+    # Helpers
 
     def _connect(self) -> sqlite3.Connection:
         """Return a database connection.
 
-        For :memory: databases the shared persistent connection is returned.
-        For file-based databases a fresh connection is opened (per-operation,
-        safe for multi-threaded executor use).
+        For :memory: databases the shared persistent connection is returned. For file-
+        based databases a fresh connection is opened (per-operation, safe for multi-
+        threaded executor use).
         """
         if self._shared_conn is not None:
             return self._shared_conn
@@ -138,7 +138,7 @@ class SQLiteKnowledgeStore(KnowledgeStore):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, fn, *args)
 
-    # ── serialisation ─────────────────────────────────────────────────────────
+    # Serialisation
 
     @staticmethod
     def _serialise_state(state: SystemState) -> Dict[str, Any]:
@@ -196,7 +196,7 @@ class SQLiteKnowledgeStore(KnowledgeStore):
             metadata=meta,
         )
 
-    # ── KnowledgeStore interface ───────────────────────────────────────────────
+    # KnowledgeStore interface
 
     async def store_state(self, state: SystemState) -> None:
         """Persist a system state snapshot and prune old rows."""
@@ -350,6 +350,13 @@ class SQLiteKnowledgeStore(KnowledgeStore):
                         " WHERE target_system=? AND created_at>=?"
                         " ORDER BY created_at ASC",
                         (system_id, start),
+                    )
+                elif end:
+                    cur = con.execute(
+                        "SELECT * FROM adaptation_actions"
+                        " WHERE target_system=? AND created_at<=?"
+                        " ORDER BY created_at ASC",
+                        (system_id, end),
                     )
                 else:
                     cur = con.execute(

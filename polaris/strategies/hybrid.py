@@ -11,11 +11,10 @@ from polaris.infrastructure.observability.null_metrics import NullMetricsCollect
 
 
 class HybridStrategy(AdaptationStrategy):
-    """
-    Hybrid strategy that combines multiple strategies.
+    """Hybrid strategy that combines multiple strategies.
 
-    Can delegate to multiple strategies and select the best action
-    based on different selection modes.
+    Can delegate to multiple strategies and select the best action based on different
+    selection modes.
     """
 
     def __init__(
@@ -28,20 +27,19 @@ class HybridStrategy(AdaptationStrategy):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        """
-        Initialize hybrid strategy.
+        """Initialize hybrid strategy.
 
         Args:
             strategies: List of (strategy, priority) tuples
-            selection_mode: How to select among proposals
-                - 'first': Use first strategy that proposes action
-                - 'priority': Use highest priority strategy
-                - 'confidence': Use highest confidence action
+            selection_mode: How to select among proposals - 'first': Use first strategy
+                that proposes action - 'priority': Use highest priority strategy -
+                'confidence': Use highest confidence action
             min_confidence: Minimum confidence threshold
-            cooldown_seconds: Minimum seconds between any selected actions.
-                When > 0 the entire assess() is skipped (returning []) if the
-                cooldown has not elapsed since the last selected action.
-                Default 0 means no cooldown.
+            cooldown_seconds: Minimum seconds between cooldown-restricted selected
+                actions (typically agentic/LLM-backed). Cooldown-exempt strategies
+                continue to run while cooldown is active. Default 0 means no cooldown.
+            logger: Optional logger for observability
+            metrics: Optional metrics collector
         """
         self.strategies = sorted(strategies, key=lambda x: x[1], reverse=True)
         self.selection_mode = selection_mode
@@ -53,6 +51,11 @@ class HybridStrategy(AdaptationStrategy):
         self._strategy_usage = dict.fromkeys(range(len(strategies)), 0)
         self._logger = logger
         self._metrics = metrics or NullMetricsCollector()
+        self._cooldown_exempt_indices = {
+            idx
+            for idx, (strategy, _priority) in enumerate(self.strategies)
+            if self._is_cooldown_exempt_strategy(strategy)
+        }
 
         if self._logger:
             self._logger.info(
@@ -63,6 +66,15 @@ class HybridStrategy(AdaptationStrategy):
             )
 
         self._metrics.increment("polaris.strategy.hybrid.initialized")
+
+    def _is_cooldown_exempt_strategy(self, strategy: AdaptationStrategy) -> bool:
+        """Return True when a sub-strategy should bypass hybrid cooldown.
+
+        Strategies opt in by setting ``hybrid_cooldown_exempt = True`` as a
+        class attribute (or instance attribute). This avoids coupling to any
+        specific strategy class name.
+        """
+        return bool(getattr(strategy, "hybrid_cooldown_exempt", False))
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
@@ -107,14 +119,25 @@ class HybridStrategy(AdaptationStrategy):
 
         if self.selection_mode == "first":
             # Sequential short-circuit: evaluate strategies in priority order and stop
-            # as soon as one produces actions. Threshold (index 0) always runs; LLM
-            # strategies (index > 0) are skipped while their cooldown is active.
+            # as soon as one produces actions. During cooldown, only cooldown-exempt
+            # strategies are evaluated.
+            in_cooldown = _agentic_in_cooldown()
             for i, (strategy, priority) in enumerate(self.strategies):
-                if i > 0 and _agentic_in_cooldown():
-                    break  # cooldown active — don't run any remaining LLM strategies
+                if in_cooldown and i not in self._cooldown_exempt_indices:
+                    continue
                 try:
                     result = await strategy.assess(state, context)
-                except Exception:
+                except Exception as exc:
+                    if self._logger:
+                        self._logger.warning(
+                            "Sub-strategy assessment failed in hybrid selection_mode=first",
+                            strategy_index=i,
+                            error=str(exc),
+                        )
+                    self._metrics.increment(
+                        "polaris.strategy.hybrid.sub_strategy_errors",
+                        tags={"strategy_index": str(i)},
+                    )
                     continue
                 if isinstance(result, list) and result:
                     try:
@@ -127,13 +150,12 @@ class HybridStrategy(AdaptationStrategy):
                     break  # first match wins; skip remaining strategies
         else:
             # Concurrent evaluation for priority/confidence modes.
-            # Threshold (index 0) always runs; LLM strategies (index > 0) are skipped
-            # while their cooldown is active.
+            # During cooldown, only cooldown-exempt strategies are evaluated.
             in_cooldown = _agentic_in_cooldown()
             tasks = []
             task_indices: List[int] = []
             for i, (strategy, _priority) in enumerate(self.strategies):
-                if i > 0 and in_cooldown:
+                if in_cooldown and i not in self._cooldown_exempt_indices:
                     continue
                 tasks.append(strategy.assess(state, context))
                 task_indices.append(i)
@@ -144,14 +166,24 @@ class HybridStrategy(AdaptationStrategy):
 
             confidence_tasks = []
             valid_indices = []
-            for task_pos, result in enumerate(results):  # type: ignore[assignment]
+            for task_pos, outcome in enumerate(results):
                 i = task_indices[task_pos]
                 strategy, priority = self.strategies[i]
-                if isinstance(result, Exception):  # type: ignore[unreachable]
-                    continue  # type: ignore[unreachable]
-                if isinstance(result, list) and result:
-                    confidence_tasks.append(self._estimate_confidence(strategy, result[0], state))
-                    valid_indices.append((i, priority, result, strategy))
+                if isinstance(outcome, BaseException):
+                    if self._logger:
+                        self._logger.warning(
+                            "Sub-strategy assessment failed in hybrid concurrent mode",
+                            strategy_index=i,
+                            error=str(outcome),
+                        )
+                    self._metrics.increment(
+                        "polaris.strategy.hybrid.sub_strategy_errors",
+                        tags={"strategy_index": str(i)},
+                    )
+                    continue
+                if isinstance(outcome, list) and outcome:
+                    confidence_tasks.append(self._estimate_confidence(strategy, outcome[0], state))
+                    valid_indices.append((i, priority, outcome, strategy))
 
             confidences: List[Union[float, BaseException]] = []
             if confidence_tasks:
@@ -187,12 +219,10 @@ class HybridStrategy(AdaptationStrategy):
         # Select based on mode
         selected = None
         selected_idx = None
-        best_idx = None  # This variable is introduced by the provided snippet
 
         if self.selection_mode == "first":
             # Return first proposal (highest priority)
             selected, _, _, selected_idx = proposals[0]
-            best_idx = selected_idx
 
         elif self.selection_mode == "priority":
             # Use highest priority strategy with valid action
@@ -200,7 +230,6 @@ class HybridStrategy(AdaptationStrategy):
                 if conf >= self.min_confidence:
                     selected = action_list
                     selected_idx = idx
-                    best_idx = selected_idx
                     break
 
         elif self.selection_mode == "confidence":
@@ -208,13 +237,12 @@ class HybridStrategy(AdaptationStrategy):
             valid = [(al, c, p, i) for al, c, p, i in proposals if c >= self.min_confidence]
             if valid:
                 selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
-                best_idx = selected_idx
 
         # Track which strategy was used.
-        # Only update the agentic cooldown timer when a non-threshold (index > 0) strategy fires.
+        # Only update cooldown timestamp when a cooldown-restricted strategy fires.
         if selected and selected_idx is not None:
             self._strategy_usage[selected_idx] += 1
-            if selected_idx > 0:
+            if selected_idx not in self._cooldown_exempt_indices:
                 self._last_action_time = datetime.now(timezone.utc)
 
         self._metrics.histogram(
@@ -228,7 +256,7 @@ class HybridStrategy(AdaptationStrategy):
                 tags={
                     "system_id": state.system_id,
                     "mode": self.selection_mode,
-                    "strategy_index": str(best_idx),
+                    "strategy_index": str(selected_idx),
                 },
             )
 
@@ -246,8 +274,7 @@ class HybridStrategy(AdaptationStrategy):
     async def _estimate_confidence(
         self, strategy: AdaptationStrategy, action: AdaptationAction, state: SystemState
     ) -> float:
-        """
-        Estimate confidence in an action using strategy metrics when available.
+        """Estimate confidence in an action using strategy metrics when available.
 
         Fallback to a conservative default when metrics are unavailable.
         """
@@ -318,8 +345,13 @@ class HybridStrategy(AdaptationStrategy):
         if parameter_path.startswith("strategy_"):
             # Parse strategy index and delegate
             parts = parameter_path.split(".", 1)
-            strategy_idx = int(parts[0].split("_")[1])
-            sub_path = parts[1] if len(parts) > 1 else ""
+            if len(parts) != 2:
+                return False
+            try:
+                strategy_idx = int(parts[0].split("_")[1])
+            except (IndexError, ValueError):
+                return False
+            sub_path = parts[1]
 
             if strategy_idx < len(self.strategies):
                 return await self.strategies[strategy_idx][0].update_parameter(sub_path, new_value)
@@ -350,51 +382,17 @@ class HybridStrategy(AdaptationStrategy):
 
         new_subs = config.get("strategies", [])
         if isinstance(new_subs, list) and len(new_subs) == len(self.strategies):
-            for sub_conf, (sub_strategy, _prio) in zip(new_subs, self.strategies):
+            for sub_conf, (sub_strategy, _priority) in zip(new_subs, self.strategies):
                 if not isinstance(sub_conf, dict):
                     continue
-                s_type = sub_conf.get("type")
-                if s_type == "threshold":
-                    th = sub_conf.get("threshold", {}) or {}
-                    cd = th.get("cooldown_seconds")
-                    if cd is not None and hasattr(sub_strategy, "update_parameter"):
-                        await sub_strategy.update_parameter("cooldown_seconds", cd)
-                    thresh = th.get("thresholds", {}) or {}
-                    for metric, vals in thresh.items():
-                        if not isinstance(vals, dict):
-                            continue
-                        if "high" in vals:
-                            await sub_strategy.update_parameter(
-                                f"thresholds.{metric}.high", vals["high"]
-                            )
-                        if "low" in vals:
-                            await sub_strategy.update_parameter(
-                                f"thresholds.{metric}.low", vals["low"]
-                            )
-                elif s_type == "llm_reasoning":
-                    llm_cfg = sub_conf.get("llm_reasoning", {}) or {}
-                    if "temperature" in llm_cfg and hasattr(sub_strategy, "update_parameter"):
-                        await sub_strategy.update_parameter("temperature", llm_cfg["temperature"])
-                    if "system_description" in llm_cfg and hasattr(
-                        sub_strategy, "update_parameter"
-                    ):
-                        await sub_strategy.update_parameter(
-                            "system_description", llm_cfg["system_description"]
-                        )
-                    resil = llm_cfg.get("resilience")
-                    if (
-                        resil
-                        and hasattr(sub_strategy, "llm")
-                        and hasattr(sub_strategy.llm, "update_resilience")
-                    ):
-                        try:
-                            sub_strategy.llm.update_resilience(resil)
-                        except Exception as e:
-                            if self._logger:
-                                self._logger.warning(
-                                    "Failed to hot-update sub-strategy LLM resilience",
-                                    error=str(e),
-                                )
+
+                sub_params = sub_conf.get("params", {})
+                if sub_params is None:
+                    sub_params = {}
+                if not isinstance(sub_params, dict):
+                    continue
+
+                await sub_strategy.apply_config_update(sub_params)
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Return strategy performance metrics."""

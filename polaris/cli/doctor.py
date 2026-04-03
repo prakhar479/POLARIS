@@ -13,6 +13,15 @@ import yaml
 
 from polaris.infrastructure.config import PolarisConfig
 
+_LEGACY_STRATEGY_BLOCK_KEYS = (
+    "threshold",
+    "llm_reasoning",
+    "agentic_llm",
+    "thread_agentic",
+    "multi_agent",
+    "hybrid",
+)
+
 
 @dataclass
 class Diagnostic:
@@ -36,10 +45,7 @@ def _module_available(module_name: str) -> bool:
 
 
 def _normalize_provider(provider: Any) -> str:
-    provider_name = str(provider or "google").lower()
-    if provider_name == "gemini":
-        return "google"
-    return provider_name
+    return str(provider or "google").lower()
 
 
 def _extract_llm_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -58,27 +64,59 @@ def _extract_llm_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]
     strategy = raw_config.get("strategy")
     if isinstance(strategy, dict):
         strategy_type = str(strategy.get("type", "threshold")).lower()
+        strategy_params = strategy.get("params", {})
+        if not isinstance(strategy_params, dict):
+            strategy_params = {}
+
+        def add_multi_agent_role_requirements(path_prefix: str, cfg: Dict[str, Any]) -> None:
+            shared_provider = _normalize_provider(cfg.get("provider", "google"))
+            for role in ("diagnostician", "planner", "validator"):
+                role_cfg = cfg.get(role)
+                if not isinstance(role_cfg, dict):
+                    continue
+                merged = dict(role_cfg)
+                merged.setdefault("provider", shared_provider)
+                add_llm(f"{path_prefix}.{role}", merged)
+
         if strategy_type == "llm_reasoning":
-            add_llm("strategy.llm_reasoning", strategy.get("llm_reasoning"))
+            add_llm("strategy.params", strategy_params)
         elif strategy_type == "agentic_llm":
-            add_llm("strategy.agentic_llm", strategy.get("agentic_llm"))
+            add_llm("strategy.params", strategy_params)
+        elif strategy_type == "thread_agentic":
+            add_llm("strategy.params", strategy_params)
+        elif strategy_type == "multi_agent":
+            add_llm("strategy.params", strategy_params)
+            add_multi_agent_role_requirements("strategy.params", strategy_params)
         elif strategy_type == "hybrid":
-            hybrid_cfg = strategy.get("hybrid")
-            if isinstance(hybrid_cfg, dict):
-                for index, sub in enumerate(hybrid_cfg.get("strategies", [])):
+            sub_defs = strategy_params.get("strategies", [])
+            if isinstance(sub_defs, list):
+                for index, sub in enumerate(sub_defs):
                     if not isinstance(sub, dict):
                         continue
                     sub_type = str(sub.get("type", "")).lower()
+                    sub_params = sub.get("params", {})
+                    if not isinstance(sub_params, dict):
+                        continue
+
                     if sub_type == "llm_reasoning":
                         add_llm(
-                            f"strategy.hybrid.strategies[{index}].llm_reasoning",
-                            sub.get("llm_reasoning"),
+                            f"strategy.params.strategies[{index}].params",
+                            sub_params,
                         )
                     elif sub_type == "agentic_llm":
                         add_llm(
-                            f"strategy.hybrid.strategies[{index}].agentic_llm",
-                            sub.get("agentic_llm"),
+                            f"strategy.params.strategies[{index}].params",
+                            sub_params,
                         )
+                    elif sub_type == "thread_agentic":
+                        add_llm(
+                            f"strategy.params.strategies[{index}].params",
+                            sub_params,
+                        )
+                    elif sub_type == "multi_agent":
+                        base_path = f"strategy.params.strategies[{index}].params"
+                        add_llm(base_path, sub_params)
+                        add_multi_agent_role_requirements(base_path, sub_params)
 
     meta_learner = raw_config.get("meta_learner")
     if isinstance(meta_learner, dict) and bool(meta_learner.get("enabled", False)):
@@ -102,6 +140,36 @@ def _extract_connectors(raw_config: Dict[str, Any]) -> Set[str]:
         if connector_type:
             connector_types.add(str(connector_type).lower())
     return connector_types
+
+
+def _find_legacy_strategy_schema_paths(raw_config: Dict[str, Any]) -> List[str]:
+    """Return paths that still use deprecated type-keyed strategy blocks."""
+    paths: List[str] = []
+
+    strategy = raw_config.get("strategy")
+    if not isinstance(strategy, dict):
+        return paths
+
+    for key in _LEGACY_STRATEGY_BLOCK_KEYS:
+        if key in strategy:
+            paths.append(f"strategy.{key}")
+
+    params = strategy.get("params")
+    if not isinstance(params, dict):
+        return paths
+
+    sub_defs = params.get("strategies")
+    if not isinstance(sub_defs, list):
+        return paths
+
+    for index, sub in enumerate(sub_defs):
+        if not isinstance(sub, dict):
+            continue
+        for key in _LEGACY_STRATEGY_BLOCK_KEYS:
+            if key in sub:
+                paths.append(f"strategy.params.strategies[{index}].{key}")
+
+    return paths
 
 
 def _diagnose_config(config_path: str, diagnostics: List[Diagnostic]) -> Optional[Dict[str, Any]]:
@@ -168,6 +236,19 @@ def _diagnose_config(config_path: str, diagnostics: List[Diagnostic]) -> Optiona
         raw_data = yaml.safe_load(raw_content) or {}
         if not isinstance(raw_data, dict):
             raise ValueError("Config root must be a mapping")
+
+        legacy_paths = _find_legacy_strategy_schema_paths(raw_data)
+        if legacy_paths:
+            diagnostics.append(
+                Diagnostic(
+                    "FAIL",
+                    "config",
+                    "Legacy strategy schema detected at "
+                    f"{', '.join(legacy_paths)}. "
+                    "Use strategy.params and, for hybrid sub-strategies, "
+                    "strategy.params.strategies[].params.",
+                )
+            )
     except Exception as exc:
         diagnostics.append(
             Diagnostic(
@@ -254,16 +335,20 @@ def _diagnose_dependencies(
     module_requirements = {
         "google": ["google.generativeai", "google.ai.generativelanguage_v1beta"],
         "openai": ["openai"],
+        "openrouter": ["openai"],
         "groq": ["groq"],
+        "ollama": ["openai"],
     }
     provider_single_key_env = {
         "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
         "openai": ["OPENAI_API_KEY"],
+        "openrouter": ["OPENROUTER_API_KEY"],
         "groq": ["GROQ_API_KEY"],
     }
     provider_multi_key_env = {
         "google": "GEMINI_API_KEYS",
         "openai": "OPENAI_API_KEYS",
+        "openrouter": "OPENROUTER_API_KEYS",
         "groq": "GROQ_API_KEYS",
     }
 
@@ -307,38 +392,48 @@ def _diagnose_dependencies(
             if isinstance(candidate, str) and candidate.strip():
                 keys_env_var = candidate.strip()
 
-        env_candidates = list(provider_single_key_env.get(provider, []))
-        env_candidates.append(keys_env_var or provider_multi_key_env.get(provider, ""))
-        env_candidates = [name for name in env_candidates if name]
-
-        if any(_is_set(name) for name in env_candidates):
+        # Ollama is commonly local and doesn't require credentials by default.
+        if provider == "ollama":
             diagnostics.append(
                 Diagnostic(
                     "OK",
                     "env",
-                    f"{path}: credentials detected ({', '.join(env_candidates)})",
+                    f"{path}: provider 'ollama' typically requires no API key (local endpoint)",
                 )
             )
         else:
-            diagnostics.append(
-                Diagnostic(
-                    "FAIL",
-                    "env",
-                    f"{path}: missing credentials. Set one of: {', '.join(env_candidates)}",
+            env_candidates = list(provider_single_key_env.get(provider, []))
+            env_candidates.append(keys_env_var or provider_multi_key_env.get(provider, ""))
+            env_candidates = [name for name in env_candidates if name]
+
+            if any(_is_set(name) for name in env_candidates):
+                diagnostics.append(
+                    Diagnostic(
+                        "OK",
+                        "env",
+                        f"{path}: credentials detected ({', '.join(env_candidates)})",
+                    )
                 )
-            )
+            else:
+                diagnostics.append(
+                    Diagnostic(
+                        "FAIL",
+                        "env",
+                        f"{path}: missing credentials. Set one of: {', '.join(env_candidates)}",
+                    )
+                )
 
 
 def run_doctor(config_path: str) -> List[Diagnostic]:
     """Run all doctor diagnostics and return findings."""
     diagnostics: List[Diagnostic] = []
 
-    if sys.version_info < (3, 8):
+    if sys.version_info < (3, 10):
         diagnostics.append(
             Diagnostic(
                 "FAIL",
                 "runtime",
-                f"Unsupported Python version: {sys.version.split()[0]} (requires >= 3.8)",
+                f"Unsupported Python version: {sys.version.split()[0]} (requires >= 3.10)",
             )
         )
     else:

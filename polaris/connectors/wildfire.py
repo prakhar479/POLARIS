@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from polaris.abstractions.connector import Connector
+from polaris.abstractions.connector_capabilities import ConnectorCapabilities
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
     AdaptationAction,
@@ -24,13 +25,6 @@ from polaris.infrastructure.constants import (
 
 if TYPE_CHECKING:
     import httpx
-
-
-# Use string-based import to avoid circular imports
-def _get_connector_class() -> type:
-    from polaris.abstractions.connector import Connector
-
-    return Connector
 
 
 class WildfireConnector(Connector):
@@ -98,6 +92,9 @@ class WildfireConnector(Connector):
 
             return True
         except Exception as exc:
+            # Broad catch is intentional: external system connections can fail in many
+            # unpredictable ways (network, auth, timeout, service errors). All are handled
+            # uniformly with logging and metrics.
             self._connected = False
             if self._logger:
                 self._logger.error(
@@ -172,10 +169,21 @@ class WildfireConnector(Connector):
             if isinstance(mr1_values, list) and mr1_values:
                 try:
                     mr1_floats = [float(v) for v in mr1_values]
-                    mr1_avg = sum(mr1_floats) / float(len(mr1_floats))
+                    mr1_avg = (
+                        sum(mr1_floats) / num_agents
+                        if isinstance(num_agents, int) and num_agents > 0
+                        else 0.0
+                    )
                     metrics["mr1_avg"] = MetricValue(
                         name="mr1_avg",
                         value=mr1_avg,
+                        unit="score",
+                        timestamp=now,
+                    )
+                    mr1_total = sum(mr1_floats)
+                    metrics["mr1_total"] = MetricValue(
+                        name="mr1_total",
+                        value=mr1_total,
                         unit="score",
                         timestamp=now,
                     )
@@ -227,6 +235,8 @@ class WildfireConnector(Connector):
                 metadata={"raw_metrics": metrics_payload},
             )
         except Exception as exc:
+            # Broad catch is intentional: telemetry collection from external systems can
+            # fail due to network issues, malformed responses, timeouts, etc.
             if self._logger:
                 self._logger.error(
                     "WildfireConnector telemetry collection failed",
@@ -324,6 +334,8 @@ class WildfireConnector(Connector):
                 execution_time_ms=duration_ms,
             )
         except Exception as exc:
+            # Broad catch is intentional: action execution on external systems can fail
+            # due to network issues, service errors, invalid responses, etc.
             duration_ms = int((time.monotonic() - start) * MILLISECONDS_PER_SECOND)
             if self._metrics:
                 self._metrics.histogram(
@@ -406,3 +418,16 @@ class WildfireConnector(Connector):
                 parameters={"actions": []},
             ),
         ]
+
+    async def get_capabilities(self) -> ConnectorCapabilities:
+        """Expose normalized Wildfire capability metadata."""
+        actions = await self.get_supported_actions()
+        action_types = [
+            action.action_type
+            for action in actions
+            if isinstance(action.action_type, str) and action.action_type.strip()
+        ]
+        return ConnectorCapabilities.from_supported_action_types(
+            action_types,
+            metadata={"system_family": "wildfire"},
+        )

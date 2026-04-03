@@ -1,5 +1,4 @@
-"""
-CLI package main entry point.
+"""CLI package main entry point.
 
 Allows running the CLI with: python -m polaris.cli
 """

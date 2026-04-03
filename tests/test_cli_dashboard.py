@@ -71,7 +71,8 @@ class _FakeLive:
         _ = exc_type, exc, tb
         return False
 
-    def start(self):
+    def start(self, refresh=False):
+        _ = refresh
         pass
 
     def stop(self):
@@ -261,6 +262,50 @@ async def test_run_exits_and_detaches_handler(dashboard_fixture, monkeypatch):
     import logging
 
     assert dash._log_handler not in logging.getLogger("polaris").handlers
+
+
+def test_live_display_safe_uses_manual_refresh_mode(dashboard_fixture, monkeypatch):
+    dash, _ = dashboard_fixture
+    observed = {}
+
+    class _SpyLive:
+        def __init__(self, _renderable, **kwargs):
+            observed["kwargs"] = kwargs
+            self.started = None
+            self.stopped = False
+
+        def start(self, refresh=False):
+            self.started = refresh
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(dashboard_module, "Live", _SpyLive)
+
+    with dash._live_display_safe(Layout(name="root"), refresh_per_second=7) as live:
+        assert live.started is True
+
+    assert observed["kwargs"]["auto_refresh"] is False
+    assert observed["kwargs"]["refresh_per_second"] == 7
+
+
+def test_safe_live_update_forces_refresh_when_supported(dashboard_fixture):
+    dash, _ = dashboard_fixture
+
+    class _RefreshAwareLive:
+        def __init__(self):
+            self.calls = []
+
+        def update(self, renderable, refresh=False):
+            self.calls.append((renderable, refresh))
+
+    live = _RefreshAwareLive()
+    renderable = Layout(name="root")
+    dash._safe_live_update(live, renderable)
+
+    assert len(live.calls) == 1
+    _, refresh = live.calls[0]
+    assert refresh is True
 
 
 @pytest.mark.asyncio

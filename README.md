@@ -1,6 +1,6 @@
 # Polaris - Modular Self-Adaptive Systems Framework
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 **Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of ![POLARIS](./POLARIS_Framework.pdf)). It provides a simple default experience while allowing full customization of every component.
 
@@ -74,7 +74,7 @@ polaris --config config/wildfire.yaml
 Polaris supports OpenRouter via an OpenAI-compatible client.
 
 - Set `OPENROUTER_API_KEY`
-- In YAML, set `provider: openrouter` under `strategy.*` and/or `meta_learner.llm`
+- In YAML, set `provider: openrouter` under `strategy.params` and/or `meta_learner.llm`
 
 See [CONFIGURATION.md](./CONFIGURATION.md#using-openrouter-openai-compatible-gateway) for details.
 
@@ -167,18 +167,24 @@ Polaris supports multiple LLM-powered strategies:
 
 - `llm_reasoning`: Single-shot LLM decision-making with reasoning
 - `agentic_llm`: Iterative tool-using loop where the LLM calls built-in tools (metrics, history, predictions)
+- `thread_agentic`: Recursive THREAD-style join-synchronized reasoning with dynamic child-thread spawning
 - `multi_agent`: Committee of three specialized agents (Diagnostician → Planner → SafetyValidator); each agent can use its own LLM provider, temperature, and prompt
 - `hybrid`: Combine any strategies (including LLM-based ones) with configurable selection mode
 
-You can choose the LLM provider per strategy. Supported providers: `google` (Gemini, default) and `openai`.
+You can choose the LLM provider per strategy. Supported canonical providers:
+`google`, `openai`, `openrouter`, `groq`, and `ollama`.
+
+LLM strategies run in strict mode: model output must be schema-valid JSON and use
+`actions` lists only. A strict-contract violation fails that system iteration while
+other systems continue running.
 
 Example (multi-agent strategy with per-agent LLM config):
 
 ```yaml
 strategy:
   type: multi_agent
-  multi_agent:
-    provider: google           # Shared/fallback provider
+  params:
+    provider: google           # Shared default provider
     temperature: 0.1
     steps_limit: 3             # Max reasoning steps per agent (new)
     system_description: "SWIM web application server pool"
@@ -204,8 +210,8 @@ Example (agentic LLM strategy):
 ```yaml
 strategy:
   type: agentic_llm
-  agentic_llm:
-    provider: google   # or "openai"
+  params:
+    provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
     steps_limit: 3
     temperature: 0.1
     tools:
@@ -225,7 +231,28 @@ strategy:
       max_backoff_ms: 4000
 ```
 
-For `llm_reasoning`, specify the provider under `strategy.llm_reasoning.provider`. For `hybrid`, each sub-strategy can specify its own provider. The `multi_agent` strategy also supports `hybrid` as a container.
+Example (THREAD recursive strategy):
+
+```yaml
+strategy:
+  type: thread_agentic
+  params:
+    provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
+    steps_limit: 4
+    max_thread_depth: 3
+    max_total_threads: 16
+    child_timeout_seconds: 20.0
+    max_repeated_spawns: 2
+    tools:
+      enabled:
+        - get_recent_states
+        - summarize_metric_trends
+        - predict_outcome
+        - list_supported_actions
+```
+
+For `llm_reasoning`, `agentic_llm`, `thread_agentic`, and `multi_agent`, specify provider under `strategy.params.provider`.
+For `hybrid`, each sub-strategy config lives under `strategy.params.strategies[].params` and can set its own provider.
 
 The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
 
@@ -370,13 +397,19 @@ make install-hooks
 Run tests with:
 
 ```bash
-pytest tests/
+python -m pytest tests/
 ```
 
 or use the provided script:
 
 ```bash
 python run_tests.py
+```
+
+Validate config/schema/env wiring before runtime:
+
+```bash
+python -m polaris.cli doctor --config config/default.yaml
 ```
 
 For comprehensive testing and quality checks:

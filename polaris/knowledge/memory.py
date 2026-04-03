@@ -10,8 +10,7 @@ from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 class InMemoryKnowledgeStore(KnowledgeStore):
-    """
-    Simple in-memory knowledge store.
+    """Simple in-memory knowledge store.
 
     Good for testing and simple deployments. Data is not persisted.
     """

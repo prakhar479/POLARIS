@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""
-Advanced metrics export example for Polaris.
+"""Advanced metrics export example for Polaris.
 
-This example demonstrates:
-1. Comprehensive metrics collection across framework components
-2. Multiple export formats and utilities
-3. Experiment-friendly naming and organization
-4. Human-readable summary reports
+This example demonstrates: 1. Comprehensive metrics collection across framework
+components 2. Multiple export formats and utilities 3. Experiment-friendly naming and
+organization 4. Human-readable summary reports
 """
 
 import asyncio

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Polaris Logging Demo.
+"""Polaris Logging Demo.
 
 This example demonstrates the different logging formats and CLI export options.
 """

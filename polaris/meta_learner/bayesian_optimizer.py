@@ -1,5 +1,4 @@
-"""
-Bayesian optimization for intelligent parameter tuning.
+"""Bayesian optimization for intelligent parameter tuning.
 
 Uses Gaussian Processes and acquisition functions to model parameter-performance
 relationships and suggest optimal parameter configurations.
@@ -69,11 +68,10 @@ class ParameterConfiguration:
 
 
 class GaussianProcessOptimizer:
-    """
-    Gaussian Process-based Bayesian optimizer.
+    """Gaussian Process-based Bayesian optimizer.
 
-    Uses RBF kernel with automatic relevance determination for modeling
-    parameter-performance relationships.
+    Uses RBF kernel with automatic relevance determination for modeling parameter-
+    performance relationships.
     """
 
     def __init__(
@@ -85,8 +83,7 @@ class GaussianProcessOptimizer:
         length_scale: Optional[float] = None,
         min_samples_for_optimization: int = 10,
     ):
-        """
-        Initialize Gaussian Process optimizer.
+        """Initialize Gaussian Process optimizer.
 
         Args:
             parameter_spaces: List of parameter spaces to optimize
@@ -223,8 +220,7 @@ class GaussianProcessOptimizer:
         return np.asarray(K, dtype=np.float64)
 
     def fit(self, configurations: List[ParameterConfiguration]) -> bool:
-        """
-        Fit Gaussian Process to historical data.
+        """Fit Gaussian Process to historical data.
 
         Args:
             configurations: List of parameter configurations with performance
@@ -283,8 +279,7 @@ class GaussianProcessOptimizer:
             self.signal_variance = 1.0
 
     def predict(self, X: NDArray[np.float64]) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """
-        Predict performance and uncertainty for given parameter configurations.
+        """Predict performance and uncertainty for given parameter configurations.
 
         Args:
             X: Normalized parameter configurations
@@ -382,8 +377,7 @@ class GaussianProcessOptimizer:
             raise ValueError(f"Unknown acquisition function: {self.acquisition_function}")
 
     def suggest_next_parameters(self, n_suggestions: int = 1) -> List[Dict[str, Any]]:
-        """
-        Suggest optimal parameter configurations using Bayesian optimization.
+        """Suggest optimal parameter configurations using Bayesian optimization.
 
         Args:
             n_suggestions: Number of parameter suggestions to return
@@ -463,8 +457,7 @@ class GaussianProcessOptimizer:
         return suggestions
 
     def get_optimization_confidence(self) -> float:
-        """
-        Get confidence in optimization quality based on data quality and model fit.
+        """Get confidence in optimization quality based on data quality and model fit.
 
         Returns:
             Confidence score between 0 and 1

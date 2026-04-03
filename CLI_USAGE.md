@@ -134,6 +134,9 @@ Interactive CLI UX features:
 Polaris requires a YAML configuration file. Example structure:
 
 ```yaml
+monitoring:
+  interval_seconds: 30
+
 observability:
   logging:
     type: "structured"
@@ -146,12 +149,28 @@ systems:
   - id: "system1"
     connector_type: "swim"
     enabled: true
+    connection:
+      host: "localhost"
+      port: 4242
+
+strategy:
+  type: "threshold"
+  params:
+    thresholds:
+      cpu_usage: { high: 80.0, low: 20.0 }
+    cooldown_seconds: 60
 ```
 
 Connector types (`systems[].connector_type`) and strategy types (`strategy.type`) must match types registered in Polaris' factory registries.
 Built-in types are registered automatically; custom types can be registered via the factory registration APIs.
 
 See `CONFIGURATION.md` for the registration pattern and examples.
+
+Tip: validate config and environment wiring before running Polaris:
+
+```bash
+python -m polaris.cli doctor --config config/default.yaml
+```
 
 ## Exit Codes
 
@@ -161,7 +180,7 @@ See `CONFIGURATION.md` for the registration pattern and examples.
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - `rich` library (for dashboard and interactive CLI)
 - Valid YAML configuration file
 

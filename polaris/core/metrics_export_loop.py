@@ -1,7 +1,7 @@
 """Metrics auto-export background loop.
 
-Extracted from ``Polaris._metrics_export_loop`` so the export logic can be
-tested and reused independently of the monitoring loop.
+Extracted from ``Polaris._metrics_export_loop`` so the export logic can be tested and
+reused independently of the monitoring loop.
 """
 
 import asyncio
@@ -17,8 +17,8 @@ class MetricsExportLoop:
     """Background loop that periodically exports metrics to disk.
 
     Reads the export configuration dict produced by
-    :meth:`ComponentBuilder.build_metrics_export_config` and, if enabled,
-    sleeps for the configured interval then calls the metrics exporter.
+    :meth:`ComponentBuilder.build_metrics_export_config` and, if enabled, sleeps for the
+    configured interval then calls the metrics exporter.
     """
 
     def __init__(
@@ -38,8 +38,8 @@ class MetricsExportLoop:
     async def run(self) -> None:
         """Run the metrics export loop until cancelled.
 
-        Returns immediately if metrics export is not configured or the metrics
-        collector does not support file export.
+        Returns immediately if metrics export is not configured or the metrics collector
+        does not support file export.
         """
         if not self._metrics or not hasattr(self._metrics, "export_to_file"):
             return

@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""
-Example demonstrating metrics collection and export in Polaris.
+"""Example demonstrating metrics collection and export in Polaris.
 
-This example shows how to:
-1. Use the framework with metrics collection enabled
-2. Export metrics to JSON and CSV formats
-3. Access metrics programmatically
+This example shows how to: 1. Use the framework with metrics collection enabled 2.
+Export metrics to JSON and CSV formats 3. Access metrics programmatically
 """
 
 import asyncio

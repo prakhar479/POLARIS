@@ -74,7 +74,9 @@ systems:
 
 monitoring:
   # Monitoring loop interval in seconds (default: 30)
-  # Controls how often Polaris collects telemetry and executes adaptations
+  # Controls how often Polaris evaluates all registered systems.
+  # systems[].monitoring.collection_interval can only slow a specific system down.
+  # Effective per-system cadence = max(monitoring.interval_seconds, collection_interval).
   interval_seconds: 30
 
 ################################################################################
@@ -88,10 +90,73 @@ monitoring:
 #   - llm_reasoning:  AI-driven decisions using an LLM
 #   - hybrid:         Combine multiple strategies
 #   - agentic_llm:    LLM agent with tools and multi-step reasoning
+#   - thread_agentic: Recursive THREAD-style agentic strategy
+#   - multi_agent:    Committee-style multi-agent strategy
 #
 
 strategy:
   type: "hybrid" # DEFAULT: "threshold"
+  # Canonical schema: strategy parameters live under strategy.params.
+  params:
+    # Use threshold guard if response_time > 750 ms, otherwise agentic_llm
+    selection_mode: first # "first", "priority", "confidence" (default: confidence)
+    min_confidence: 0.7 # Min confidence to trust a decision (default: 0.7)
+    cooldown_seconds: 120 # Min seconds between any hybrid-selected actions (0 = disabled)
+
+    # Define sub-strategies to combine (higher priority evaluated first)
+    strategies:
+      - type: threshold # Sub-strategy 1 (response-time guard)
+        priority: 0.9
+        params:
+          thresholds:
+            average_response_time:
+              high: 750.0 # milliseconds
+          cooldown_seconds: 45
+
+      - type: agentic_llm # Sub-strategy 2
+        priority: 0.6
+        params:
+          provider: google # One of: "google", "openai", "openrouter", "groq", "ollama"
+          steps_limit: 3 # Max reasoning steps (default: 3)
+          temperature: 0.1 # Model creativity (default: 0.1)
+          # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
+          # Per-system prompt overrides (keyed by systems[].id)
+          per_system_prompts:
+            swim: |
+              You are an adaptation controller for the SWIM web server pool.
+              Metrics: average_response_time (ms), average_utilization (0-1), server_count, dimmer (0-1).
+              SWIM actions: scale_up, scale_down, set_dimmer (params: {"value": 0.0-1.0}).
+              Constraints: max 3 servers, you cannot scale down below 1 server or scale up above 3 servers. adjust dimmer in increments of 0.1.
+              prioritize response time improvements, which can be done fast by dimmer reduction.
+              If you see consistent low input laod and low utilization, consider increasing dimmer or scaling down to save resources.
+              IMPORTANT: NEVER undo or redo a scaling action consecutively.
+              Focus on metric trends and velocities.
+              Use tools to analyze trends and predict outcomes before deciding on scaling.
+              Available tools: get_recent_states, summarize_metric_trends, get_world_model_insights,
+                predict_outcome, get_action_history, list_supported_actions.
+              Reply ONLY as strict JSON - two forms:
+              1) {"tool": "name", "args": {...}}
+              2) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
+              Keep steps minimal. Scale up when utilization > 0.8 or response_time is rising.
+          #   wildfire: |
+          #     You are an adaptation controller for Wildfire.
+          #     Focus on containment and UAV safety.
+          tools:
+            enabled: # List of available tools for the agent
+              - get_recent_states
+              - summarize_metric_trends
+              - get_world_model_insights
+              - predict_outcome
+              - get_action_history
+              - list_supported_actions
+          resilience: # Resilience settings (same as LLM strategy)
+            rps: 0.2
+            burst: 1
+            concurrency: 1
+            max_retries: 4
+            base_backoff_ms: 200
+            max_backoff_ms: 4000
+  #           concurrency: 4
 
   ###############################################################################
   # STRATEGY A: Threshold-Based Adaptation
@@ -137,7 +202,7 @@ strategy:
   # Suited for: Complex systems, dynamic workloads, learning from patterns
   #
   # llm_reasoning:
-  #   provider: google              # "google" or "openai" (default: google)
+  #   provider: google              # One of: "google", "openai", "openrouter", "groq", "ollama"
   #   system_description: "SWIM web application server pool"
   #   adaptation_goals: "Maintain performance with minimal resource usage"
   #   temperature: 0.1              # Model creativity (0.0=deterministic, 1.0=creative)
@@ -173,70 +238,28 @@ strategy:
   ###############################################################################
   #
   # Combines multiple strategies, selecting best decision based on confidence.
-  # Allows fallback between strategies.
+  # Enforces strict sub-strategy typing and explicit behavior.
   #
   # Suited for: Critical systems requiring multiple decision pathways
   #
-  hybrid:
-    # Use threshold if response_time > 0.75, otherwise agentic_llm
-    selection_mode: first # "first", "priority", "confidence" (default: confidence)
-    min_confidence: 0.7 # Min confidence to trust a decision (default: 0.7)
-    cooldown_seconds: 120 # Min seconds between any hybrid-selected actions (0 = disabled)
-
-    # Define sub-strategies to combine (higher priority evaluated first)
-    strategies:
-      - type: threshold # Sub-strategy 1 (response-time guard)
-        priority: 0.9
-        threshold:
-          thresholds:
-            average_response_time:
-              high: 0.75 # milliseconds
-          cooldown_seconds: 45
-
-      - type: agentic_llm # Sub-strategy 2
-        priority: 0.6
-        agentic_llm:
-          provider: google # "google", "openai", or "openrouter" (default: google)
-          steps_limit: 3 # Max reasoning steps (default: 3)
-          temperature: 0.1 # Model creativity (default: 0.1)
-          # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
-          # Per-system prompt overrides (keyed by systems[].id)
-          per_system_prompts:
-            swim: |
-              You are an adaptation controller for the SWIM web server pool.
-              Metrics: average_response_time (s), average_utilization (0-1), server_count, dimmer (0-1).
-              SWIM actions: scale_up, scale_down, set_dimmer (params: {"value": 0.0-1.0}).
-              Constraints: max 3 servers, you cannot scale down below 1 server or scale up above 3 servers. adjust dimmer in increments of 0.1.
-              prioritize response time improvements, which can be done fast by dimmer reduction.
-              If you see consistent low input laod and low utilization, consider increasing dimmer or scaling down to save resources.
-              IMPORTANT: NEVER undo or redo a scaling action consecutively.
-              Focus on metric trends and velocities.
-              Use tools to analyze trends and predict outcomes before deciding on scaling.
-              Available tools: get_recent_states, summarize_metric_trends, get_world_model_insights,
-                predict_outcome, get_action_history, list_supported_actions.
-              Reply ONLY as strict JSON — two forms:
-              1) {"tool": "name", "args": {...}}
-              2) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
-              Keep steps minimal. Scale up when utilization > 0.8 or response_time is rising.
-          #   wildfire: |
-          #     You are an adaptation controller for Wildfire.
-          #     Focus on containment and UAV safety.
-          tools:
-            enabled: # List of available tools for the agent
-              - get_recent_states
-              - summarize_metric_trends
-              - get_world_model_insights
-              - predict_outcome
-              - get_action_history
-              - list_supported_actions
-          resilience: # Resilience settings (same as LLM strategy)
-            rps: 0.2
-            burst: 1
-            concurrency: 1
-            max_retries: 4
-            base_backoff_ms: 200
-            max_backoff_ms: 4000
-  #           concurrency: 4
+  # params:
+  #   selection_mode: first
+  #   min_confidence: 0.7
+  #   cooldown_seconds: 120
+  #   strategies:
+  #     - type: threshold
+  #       priority: 0.9
+  #       params:
+  #         thresholds:
+  #           average_response_time:
+  #             high: 750.0
+  #         cooldown_seconds: 45
+  #     - type: agentic_llm
+  #       priority: 0.6
+  #       params:
+  #         provider: google
+  #         steps_limit: 3
+  #         temperature: 0.1
 
   ###############################################################################
   # STRATEGY D: Agentic LLM Strategy (DEFAULT EXAMPLE)
@@ -248,7 +271,7 @@ strategy:
   # Suited for: Complex adaptation requiring multi-step planning, trade-off analysis
   #
   # agentic_llm:
-  #   provider: google # "google" or "openai" (default: google)
+  #   provider: google # One of: "google", "openai", "openrouter", "groq", "ollama"
   #   steps_limit: 3 # Max reasoning steps (default: 3)
   #   temperature: 0.1 # Model creativity (default: 0.1)
   #   # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
@@ -296,8 +319,8 @@ strategy:
   # Suited for: High-stakes systems needing multi-perspective analysis
   #
   # multi_agent:
-  #   provider: google          # Shared/fallback LLM provider (default: google)
-  #   temperature: 0.1          # Shared/fallback temperature (default: 0.1)
+  #   provider: google          # Shared default LLM provider (default: google)
+  #   temperature: 0.1          # Shared default temperature (default: 0.1)
   #   steps_limit: 3            # Default max reasoning steps per agent stage (default: 3)
   #   system_description: "SWIM web application server pool"
   #
@@ -325,7 +348,46 @@ strategy:
   #     temperature: 0.0        # Conservative: reject borderline plans
   #     max_tokens: 2000
   #
-  #   resilience:               # Shared resilience fallback for all agents
+  #   resilience:               # Shared resilience defaults for all agents
+  #     rps: 1
+  #     burst: 2
+  #     concurrency: 2
+  #     max_retries: 4
+  #     base_backoff_ms: 200
+  #     max_backoff_ms: 4000
+
+  ###############################################################################
+  # STRATEGY F: THREAD Recursive Agentic Strategy
+  ###############################################################################
+  #
+  # Recursive join-synchronized reasoning inspired by THREAD
+  # (Thinking Deeper with Recursive Spawning).
+  # Parent threads can spawn child threads, wait for feedback, and continue.
+  #
+  # thread_agentic:
+  #   provider: google             # One of: "google", "openai", "openrouter", "groq", "ollama"
+  #   steps_limit: 4               # Max reasoning steps per thread
+  #   temperature: 0.1             # Model creativity
+  #   max_thread_depth: 3          # Max recursive depth
+  #   max_total_threads: 16        # Global thread budget per assessment
+  #   assessment_cooldown_seconds: 0.0 # Min seconds between assessments (0 disables)
+  #   child_timeout_seconds: 20.0  # Timeout for each child thread
+  #   max_repeated_spawns: 2       # Prevent repeated identical spawn loops
+  #   phi_mode: "last_line"       # "last_line" or "recent_lines"
+  #   phi_max_lines: 6             # Used when phi_mode is "recent_lines"
+  #   listen_token: "=>"          # Child feedback framing prefix
+  #   return_token: "<="          # Child feedback framing suffix
+  #   tools:
+  #     enabled:
+  #       - get_recent_states
+  #       - summarize_metric_trends
+  #       - list_metric_fields
+  #       - compute_metric_math
+  #       - get_world_model_insights
+  #       - predict_outcome
+  #       - get_action_history
+  #       - list_supported_actions
+  #   resilience:
   #     rps: 1
   #     burst: 2
   #     concurrency: 2
@@ -416,7 +478,7 @@ meta_learner:
 
   # For LLM-Based Meta-Learner
   llm:
-    provider: google # "google", "openai", or "openrouter" (default: google)
+    provider: google # One of: "google", "openai", "openrouter", "groq", "ollama"
     temperature: 0.1 # Model creativity (default: 0.1)
     auto_apply: true # Auto-apply approved proposals (default: false)
 
@@ -424,13 +486,13 @@ meta_learner:
     per_system_prompts:
       swim:
         analysis_system_prompt: |
-          Analyze SWIM performance: average_response_time (s), average_utilization (0-1), server_count, dimmer.
+          Analyze SWIM performance: average_response_time (ms), average_utilization (0-1), server_count, dimmer.
           Assess: Are thresholds triggering correctly? Is cooldown too long/short? Is the agentic LLM hitting its step limit?
           Note: be specific about exact parameter paths. DO try to give valid learnings and patterns based on the data, not just generic advice.
         optimization_system_prompt: |
           Optimize a hybrid strategy (threshold + agentic LLM) for SWIM.
-          Tunable parameters (use exact paths. NOTE: response_time is in SECONDS, not ms):
-            strategy_0.thresholds.average_response_time.high  float  0.19-1.31  (current ~0.75 s)
+          Tunable parameters (use exact paths. NOTE: response_time is in MILLISECONDS):
+            strategy_0.thresholds.average_response_time.high  float  190-1310  (current ~750 ms)
             strategy_0.cooldown_seconds                       int    10-300     (current 45 s)
             strategy_1.temperature                            float  0.0-2.0    (current 0.1)
             strategy_1.steps_limit                            int    1-10       (current 3)
@@ -441,7 +503,7 @@ meta_learner:
           {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>,
             "rationale": "<30+ words citing analysis evidence>",
             "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
-          or 
+          or
            {"analysis": "<narrative with specific metric values and trends>",
            "issues": ["<issue with metric evidence>"],
             "recommendations": ["<specific param + direction, e.g. increase strategy_0.cooldown_seconds from X to Y because ..., or dimmer adjustments are more effective than server scaling based on recent trends>"]}>]}

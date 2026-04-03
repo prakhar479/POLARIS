@@ -1,35 +1,30 @@
 """Multi-agent LLM-based adaptation strategy for POLARIS.
 
-This module implements an advanced adaptation strategy that uses a committee
-of specialized Large Language Model (LLM) agents working together to make robust
-adaptation decisions.
+This module implements an advanced adaptation strategy that uses a committee of
+specialized Large Language Model (LLM) agents working together to make robust adaptation
+decisions.
 
 The decision process flows through three specialized agents:
 
-1. **Diagnostician** — Analyses current system metrics to detect anomalies,
-   identify root causes, and assign a severity level.
-2. **Planner** — Given the diagnosis, proposes a concrete sequence of
-   adaptation actions to resolve the identified issues.
-3. **SafetyValidator** — Reviews the plan for safety, approves or rejects it,
-   and may return a safer subset of actions.
+1. **Diagnostician** — Analyses current system metrics to detect anomalies, identify
+root causes, and assign a severity level. 2. **Planner** — Given the diagnosis, proposes
+a concrete sequence of adaptation actions to resolve the identified issues. 3.
+**SafetyValidator** — Reviews the plan for safety, approves or rejects it, and may
+return a safer subset of actions.
 
-Each agent can be independently configured with its own LLM client, temperature,
-and system-prompt override, enabling autonomous multi-agent setups where
-different agents can use different models or providers optimised for their role
-(e.g., a cheap fast model for diagnosis, a stronger model for validation).
+Each agent can be independently configured with its own LLM client, temperature, and
+system-prompt override, enabling autonomous multi-agent setups where different agents
+can use different models or providers optimised for their role (e.g., a cheap fast model
+for diagnosis, a stronger model for validation).
 """
 
 import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field
-
-if TYPE_CHECKING:
-    pass
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
@@ -39,9 +34,21 @@ from polaris.core.models import AdaptationAction, SystemState
 from polaris.infrastructure.constants import (
     DEFAULT_MAX_TOKENS_DIAGNOSTICIAN,
     DEFAULT_MAX_TOKENS_PLANNER,
+    DEFAULT_MAX_TOKENS_VALIDATOR,
 )
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+from polaris.strategies.action_resolution import (
+    ConnectorActionResolver,
+    StrictContractViolation,
+    require_supported_action_contract,
+    resolve_strict_action_payload,
+)
+from polaris.strategies.utils import (
+    DEFAULT_ALLOWED_TOOLS,
+    format_system_state_for_llm,
+    parse_strict_json,
+)
 from polaris.tools import ToolDependencies, ToolRegistry, get_builtin_tools
 
 # ---------------------------------------------------------------------------
@@ -96,8 +103,8 @@ class ValidatorOutput(BaseModel):
 class AgenticResponseBase(BaseModel):
     """Base class for all agentic response schemas.
 
-    Defines the common structure for tool-using agent responses: optional
-    tool call or final output.
+    Defines the common structure for tool-using agent responses: optional tool call or
+    final output.
     """
 
     tool: Optional[str] = Field(None, description="Name of the tool to call")
@@ -132,17 +139,17 @@ class ValidatorAgenticResponse(AgenticResponseBase):
 class AgentConfig:
     """Configuration for a single agent within the multi-agent committee.
 
-    Allows each agent (Diagnostician, Planner, SafetyValidator) to use a
-    different LLM client, temperature, and/or system prompt.  Any field
-    left as ``None`` falls back to the shared ``MultiAgentStrategy`` defaults.
+    Allows each agent (Diagnostician, Planner, SafetyValidator) to use a different LLM
+    client, temperature, and/or system prompt.  Any field left as ``None`` falls back to
+    the shared ``MultiAgentStrategy`` defaults.
 
     Attributes:
-        llm_client: LLM client to use for this agent. Falls back to the
-            strategy-level shared client when ``None``.
+        llm_client: LLM client to use for this agent. Falls back to the strategy-level
+            shared client when ``None``.
         temperature: Sampling temperature for this agent. Falls back to the
             strategy-level ``temperature`` when ``None``.
-        system_prompt: Full system-prompt string for this agent. Falls back to
-            the built-in default prompt for the role when ``None``.
+        system_prompt: Full system-prompt string for this agent. Falls back to the
+            built-in default prompt for the role when ``None``.
         max_tokens: Maximum tokens to request. Falls back to role default.
     """
 
@@ -163,6 +170,7 @@ _DEFAULT_DIAGNOSTICIAN_PROMPT_TMPL = (
     "Your goal is to analyze system metrics to detect anomalies. "
     "You have access to tools to query history and trends. "
     "Review the metrics, use tools if needed, then provide your final diagnosis.\n"
+    "Connector-supported action types (for context): {supported_actions}\n"
     "Available tools: {allowed_tools}\n\n"
     "Reply as strict JSON:\n"
     '1) {{"tool": "name", "args": {{...}}}} to request info\n'
@@ -173,6 +181,7 @@ _DEFAULT_PLANNER_PROMPT_TMPL = (
     "You are the Planner agent for {system_description}.\n"
     "The Diagnostician has identified issues. Review the context, "
     "possibly use tools to predict outcomes of actions, and propose a plan.\n"
+    "Action type constraint: use connector-supported names only: {supported_actions}\n"
     "Available tools: {allowed_tools}\n\n"
     "Reply as strict JSON:\n"
     '1) {{"tool": "name", "args": {{...}}}} to request info\n'
@@ -183,6 +192,7 @@ _DEFAULT_VALIDATOR_PROMPT_TMPL = (
     "You are the Safety Validator agent for {system_description}.\n"
     "Review the diagnosis and the proposed plan. Evaluate if the actions are safe. "
     "You may use tools to check system history or predict stability impact.\n"
+    "Action type constraint: validator output must use connector-supported names only: {supported_actions}\n"
     "Available tools: {allowed_tools}\n\n"
     "Reply as strict JSON:\n"
     '1) {{"tool": "name", "args": {{...}}}} to request info\n'
@@ -200,19 +210,19 @@ class MultiAgentStrategy(AdaptationStrategy):
 
     The decision process flows through three specialized agents:
 
-    1. **Diagnostician** — Detects anomalies, lists issues and root causes.
-    2. **Planner** — Proposes adaptation actions to mitigate the diagnosis.
-    3. **SafetyValidator** — Reviews the plan for safety and approves/rejects it.
+    1. **Diagnostician** — Detects anomalies, lists issues and root causes. 2.
+    **Planner** — Proposes adaptation actions to mitigate the diagnosis. 3.
+    **SafetyValidator** — Reviews the plan for safety and approves/rejects it.
 
-    Each agent can be independently configured via an :class:`AgentConfig`
-    object, enabling fully autonomous multi-agent setups where each role uses a
-    different model, provider, temperature, or system prompt.
+    Each agent can be independently configured via an :class:`AgentConfig` object,
+    enabling fully autonomous multi-agent setups where each role uses a different model,
+    provider, temperature, or system prompt.
 
     Attributes:
-        llm: Shared/fallback LLM client.
+        llm: Shared default LLM client.
         knowledge_store: Store for querying historical system data.
         world_model: World model for predicting action outcomes.
-        temperature: Shared/fallback LLM sampling temperature.
+        temperature: Shared default LLM sampling temperature.
         system_description: Human-readable description used in default prompts.
         steps_limit: Default max reasoning steps for each agent.
         allowed_tools: Default enabled tools for each agent.
@@ -221,45 +231,41 @@ class MultiAgentStrategy(AdaptationStrategy):
         validator_config: Per-agent config for the SafetyValidator (optional).
     """
 
+    requires_system_contract: bool = True
+
     def __init__(
         self,
         llm_client: LLMClient,
         knowledge_store: KnowledgeStore,
         world_model: WorldModel,
         temperature: float = 0.1,
-        system_description: str = "A generic managed cloud system",
+        system_description: str = "Managed system",
         steps_limit: int = 3,
         allowed_tools: Optional[List[str]] = None,
         # Per-agent overrides
         diagnostician_config: Optional[AgentConfig] = None,
         planner_config: Optional[AgentConfig] = None,
         validator_config: Optional[AgentConfig] = None,
-        # Legacy agent_prompts dict (keyed by "diagnostician"|"planner"|"validator")
-        agent_prompts: Optional[Dict[str, str]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
         """Initialise the MultiAgentStrategy.
 
         Args:
-            llm_client: Shared LLM client used as fallback when no per-agent
-                client is configured.
+            llm_client: Shared LLM client used when no per-agent client is
+                configured.
             knowledge_store: Store for querying historical system data.
             world_model: World model for predicting action outcomes.
-            temperature: Shared sampling temperature (default: 0.1). Each
-                agent can override this via its :class:`AgentConfig`.
-            system_description: Description of the managed system embedded in
-                default agent prompts (default: "A generic managed cloud system").
+            temperature: Shared sampling temperature (default: 0.1). Each agent can
+                override this via its :class:`AgentConfig`.
+            system_description: Description of the managed system embedded in default
+                agent prompts (default: "A generic managed cloud system").
             steps_limit: Default max reasoning steps for each agent stage (default: 3).
-            allowed_tools: List of enabled tools. If None, all built-in tools are enabled.
+            allowed_tools: List of enabled tools. If None, all built-in tools are
+                enabled.
             diagnostician_config: Optional per-agent config for the Diagnostician.
             planner_config: Optional per-agent config for the Planner.
             validator_config: Optional per-agent config for the SafetyValidator.
-            agent_prompts: Optional dict mapping role names (``"diagnostician"``,
-                ``"planner"``, ``"validator"``) to custom system-prompt strings.
-                Merged into per-agent configs: ``agent_prompts`` value is used
-                when the corresponding :class:`AgentConfig` has no
-                ``system_prompt`` of its own.
             logger: Optional structured logger.
             metrics: Optional metrics collector (falls back to NullMetricsCollector).
         """
@@ -269,31 +275,16 @@ class MultiAgentStrategy(AdaptationStrategy):
         self.temperature = temperature
         self.system_description = system_description
         self.steps_limit = steps_limit
-        self.allowed_tools = allowed_tools or [
-            "get_recent_states",
-            "summarize_metric_trends",
-            "get_world_model_insights",
-            "predict_outcome",
-            "get_action_history",
-            "list_supported_actions",
-        ]
+        self.allowed_tools = allowed_tools or list(DEFAULT_ALLOWED_TOOLS)
 
         # Per-agent configs — normalise to AgentConfig objects
         self._diagnostician_cfg = diagnostician_config or AgentConfig()
         self._planner_cfg = planner_config or AgentConfig()
         self._validator_cfg = validator_config or AgentConfig()
 
-        # agent_prompts convenience dict — only applied when config has no prompt
-        _prompts = agent_prompts or {}
-        if _prompts.get("diagnostician") and not self._diagnostician_cfg.system_prompt:
-            self._diagnostician_cfg.system_prompt = _prompts["diagnostician"]
-        if _prompts.get("planner") and not self._planner_cfg.system_prompt:
-            self._planner_cfg.system_prompt = _prompts["planner"]
-        if _prompts.get("validator") and not self._validator_cfg.system_prompt:
-            self._validator_cfg.system_prompt = _prompts["validator"]
-
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
+        self._action_resolver = ConnectorActionResolver()
         # Initialize tool registry with built-in tools
         self._tool_registry = ToolRegistry(metrics=self.metrics)
         all_tools = get_builtin_tools()
@@ -316,16 +307,32 @@ class MultiAgentStrategy(AdaptationStrategy):
     def _agent_temperature(self, cfg: AgentConfig) -> float:
         return cfg.temperature if cfg.temperature is not None else self.temperature
 
-    def _agent_prompt(self, cfg: AgentConfig, default_tmpl: str) -> str:
+    def _agent_prompt(
+        self,
+        cfg: AgentConfig,
+        default_tmpl: str,
+        supported_action_types: Optional[List[str]] = None,
+    ) -> str:
         tools = ", ".join(cfg.allowed_tools or self.allowed_tools)
+        supported_actions_text = (
+            ", ".join(supported_action_types)
+            if supported_action_types
+            else "unknown (use connector-supported canonical action names)"
+        )
         if cfg.system_prompt is not None:
             try:
                 return cfg.system_prompt.format(
-                    system_description=self.system_description, allowed_tools=tools
+                    system_description=self.system_description,
+                    allowed_tools=tools,
+                    supported_actions=supported_actions_text,
                 )
-            except Exception:
+            except (KeyError, IndexError, ValueError):
                 return cfg.system_prompt
-        return default_tmpl.format(system_description=self.system_description, allowed_tools=tools)
+        return default_tmpl.format(
+            system_description=self.system_description,
+            allowed_tools=tools,
+            supported_actions=supported_actions_text,
+        )
 
     def _agent_steps_limit(self, cfg: AgentConfig) -> int:
         return cfg.steps_limit if cfg.steps_limit is not None else self.steps_limit
@@ -342,17 +349,17 @@ class MultiAgentStrategy(AdaptationStrategy):
     ) -> List[AdaptationAction]:
         """Assess system state using the multi-agent committee.
 
-        Runs the Diagnostician → Planner → SafetyValidator pipeline. Each
-        agent may use its own LLM client, temperature, and system prompt if
-        configured via :class:`AgentConfig`.
+        Runs the Diagnostician → Planner → SafetyValidator pipeline. Each agent may use
+        its own LLM client, temperature, and system prompt if configured via
+        :class:`AgentConfig`.
 
         Args:
             state: Current system state with metrics and health information.
             context: Adaptation context containing world-model insights.
 
         Returns:
-            List of approved :class:`AdaptationAction` objects, or an empty
-            list if no adaptation is required / the plan was rejected.
+            List of approved: class:`AdaptationAction` objects, or an empty list if no
+                adaptation is required / the plan was rejected.
         """
         if self.logger:
             self.logger.debug("MultiAgent assessment started", system_id=state.system_id)
@@ -363,6 +370,10 @@ class MultiAgentStrategy(AdaptationStrategy):
 
         start_time = datetime.now(timezone.utc)
         system_context_str = self._format_system_context(state, context)
+        _contract, supported_action_types, action_aliases = require_supported_action_contract(
+            context,
+            strategy_name="multi-agent",
+        )
 
         try:
             # ----------------------------------------------------------
@@ -376,6 +387,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                 default_prompt_tmpl=_DEFAULT_DIAGNOSTICIAN_PROMPT_TMPL,
                 state=state,
                 context=context,
+                supported_action_types=supported_action_types,
             )
 
             if not diagnosis:
@@ -402,6 +414,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                 default_prompt_tmpl=_DEFAULT_PLANNER_PROMPT_TMPL,
                 state=state,
                 context=context,
+                supported_action_types=supported_action_types,
             )
 
             if not plan or not plan.plans:
@@ -427,6 +440,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                 default_prompt_tmpl=_DEFAULT_VALIDATOR_PROMPT_TMPL,
                 state=state,
                 context=context,
+                supported_action_types=supported_action_types,
             )
 
             if not validation or not validation.approved or not validation.safe_actions:
@@ -435,13 +449,23 @@ class MultiAgentStrategy(AdaptationStrategy):
             # Convert approved actions to AdaptationAction objects
             final_actions: List[AdaptationAction] = []
             for action_block in validation.safe_actions:
+                resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                    resolver=self._action_resolver,
+                    action_type=action_block.type,
+                    parameters=action_block.parameters,
+                    supported_action_types=supported_action_types,
+                    action_aliases=action_aliases,
+                    system_id=state.system_id,
+                    missing_type_error="Validator action requires non-empty 'type'",
+                    invalid_parameters_error="Validator action requires object 'parameters'",
+                )
                 final_actions.append(
                     AdaptationAction(
                         action_id=str(uuid.uuid4()),
-                        action_type=action_block.type,
+                        action_type=resolved_action_type,
                         target_system=state.system_id,
                         parameters={
-                            **action_block.parameters,
+                            **resolved_parameters,
                             "llm_diagnosis": diagnosis.issues,
                             "llm_rationale": plan.rationale,
                             "llm_validator_reasoning": validation.reasoning,
@@ -484,7 +508,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                 type=float,
                 min_value=0.0,
                 max_value=2.0,
-                description="Shared/fallback LLM sampling temperature",
+                description="Shared default LLM sampling temperature",
                 kind="llm_temperature",
             ),
             "steps_limit": ParameterSpec(
@@ -492,7 +516,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                 type=int,
                 min_value=1,
                 max_value=10,
-                description="Shared/fallback max reasoning steps",
+                description="Shared default max reasoning steps",
                 kind="agent_steps_limit",
             ),
         }
@@ -587,20 +611,22 @@ class MultiAgentStrategy(AdaptationStrategy):
                 if hasattr(cfg_obj.llm_client, "update_resilience"):
                     try:
                         cfg_obj.llm_client.update_resilience(role_cfg["resilience"])
-                    except Exception as e:
+                    except Exception as exc:
                         if self.logger:
                             self.logger.warning(
-                                f"Multi-agent {role} resilience update failed", error=str(e)
+                                "Multi-agent resilience update failed",
+                                role=role,
+                                error=str(exc),
                             )
 
         # Shared resilience
         if "resilience" in config and hasattr(self.llm, "update_resilience"):
             try:
                 self.llm.update_resilience(config["resilience"])
-            except Exception as e:
+            except Exception as exc:
                 if self.logger:
                     self.logger.warning(
-                        "MultiAgentStrategy shared resilience update failed", error=str(e)
+                        "MultiAgentStrategy shared resilience update failed", error=str(exc)
                     )
 
     async def get_performance_metrics(self) -> Dict[str, float]:
@@ -629,15 +655,16 @@ class MultiAgentStrategy(AdaptationStrategy):
         default_prompt_tmpl: str,
         state: SystemState,
         context: AdaptationContext,
+        supported_action_types: Optional[List[str]] = None,
     ) -> Any:
         """Run an iterative tool-using loop for a specific agent role."""
         llm = self._agent_llm(cfg)
         temp = self._agent_temperature(cfg)
-        prompt = self._agent_prompt(cfg, default_prompt_tmpl)
+        prompt = self._agent_prompt(cfg, default_prompt_tmpl, supported_action_types)
         max_tokens = cfg.max_tokens or (
             DEFAULT_MAX_TOKENS_DIAGNOSTICIAN
             if role == "diagnostician"
-            else DEFAULT_MAX_TOKENS_PLANNER
+            else DEFAULT_MAX_TOKENS_VALIDATOR if role == "validator" else DEFAULT_MAX_TOKENS_PLANNER
         )
         steps_limit = self._agent_steps_limit(cfg)
         allowed_tools = self._agent_allowed_tools(cfg)
@@ -659,16 +686,14 @@ class MultiAgentStrategy(AdaptationStrategy):
                 response_schema=response_schema,
             )
 
-            parsed = self._parse_json(response.content)
-            if not isinstance(parsed, dict):
-                break
+            parsed = self._parse_json_object(response.content)
 
             try:
                 structured = response_schema.model_validate(parsed)
-            except Exception as e:
-                if self.logger:
-                    self.logger.warning(f"MultiAgent {role} validation error", error=str(e))
-                break
+            except Exception as exc:
+                raise StrictContractViolation(
+                    f"MultiAgent {role} response failed schema validation: {exc}"
+                ) from exc
 
             if getattr(structured, "final", None) is not None:
                 return structured.final
@@ -677,23 +702,21 @@ class MultiAgentStrategy(AdaptationStrategy):
             args = getattr(structured, "args", {}) or {}
 
             if not tool:
-                break
+                raise StrictContractViolation(
+                    f"MultiAgent {role} response must include either 'final' or 'tool'"
+                )
 
             if tool not in allowed_tools:
-                from polaris.tools import ToolError
-
-                tool_result = ToolError(
-                    code="tool_not_allowed",
-                    message=f"tool_not_allowed: {tool}",
-                    recoverable=True,
-                ).to_dict()
+                raise StrictContractViolation(
+                    f"MultiAgent {role} requested disallowed tool '{tool}'"
+                )
             else:
                 try:
                     # Build tool dependencies
                     deps = ToolDependencies(
                         knowledge_store=self.knowledge_store,
                         world_model=self.world_model,
-                        connector=None,  # MultiAgentStrategy doesn't have connector access
+                        system_contract=context.system_contract,
                         logger=self.logger,
                         metrics=self.metrics,
                     )
@@ -704,140 +727,33 @@ class MultiAgentStrategy(AdaptationStrategy):
                         context=context,
                         deps=deps,
                     )
-                except Exception as e:
+                except Exception as exc:
                     if self.logger:
                         self.logger.error(
-                            f"MultiAgent tool error in {role}", tool=tool, error=str(e)
+                            "MultiAgent tool execution failed",
+                            role=role,
+                            tool=tool,
+                            error=str(exc),
                         )
                     from polaris.tools import ToolError
 
                     tool_result = ToolError(
                         code="tool_error",
-                        message=f"tool_error: {type(e).__name__}: {str(e)}",
+                        message=f"tool_error: {type(exc).__name__}: {str(exc)}",
                         recoverable=True,
                     ).to_dict()
 
             tool_msg = json.dumps({"tool_result": {"tool": tool, "data": tool_result}})
             messages.append(LLMMessage(role="user", content=tool_msg))
 
-        return None
-
-    async def _execute_tool(
-        self, tool: str, args: Dict[str, Any], state: SystemState, context: AdaptationContext
-    ) -> Dict[str, Any]:
-        """Execute a tool directly (deprecated).
-
-        This method is maintained for backward compatibility but delegates
-        to the ToolRegistry. New code should use the registry directly.
-        """
-        deps = ToolDependencies(
-            knowledge_store=self.knowledge_store,
-            world_model=self.world_model,
-            connector=None,  # MultiAgentStrategy doesn't have connector access
-            logger=self.logger,
-            metrics=self.metrics,
-        )
-
-        return await self._tool_registry.execute(
-            tool_name=tool,
-            args=args,
-            state=state,
-            context=context,
-            deps=deps,
+        raise StrictContractViolation(
+            f"MultiAgent {role} reached step limit without producing a final decision"
         )
 
     def _format_system_context(self, state: SystemState, context: AdaptationContext) -> str:
         """Format system state and context into a JSON string."""
-        metrics = []
-        for k, v in state.metrics.items():
-            try:
-                metrics.append({"name": k, "value": v.value, "unit": v.unit})
-            except Exception:
-                metrics.append({"name": k, "value": str(getattr(v, "value", None))})
+        return format_system_state_for_llm(state, context)
 
-        data = {
-            "system_id": state.system_id,
-            "health": getattr(state.health_status, "value", "unknown"),
-            "timestamp": state.timestamp.isoformat(),
-            "metrics": metrics,
-            "world_model_insights": context.world_model_insights or {},
-        }
-        return json.dumps(data)
-
-    def _parse_json(self, content: str) -> Any:
-        raw = (content or "").strip()
-        if not raw:
-            return {}
-
-        fence_match = re.search(
-            r"```(?:json)?\s*(?P<body>.*?)\s*```",
-            raw,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        candidates: List[str] = []
-        if fence_match:
-            candidates.append(fence_match.group("body").strip())
-        candidates.append(raw)
-
-        for cand in candidates:
-            parsed = self._extract_first_json_value(cand)
-            if parsed is not None:
-                return parsed
-
-        import logging
-
-        logging.getLogger(__name__).warning("LLM returned malformed JSON: %.500s", raw)
-        return {}
-
-    def _extract_first_json_value(self, text: str) -> Any:
-        s = (text or "").strip()
-        if not s:
-            return None
-
-        try:
-            return json.loads(s)
-        except Exception:
-            pass
-
-        start = None
-        for i, ch in enumerate(s):
-            if ch in "[{":
-                start = i
-                break
-        if start is None:
-            return None
-
-        opening = s[start]
-        closing = "]" if opening == "[" else "}"
-        depth = 0
-        in_str = False
-        escape = False
-        for j in range(start, len(s)):
-            ch = s[j]
-            if in_str:
-                if escape:
-                    escape = False
-                    continue
-                if ch == "\\":
-                    escape = True
-                    continue
-                if ch == '"':
-                    in_str = False
-                continue
-
-            if ch == '"':
-                in_str = True
-                continue
-
-            if ch == opening:
-                depth += 1
-                continue
-            if ch == closing:
-                depth -= 1
-                if depth == 0:
-                    snippet = s[start : j + 1]
-                    try:
-                        return json.loads(snippet)
-                    except Exception:
-                        return None
-        return None
+    def _parse_json_object(self, content: str) -> Dict[str, Any]:
+        """Parse strict JSON object from model output."""
+        return parse_strict_json(content, StrictContractViolation)

@@ -11,6 +11,8 @@ from polaris.core.models import AdaptationAction, SystemState
 
 
 class _ScalarKalmanFilter:
+    """A simple scalar Kalman filter for smoothing noisy metric values."""
+
     def __init__(self, process_var: float = 1.0, measurement_var: float = 1.0):
         self.process_var = process_var
         self.measurement_var = measurement_var
@@ -36,8 +38,7 @@ class _ScalarKalmanFilter:
 
 
 class StatisticalWorldModel(WorldModel):
-    """
-    Statistical world model using mean/std calculations.
+    """Statistical world model using mean/std calculations.
 
     Tracks metric trends and provides simple predictions.
     """
@@ -50,8 +51,7 @@ class StatisticalWorldModel(WorldModel):
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        """
-        Initialize the statistical world model.
+        """Initialize the statistical world model.
 
         Args:
             knowledge_store: Knowledge store for retrieving historical data
@@ -136,6 +136,15 @@ class StatisticalWorldModel(WorldModel):
         self._update_regime(state)
 
     def _update_regime(self, state: SystemState) -> None:
+        """Update HMM-style regime probabilities based on current metrics.
+
+        Uses a simple Hidden Markov Model approach to track system operating
+        regimes (low, normal, high load). Updates transition probabilities
+        using emission preferences derived from CPU usage and response time.
+
+        Args:
+            state: Current system state containing metrics to analyze.
+        """
         system_id = state.system_id
         if system_id not in self._regime_probs:
             # Start with uniform prior over regimes
@@ -194,8 +203,7 @@ class StatisticalWorldModel(WorldModel):
     async def predict(
         self, action: AdaptationAction, current_state: SystemState
     ) -> PredictionResult:
-        """
-        Predict outcome of action.
+        """Predict outcome of action.
 
         Simple prediction: use historical mean as baseline.
         """

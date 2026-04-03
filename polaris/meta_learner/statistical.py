@@ -30,11 +30,10 @@ from polaris.meta_learner.bayesian_optimizer import (
 
 
 class StatisticalMetaLearner(MetaLearner):
-    """
-    Statistical meta-learner using Bayesian optimization for intelligent parameter tuning.
+    """Statistical meta-learner using Bayesian optimization for intelligent parameter tuning.
 
-    Combines Gaussian Process-based optimization with world model uncertainty integration
-    for sophisticated parameter adaptation decisions.
+    Combines Gaussian Process-based optimization with world model uncertainty
+    integration for sophisticated parameter adaptation decisions.
     """
 
     def __init__(
@@ -120,7 +119,8 @@ class StatisticalMetaLearner(MetaLearner):
                     "avg_metric_std": avg_std,
                     "regime": regime_info,
                 }
-            except Exception:  # Best-effort, do not break analysis on WM issues
+            except Exception:
+                # Best-effort world model insights - do not break analysis on WM issues
                 pass
 
         # Basic recommendations

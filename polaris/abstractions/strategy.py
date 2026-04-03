@@ -1,17 +1,14 @@
 """Adaptation strategy interface for decision-making."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
+    from polaris.abstractions.system_contract import SystemContract
     from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
-else:
-    # Use Any as fallback for runtime type checks if models can't be imported
-    # (avoiding circular imports)
-    AdaptationAction = Any
-    ExecutionResult = Any
-    SystemState = Any
 
 
 @dataclass
@@ -21,6 +18,7 @@ class AdaptationContext:
     system_id: str
     historical_states: List["SystemState"]
     world_model_insights: Optional[Dict[str, Any]] = None
+    system_contract: Optional["SystemContract"] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -38,18 +36,16 @@ class ParameterSpec:
 
 
 class AdaptationStrategy(ABC):
-    """
-    Interface for adaptation decision-making strategies.
+    """Interface for adaptation decision-making strategies.
 
     Implement this to create custom adaptation logic.
     """
 
     @abstractmethod
     async def assess(
-        self, state: "SystemState", context: AdaptationContext
-    ) -> List["AdaptationAction"]:
-        """
-        Assess system state and decide on adaptation.
+        self, state: SystemState, context: AdaptationContext
+    ) -> List[AdaptationAction]:
+        """Assess system state and decide on adaptation.
 
         Args:
             state: Current system state with metrics
@@ -69,8 +65,7 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     def get_tunable_parameters(self) -> Dict[str, ParameterSpec]:
-        """
-        Return specification of parameters that can be tuned.
+        """Return specification of parameters that can be tuned.
 
         Returns:
             Dict mapping parameter paths to their specifications
@@ -79,8 +74,7 @@ class AdaptationStrategy(ABC):
 
     @abstractmethod
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
-        """
-        Update a tunable parameter.
+        """Update a tunable parameter.
 
         Args:
             parameter_path: Dot-notation path to parameter
@@ -92,12 +86,15 @@ class AdaptationStrategy(ABC):
         pass
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
-        """Apply configuration updates for hot-reload."""
+        """Apply configuration updates for hot-reload.
+
+        Default implementation is a no-op. Override in subclasses to support
+        runtime configuration updates without restart.
+        """
         return
 
     async def get_performance_metrics(self) -> Dict[str, float]:
-        """
-        Return strategy-specific performance metrics.
+        """Return strategy-specific performance metrics.
 
         Used by Meta-Learner to assess effectiveness.
         """

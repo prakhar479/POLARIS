@@ -8,16 +8,14 @@ from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
 
 
 class KnowledgeStore(ABC):
-    """
-    Interface for storing and querying historical data.
+    """Interface for storing and querying historical data.
 
     Implement this to customize storage backend.
     """
 
     @abstractmethod
     async def store_state(self, state: SystemState) -> None:
-        """
-        Store system state.
+        """Store system state.
 
         Args:
             state: System state to store
@@ -26,8 +24,7 @@ class KnowledgeStore(ABC):
 
     @abstractmethod
     async def store_action(self, action: AdaptationAction, result: ExecutionResult) -> None:
-        """
-        Store adaptation action and its result.
+        """Store adaptation action and its result.
 
         Args:
             action: Adaptation action
@@ -39,8 +36,7 @@ class KnowledgeStore(ABC):
     async def query_states(
         self, system_id: str, start_time: datetime, end_time: datetime
     ) -> List[SystemState]:
-        """
-        Query historical states for a time range.
+        """Query historical states for a time range.
 
         Args:
             system_id: System to query
@@ -55,8 +51,7 @@ class KnowledgeStore(ABC):
     async def query_actions(
         self, system_id: str, start_time: datetime, end_time: datetime
     ) -> List[Tuple[AdaptationAction, ExecutionResult]]:
-        """
-        Query adaptation history.
+        """Query adaptation history.
 
         Returns:
             List of (action, result) tuples

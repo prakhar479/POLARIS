@@ -1,7 +1,7 @@
 """Meta-learning transparency record writer.
 
-Writes append-only JSONL records for each meta-learning cycle so proposal
-generation, validation, and application are externally inspectable.
+Writes append-only JSONL records for each meta-learning cycle so proposal generation,
+validation, and application are externally inspectable.
 """
 
 import dataclasses

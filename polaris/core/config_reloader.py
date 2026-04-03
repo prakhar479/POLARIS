@@ -1,26 +1,25 @@
 """Hot-reload configuration watcher.
 
 Extracted from ``Polaris._maybe_hot_reload_config`` and
-``Polaris._apply_strategy_hot_reload`` so the config-reload logic can be
-tested and reused independently of the monitoring loop.
+``Polaris._apply_strategy_hot_reload`` so the config-reload logic can be tested and
+reused independently of the monitoring loop.
 """
 
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
-    from polaris.abstractions import AdaptationStrategy, Logger, MetricsCollector
+    from polaris.abstractions import AdaptationStrategy, Logger, MetaLearner, MetricsCollector
     from polaris.infrastructure.config import PolarisConfig
 
 
 class ConfigReloader:
     """Watches a config file for changes and applies live updates to the strategy.
 
-    On each call to :meth:`maybe_reload`, the file's modification time is
-    compared against the last-seen mtime.  If the file has changed, the config
-    is reloaded and strategy parameters are updated in-place (without
-    restarting the framework).  A full strategy-type change still requires a
-    restart and is logged as such.
+    On each call to :meth:`maybe_reload`, the file's modification time is compared
+    against the last-seen mtime.  If the file has changed, the config is reloaded and
+    strategy parameters are updated in-place (without restarting the framework).  A full
+    strategy-type change still requires a restart and is logged as such.
     """
 
     def __init__(
@@ -37,6 +36,7 @@ class ConfigReloader:
         self._logger = logger
         self._metrics = metrics
         self._config = config
+        self._meta_learner: Optional["MetaLearner"] = None
         self._config_mtime: Optional[float] = None
 
         if config_path:
@@ -49,12 +49,16 @@ class ConfigReloader:
         """Update the strategy reference (called when Polaris swaps strategies)."""
         self._strategy = strategy
 
+    def update_meta_learner(self, meta_learner: Optional["MetaLearner"]) -> None:
+        """Update the meta-learner reference (called when Polaris builds one)."""
+        self._meta_learner = meta_learner
+
     async def maybe_reload(self) -> Optional["PolarisConfig"]:
         """Check for config changes and apply strategy/resilience updates.
 
         Returns:
-            The newly loaded ``PolarisConfig`` if the file changed, or
-            ``None`` if no reload was performed.
+            The newly loaded ``PolarisConfig`` if the file changed, or ``None`` if no
+                reload was performed.
         """
         if not self._config_path:
             return None
@@ -73,6 +77,7 @@ class ConfigReloader:
 
             new_conf = load_config(self._config_path)
             await self._apply_strategy_hot_reload(new_conf.strategy)
+            await self._apply_meta_learner_hot_reload(getattr(new_conf, "meta_learner", None))
             self._config = new_conf
             self._config_mtime = mtime
             self._emit("polaris.config.hot_reload.success")
@@ -94,6 +99,8 @@ class ConfigReloader:
             "llm_reasoning": "LLMReasoningStrategy",
             "hybrid": "HybridStrategy",
             "agentic_llm": "AgenticLLMStrategy",
+            "thread_agentic": "ThreadAgenticStrategy",
+            "multi_agent": "MultiAgentStrategy",
         }
 
         current_class = type(self._strategy).__name__
@@ -104,23 +111,73 @@ class ConfigReloader:
             self._logger.info("Strategy type changed in config; restart required to apply.")
             return
 
-        # Build a type-specific configuration payload and delegate to the strategy
-        config_payload: Dict[str, Any]
-        if desired_type == "threshold":
-            config_payload = strategy_config.threshold or {}
-        elif desired_type == "llm_reasoning":
-            config_payload = strategy_config.llm_reasoning or {}
-        elif desired_type == "hybrid":
-            config_payload = strategy_config.hybrid or {}
-        elif desired_type == "agentic_llm":
-            config_payload = strategy_config.agentic_llm or {}
-        else:
-            config_payload = {}
+        # StrategyConfig uses canonical params payload for all strategy types.
+        raw_params = getattr(strategy_config, "params", {})
+        config_payload = dict(raw_params) if isinstance(raw_params, dict) else {}
 
         try:
             await self._strategy.apply_config_update(config_payload)
         except Exception as e:
             self._logger.warning(f"Failed to apply strategy config update: {e}")
+
+    async def _apply_meta_learner_hot_reload(self, meta_config: Any) -> None:
+        """Apply meta-learner config updates (e.g., auto_apply, prompts, temperature).
+
+        Today we only support in-place updates for LLMMetaLearner instances. Changing
+        meta-learner type still requires a restart.
+        """
+        meta_learner = getattr(self, "_meta_learner", None)
+        if not meta_learner or not meta_config:
+            return
+
+        # meta_config is expected to be a dict-like structure from the YAML.
+        if not isinstance(meta_config, dict):
+            return
+
+        meta_type = meta_config.get("type")
+
+        # Only support LLM meta-learner in-place updates for now.
+        if type(meta_learner).__name__ != "LLMMetaLearner":
+            if meta_type == "llm":
+                self._logger.info(
+                    "Meta-learner config changed but current instance isn't LLM; restart required to apply."
+                )
+            return
+
+        if meta_type and meta_type != "llm":
+            self._logger.info("Meta-learner type changed in config; restart required to apply.")
+            return
+
+        llm_cfg = meta_config.get("llm") or {}
+        if not isinstance(llm_cfg, dict):
+            llm_cfg = {}
+
+        # Update supported fields in-place.
+        try:
+            if "auto_apply" in llm_cfg:
+                meta_learner.auto_apply = bool(llm_cfg.get("auto_apply"))
+
+            temperature_val = llm_cfg.get("temperature")
+            if temperature_val is not None:
+                meta_learner.temperature = float(temperature_val)
+
+            if "analysis_system_prompt" in llm_cfg:
+                meta_learner.analysis_system_prompt = llm_cfg.get("analysis_system_prompt")
+            if "optimization_system_prompt" in llm_cfg:
+                meta_learner.optimization_system_prompt = llm_cfg.get("optimization_system_prompt")
+            if "per_system_prompts" in llm_cfg and isinstance(
+                llm_cfg.get("per_system_prompts"), dict
+            ):
+                meta_learner._per_system_prompts = llm_cfg.get("per_system_prompts")
+
+            self._logger.info(
+                "Applied meta-learner hot-reload updates",
+                meta_type="llm",
+                auto_apply=getattr(meta_learner, "auto_apply", None),
+                temperature=getattr(meta_learner, "temperature", None),
+            )
+        except Exception as e:
+            self._logger.warning(f"Failed to apply meta-learner config update: {e}")
 
     def _emit(self, metric: str) -> None:
         """Increment a metric if metrics collection is enabled."""

@@ -35,9 +35,7 @@ class ComponentBuilder:
     state is maintained — all methods are ``@staticmethod``.
     """
 
-    # ------------------------------------------------------------------
     # Observability
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_logger(
@@ -110,10 +108,7 @@ class ComponentBuilder:
 
             return SimpleMetricsCollector()
 
-        # Fallback for unknown collector types
-        from polaris.infrastructure.observability.metrics import SimpleMetricsCollector
-
-        return SimpleMetricsCollector()
+        raise ValueError(f"Unknown metrics collector type '{collector_type}'")
 
     @staticmethod
     def build_event_bus(
@@ -150,17 +145,13 @@ class ComponentBuilder:
             )
 
         if bus_type not in ("memory", "redis"):
-            logger.warning(f"Unknown event bus type '{bus_type}', falling back to in-memory bus")
-        elif bus_type == "redis" and RedisEventBus is None:
-            logger.warning(
-                "RedisEventBus is not available (is redis installed?), falling back to in-memory bus"
-            )
+            raise ValueError(f"Unknown event bus type '{bus_type}'")
+        if bus_type == "redis" and RedisEventBus is None:
+            raise ImportError("RedisEventBus requested but redis dependency is not available")
 
         return InMemoryEventBus(metrics=event_bus_metrics, logger=logger)
 
-    # ------------------------------------------------------------------
     # Core domain components
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_knowledge_store(
@@ -191,17 +182,13 @@ class ComponentBuilder:
                     ks_cfg.get("max_states_per_system", DEFAULT_MAX_STATES_PER_SYSTEM),
                 )
             )
-        else:
-            if ks_type != "memory":
-                logger.warning(
-                    f"Unknown knowledge store type '{ks_type}', using in-memory knowledge store"
-                )
-            memory_cfg = ks_cfg.get("memory", {}) if isinstance(ks_cfg.get("memory"), dict) else {}
-            max_states = int(
-                memory_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 1000))
-            )
 
-        if db_path:
+            if not db_path:
+                raise ValueError(
+                    "knowledge_store type 'sqlite' requires 'knowledge_store.sqlite.db_path' "
+                    "(or legacy 'knowledge_store.db_path')"
+                )
+
             from polaris.knowledge.sqlite_store import SQLiteKnowledgeStore
 
             return SQLiteKnowledgeStore(
@@ -210,6 +197,13 @@ class ComponentBuilder:
                 logger=logger,
                 metrics=ks_metrics,
             )
+        elif ks_type == "memory":
+            memory_cfg = ks_cfg.get("memory", {}) if isinstance(ks_cfg.get("memory"), dict) else {}
+            max_states = int(
+                memory_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 1000))
+            )
+        else:
+            raise ValueError(f"Unknown knowledge store type '{ks_type}'")
 
         from polaris.knowledge import InMemoryKnowledgeStore
 
@@ -238,9 +232,7 @@ class ComponentBuilder:
 
         wm_type = str(wm_cfg.get("type", "statistical")).lower()
         if wm_type != "statistical":
-            logger.warning(
-                f"Unknown world model type '{wm_type}', falling back to statistical world model"
-            )
+            raise ValueError(f"Unknown world model type '{wm_type}'")
 
         stat_cfg = (
             wm_cfg.get("statistical", {}) if isinstance(wm_cfg.get("statistical"), dict) else {}
@@ -248,10 +240,10 @@ class ComponentBuilder:
         use_kalman = bool(stat_cfg.get("use_kalman", False))
         try:
             window_size = int(stat_cfg.get("window_size", 100))
-        except Exception:
-            window_size = 100
+        except Exception as exc:
+            raise ValueError("world_model.statistical.window_size must be an integer") from exc
         if window_size <= 0:
-            window_size = 100
+            raise ValueError("world_model.statistical.window_size must be > 0")
 
         return StatisticalWorldModel(
             knowledge_store,
@@ -271,9 +263,8 @@ class ComponentBuilder:
         registry: "ConnectorRegistry",
         config: "PolarisConfig",
     ) -> "AdaptationStrategy":
-        """Create a strategy from configuration, falling back to ThresholdReactiveStrategy."""
+        """Create a strategy from configuration."""
         from polaris.core.factories import get_strategy_factory
-        from polaris.strategies import ThresholdReactiveStrategy
 
         strategy_metrics = (
             metrics if ComponentBuilder.should_collect(config, "strategy", metrics) else None
@@ -281,27 +272,16 @@ class ComponentBuilder:
 
         factory = get_strategy_factory(strategy_config.type)
         if not factory:
-            logger.warning(
-                f"No strategy factory registered for type '{strategy_config.type}', "
-                "using threshold strategy instead"
-            )
-            return ThresholdReactiveStrategy(logger=logger, metrics=strategy_metrics)
+            raise ValueError(f"No strategy factory registered for type '{strategy_config.type}'")
 
-        try:
-            return factory(
-                strategy_config,
-                logger,
-                strategy_metrics,
-                knowledge_store,
-                world_model,
-                registry,
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to initialize strategy of type '{strategy_config.type}' "
-                f"from config: {e}. Falling back to threshold."
-            )
-            return ThresholdReactiveStrategy(logger=logger, metrics=strategy_metrics)
+        return factory(
+            strategy_config,
+            logger,
+            strategy_metrics,
+            knowledge_store,
+            world_model,
+            registry,
+        )
 
     @staticmethod
     def build_meta_learner(
@@ -364,7 +344,10 @@ class ComponentBuilder:
                 llm_cfg = meta_config.get("llm", {}) or {}
                 provider = llm_cfg.get("provider", "google")
                 resilience_cfg = llm_cfg.get("resilience")
-                llm_client = create_llm_client(provider, resilience=resilience_cfg)
+                llm_kwargs = dict(llm_cfg)
+                llm_kwargs.pop("provider", None)
+                llm_kwargs.pop("resilience", None)
+                llm_client = create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
                 return LLMMetaLearner(
                     llm_client=llm_client,
@@ -424,9 +407,7 @@ class ComponentBuilder:
 
         return connectors
 
-    # ------------------------------------------------------------------
     # Metrics export configuration
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_metrics_export_config(
@@ -465,9 +446,7 @@ class ComponentBuilder:
 
         return {"enabled": False}
 
-    # ------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def should_collect(
@@ -548,16 +527,10 @@ class ComponentBuilder:
 
         try:
             interval = float(interval)
-        except Exception:
-            logger.warning(
-                f"Invalid monitoring interval {interval}, falling back to {DEFAULT_MONITORING_INTERVAL} seconds"
-            )
-            interval = DEFAULT_MONITORING_INTERVAL
+        except Exception as exc:
+            raise ValueError("monitoring.interval_seconds must be a number") from exc
 
         if interval <= 0:
-            logger.warning(
-                f"Non-positive monitoring interval {interval}, falling back to {DEFAULT_MONITORING_INTERVAL} seconds"
-            )
-            interval = DEFAULT_MONITORING_INTERVAL
+            raise ValueError("monitoring.interval_seconds must be > 0")
 
         return interval

@@ -1,5 +1,4 @@
-"""
-Example: Configuration validation and error handling.
+"""Example: Configuration validation and error handling.
 
 Shows how configuration validation works and handles various error scenarios.
 """
@@ -64,7 +63,7 @@ async def test_invalid_configs():
         config_data = {
             "strategy": {
                 "type": "threshold",
-                "threshold": {
+                "params": {
                     "thresholds": {"cpu_usage": {"high": 20.0, "low": 80.0}}
                 },  # High < Low (invalid)
             }
@@ -102,16 +101,14 @@ async def test_environment_variables():
     import tempfile
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        f.write(
-            """
+        f.write("""
     systems:
     - id: "test"
         connector_type: "swim"
         connection:
         host: "${MISSING_VAR}"
         port: 4242
-    """
-        )
+    """)
         temp_config = f.name
 
     try:

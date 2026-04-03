@@ -1,5 +1,4 @@
-"""
-Core domain models for Polaris.
+"""Core domain models for Polaris.
 
 Immutable dataclasses representing system state, actions, and results.
 """
