@@ -82,7 +82,8 @@ DEFAULT_SERVICE_TIMEOUT = 10.0  # task services can be slower than mode changes
 
 # Task names as defined in suave_msgs/Task
 TASK_SEARCH_PIPELINE = "search_pipeline"
-TASK_FOLLOW_PIPELINE = "follow_pipeline"
+TASK_INSPECT_PIPELINE = "inspect_pipeline"
+TASK_FOLLOW_PIPELINE_LEGACY = "follow_pipeline"
 
 # Valid modes per function node (Table V, SEAMS 2023 paper)
 _VALID_MODES: Dict[str, List[str]] = {
@@ -352,6 +353,12 @@ class SUAVEConnector(Connector):
             unit="bool",
             timestamp=now,
         )
+        metrics["mission_active"] = MetricValue(
+            name="mission_active",
+            value=1 if self._mission_running else 0,
+            unit="bool",
+            timestamp=now,
+        )
 
         if not accumulated:
             if self._logger:
@@ -582,9 +589,21 @@ class SUAVEConnector(Connector):
             ),
             AdaptationAction(
                 action_id="",
+                action_type=_ACTION_START_MISSION,
+                target_system="suave",
+                parameters={"task": TASK_INSPECT_PIPELINE},
+            ),
+            AdaptationAction(
+                action_id="",
                 action_type=_ACTION_STOP_MISSION,
                 target_system="suave",
                 parameters={"task": TASK_SEARCH_PIPELINE},
+            ),
+            AdaptationAction(
+                action_id="",
+                action_type=_ACTION_STOP_MISSION,
+                target_system="suave",
+                parameters={"task": TASK_INSPECT_PIPELINE},
             ),
         ]
         for node, modes in _VALID_MODES.items():
@@ -621,6 +640,8 @@ class SUAVEConnector(Connector):
         """
         params = action.parameters or {}
         task_name = params.get("task", TASK_SEARCH_PIPELINE)
+        if task_name == TASK_FOLLOW_PIPELINE_LEGACY:
+            task_name = TASK_INSPECT_PIPELINE
 
         svc = roslibpy.Service(
             self._client, "/task/request", "suave_msgs/Task"
@@ -663,6 +684,8 @@ class SUAVEConnector(Connector):
         """
         params = action.parameters or {}
         task_name = params.get("task", TASK_SEARCH_PIPELINE)
+        if task_name == TASK_FOLLOW_PIPELINE_LEGACY:
+            task_name = TASK_INSPECT_PIPELINE
 
         svc = roslibpy.Service(
             self._client, "/task/cancel", "suave_msgs/Task"

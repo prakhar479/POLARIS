@@ -724,6 +724,7 @@ def _register_default_strategy_factories() -> None:
         agent_conf = getattr(strategy_cfg, "params", {})
         steps_limit = int(agent_conf.get("steps_limit", 3))
         temperature = float(agent_conf.get("temperature", 0.1))
+        decision_cooldown_seconds = float(agent_conf.get("decision_cooldown_seconds", 60.0))
         allowed_tools = None
         tools_cfg = agent_conf.get("tools")
         if isinstance(tools_cfg, dict):
@@ -742,6 +743,7 @@ def _register_default_strategy_factories() -> None:
             world_model=world_model,
             steps_limit=steps_limit,
             temperature=temperature,
+            decision_cooldown_seconds=decision_cooldown_seconds,
             allowed_tools=allowed_tools,
             system_prompt=agent_conf.get("system_prompt"),
             per_system_prompts=agent_conf.get("per_system_prompts"),

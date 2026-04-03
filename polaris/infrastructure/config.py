@@ -14,6 +14,7 @@ from polaris.core.factories import (
     registered_connector_types,
     registered_strategy_types,
 )
+from polaris.infrastructure.constants import MAX_PORT, MIN_PORT
 
 _SUPPORTED_LLM_PROVIDERS = {"google", "openai", "openrouter", "groq", "ollama"}
 
@@ -55,6 +56,16 @@ class SystemConfig(BaseModel):
     connection: Dict[str, Any] = Field(default_factory=dict)
     monitoring: Dict[str, Any] = Field(default_factory=dict)
     action_policy: Optional[SystemActionPolicyConfig] = None
+
+    @staticmethod
+    def _validate_port(port: Any, connector_name: str) -> None:
+        """Validate port number for a connector."""
+        if not isinstance(port, int):
+            raise ValueError(f"{connector_name} connection port must be an integer")
+        if not (MIN_PORT <= port <= MAX_PORT):
+            raise ValueError(
+                f"{connector_name} connection port must be between {MIN_PORT} and {MAX_PORT}"
+            )
 
     @model_validator(mode="after")
     def validate_system(self) -> "SystemConfig":
@@ -116,6 +127,11 @@ class StrategyConfig(BaseModel):
         elif self.type == "agentic_llm":
             self._validate_llm_params(self.params, label="agentic_llm")
             self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
+            self._validate_float_min(
+                "decision_cooldown_seconds",
+                self.params.get("decision_cooldown_seconds"),
+                minimum=0.0,
+            )
             self._validate_tools_block(self.params.get("tools"), label="agentic_llm.tools")
         elif self.type == "thread_agentic":
             self._validate_llm_params(self.params, label="thread_agentic")

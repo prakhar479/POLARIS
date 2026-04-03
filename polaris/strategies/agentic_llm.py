@@ -98,6 +98,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         world_model: WorldModel,
         steps_limit: int = 3,
         temperature: float = 0.1,
+        decision_cooldown_seconds: float = 60.0,
         allowed_tools: Optional[List[str]] = None,
         system_prompt: Optional[str] = None,
         per_system_prompts: Optional[Dict[str, str]] = None,
@@ -112,6 +113,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
             world_model: World model for predicting action outcomes
             steps_limit: Maximum number of reasoning steps (default: 3)
             temperature: LLM temperature for response randomness (default: 0.1)
+            decision_cooldown_seconds: Minimum seconds between consecutive
+                adaptation decisions (default: 60.0)
             allowed_tools: List of permitted tools for the LLM
             system_prompt: Optional custom system prompt template
             per_system_prompts: Optional per-system prompt overrides keyed by system_id
@@ -123,6 +126,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self.world_model = world_model
         self.steps_limit = steps_limit
         self.temperature = temperature
+        self.decision_cooldown_seconds = max(0.0, float(decision_cooldown_seconds))
         self.allowed_tools = allowed_tools or list(DEFAULT_ALLOWED_TOOLS)
         self._system_prompt_template = system_prompt
         self._per_system_prompts = per_system_prompts or {}
@@ -142,6 +146,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
 
         self._adaptation_count = 0
         self._success_count = 0
+        self._last_decision_time: Optional[datetime] = None
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
@@ -160,6 +165,22 @@ class AgenticLLMStrategy(AdaptationStrategy):
             Optional[AdaptationAction]: Proposed adaptation action if needed, None if no
                 adaptation is required
         """
+        now = datetime.now(timezone.utc)
+        if self.decision_cooldown_seconds > 0 and self._last_decision_time is not None:
+            elapsed = (now - self._last_decision_time).total_seconds()
+            if elapsed < self.decision_cooldown_seconds:
+                if self.logger:
+                    self.logger.debug(
+                        "Agentic decision cooldown active",
+                        system_id=state.system_id,
+                        remaining_seconds=round(self.decision_cooldown_seconds - elapsed, 1),
+                    )
+                self.metrics.increment(
+                    "polaris.strategy.agentic.decision_cooldown_skips",
+                    tags={"system_id": state.system_id},
+                )
+                return []
+
         if self.logger:
             self.logger.debug("Agentic assessment started", system_id=state.system_id)
         self.metrics.increment(
@@ -270,6 +291,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                                 "action_type": action.action_type,
                             },
                         )
+                    self._last_decision_time = datetime.now(timezone.utc)
                     return proposed_actions
 
                 tool = structured_response.tool
@@ -393,6 +415,14 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 description="",
                 kind="agent_steps_limit",
             ),
+            "decision_cooldown_seconds": ParameterSpec(
+                current_value=self.decision_cooldown_seconds,
+                type=float,
+                min_value=0.0,
+                max_value=3600.0,
+                description="",
+                kind="cooldown",
+            ),
         }
 
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
@@ -410,6 +440,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
             return True
         if parameter_path == "steps_limit":
             self.steps_limit = int(new_value)
+            return True
+        if parameter_path == "decision_cooldown_seconds":
+            self.decision_cooldown_seconds = max(0.0, float(new_value))
             return True
         return False
 
@@ -429,6 +462,10 @@ class AgenticLLMStrategy(AdaptationStrategy):
             await self.update_parameter("temperature", config["temperature"])
         if "steps_limit" in config:
             await self.update_parameter("steps_limit", config["steps_limit"])
+        if "decision_cooldown_seconds" in config:
+            await self.update_parameter(
+                "decision_cooldown_seconds", config["decision_cooldown_seconds"]
+            )
 
         if "system_prompt" in config:
             self._system_prompt_template = config["system_prompt"]
