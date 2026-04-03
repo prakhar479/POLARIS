@@ -100,7 +100,12 @@ def registered_strategy_types() -> List[str]:
 def _register_default_connector_factories() -> None:
     """Register factories for built-in connector types."""
     # Import here to avoid circular imports
-    from polaris.connectors import KubernetesConnector, SWIMConnector, WildfireConnector
+    from polaris.connectors import (
+        KubernetesConnector,
+        SUAVEConnector,
+        SWIMConnector,
+        WildfireConnector,
+    )
 
     def _swim_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
@@ -131,6 +136,25 @@ def _register_default_connector_factories() -> None:
 
     register_connector_factory("wildfire", _wildfire_factory)
 
+    def _suave_factory(
+        system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
+    ) -> "Connector":
+        host = system_cfg.connection.get("host", "localhost")
+        port = system_cfg.connection.get("port", 9090)
+        connect_timeout = system_cfg.connection.get("connect_timeout", 10.0)
+        service_timeout = system_cfg.connection.get("service_timeout", 5.0)
+
+        return SUAVEConnector(
+            host=host,
+            port=port,
+            connect_timeout=connect_timeout,
+            service_timeout=service_timeout,
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_connector_factory("suave", _suave_factory)
+
     def _kubernetes_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
     ) -> "Connector":
@@ -156,6 +180,7 @@ def _register_default_strategy_factories() -> None:
         HybridStrategy,
         LLMReasoningStrategy,
         MultiAgentStrategy,
+        SuaveThresholdStrategy,
         ThresholdReactiveStrategy,
     )
 
@@ -250,6 +275,68 @@ def _register_default_strategy_factories() -> None:
                     metrics=metrics,
                 )
                 sub_strategies.append((sub, priority))
+
+            elif s_type == "suave_threshold":
+                st_cfg = s.get("suave_threshold", {}) or {}
+
+                vis_metric_names = st_cfg.get("visibility_metric_names")
+                thr_metric_names = st_cfg.get("thruster_failure_metric_names")
+                perf_metric_names = st_cfg.get("performance_metric_names")
+
+                trigger_cfg = st_cfg.get("trigger", {}) if isinstance(st_cfg.get("trigger"), dict) else {}
+                mode_cfg = st_cfg.get("modes", {}) if isinstance(st_cfg.get("modes"), dict) else {}
+                vis_mode_cfg = (
+                    mode_cfg.get("visibility", {})
+                    if isinstance(mode_cfg.get("visibility"), dict)
+                    else {}
+                )
+                motion_mode_cfg = (
+                    mode_cfg.get("maintain_motion", {})
+                    if isinstance(mode_cfg.get("maintain_motion"), dict)
+                    else {}
+                )
+
+                sub_suave = SuaveThresholdStrategy(
+                    visibility_metric_names=vis_metric_names,
+                    thruster_failure_metric_names=thr_metric_names,
+                    performance_metric_names=perf_metric_names,
+                    trigger_visibility_below=float(
+                        trigger_cfg.get("visibility_below", 1.0)
+                    ),
+                    trigger_performance_at_or_above=float(
+                        trigger_cfg.get("performance_above_or_equal", 1.0)
+                    ),
+                    trigger_thruster_failure_at_or_above=float(
+                        trigger_cfg.get("thruster_failure_at_or_above", 0.5)
+                    ),
+                    visibility_medium_at_or_above=float(
+                        vis_mode_cfg.get("medium_at_or_above", 1.0)
+                    ),
+                    visibility_high_at_or_above=float(
+                        vis_mode_cfg.get("high_at_or_above", 2.0)
+                    ),
+                    search_path_function_node=str(
+                        mode_cfg.get("search_path_function_node", "f_generate_search_path")
+                    ),
+                    maintain_motion_function_node=str(
+                        mode_cfg.get("maintain_motion_function_node", "f_maintain_motion")
+                    ),
+                    spiral_low_mode=str(vis_mode_cfg.get("low_mode", "fd_spiral_low")),
+                    spiral_medium_mode=str(
+                        vis_mode_cfg.get("medium_mode", "fd_spiral_medium")
+                    ),
+                    spiral_high_mode=str(vis_mode_cfg.get("high_mode", "fd_spiral_high")),
+                    recover_thrusters_mode=str(
+                        motion_mode_cfg.get("failure_mode", "fd_recover_thrusters")
+                    ),
+                    all_thrusters_mode=str(
+                        motion_mode_cfg.get("healthy_mode", "fd_all_thrusters")
+                    ),
+                    cooldown_seconds=int(st_cfg.get("cooldown_seconds", 0)),
+                    logger=logger,
+                    metrics=metrics,
+                )
+                sub_strategies.append((sub_suave, priority))
 
             elif s_type == "llm_reasoning":
                 llm_cfg = s.get("llm_reasoning", {}) or {}

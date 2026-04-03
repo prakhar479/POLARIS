@@ -1,0 +1,160 @@
+################################################################################
+# Polaris Configuration for SUAVE (Self-Adaptive Underwater Vehicle Exemplar)
+################################################################################
+#
+# Architecture: task_bridge:=False
+#   Polaris owns the full mission lifecycle. No /task/request service exists.
+#   Polaris activates SUAVE's function nodes directly via change_mode.
+#
+# Startup order (inside Docker):
+#   1. sim_vehicle.py -L RATBeach -v ArduSub --model=JSON --console
+#   2. ros2 launch suave simulation.launch.py x:=-17.0 y:=2.0
+#   3. ros2 launch suave_missions mission.launch.py adaptation_manager:=polaris
+#
+# Then on host:
+#   python -m polaris.cli run --config config/suave.yaml
+################################################################################
+
+systems:
+  - id: "suave"
+    connector_type: "suave"
+    enabled: true
+    description: "SUAVE UUV exemplar via rosbridge"
+    connection:
+      host: "localhost"
+      port: 9090
+      connect_timeout: 10.0
+      service_timeout: 5.0
+
+monitoring:
+  collection_interval: 3
+  interval_seconds: 5
+
+strategy:
+  type: "agentic_llm"
+  agentic_llm:
+    provider: "google"
+    temperature: 0.1
+    steps_limit: 5
+    system_prompt: |
+      You are the adaptation controller for SUAVE (system_id: suave).
+      Objective: Maximize pipeline inspection coverage. Keep all three function nodes active
+      and adapt them to changing conditions (thruster failures, water visibility).
+
+      IMPORTANT OUTPUT CONTRACT (STRICT JSON ONLY, no markdown, no prose):
+      Return exactly ONE of these two forms on each step:
+      1) Tool call:
+      {"tool":"name","args":{...}}
+      2) Final decision:
+      {"final":{"needs_adaptation":true|false,"reasoning":"...","actions":[{"type":"...","parameters":{...}}]}}
+
+      Never output any other schema.
+      Never output "action_type"; use "type" inside final.actions.
+      If no adaptation is needed, return:
+      {"final":{"needs_adaptation":false,"reasoning":"...","actions":[]}}
+
+      Available tools (and valid args):
+      - get_recent_states: {"window_seconds": 1-3600, "limit": 1-200}
+      - summarize_metric_trends: {"metric": "name", "window_seconds": 1-3600}
+      - get_action_history: {"window_seconds": 1-2592000, "limit": 1-500}
+      - list_supported_actions: {"window_seconds": 1-31536000} (optional)
+
+      Tool policy:
+      - Do NOT call tools by default. Prefer direct final decision from current metrics.
+      - Call a tool only when data is missing/ambiguous or to avoid repeating an action.
+      - Use at most 1 tool call before finalizing (2 only if strictly necessary).
+      - Never call tools not in the allowed list.
+
+
+      You start the mission by issuing start_mission,
+      which activates all three function nodes directly. The mission runs until
+      you issue stop_mission or the time limit is reached.
+
+      Mission semantics:
+      - mission_active = 0: mission not started
+      - mission_active = 1: mission running
+
+      Valid action types and parameters:
+      - start_mission: {"type":"start_mission","parameters":{}}
+      - change_mode: {"type":"change_mode","parameters":{"function_node":"f_maintain_motion|f_generate_search_path|f_follow_pipeline","mode":"..."}}
+      - stop_mission (emergency only): {"type":"stop_mission","parameters":{}}
+
+      ## Function Nodes and Valid Modes
+      - f_maintain_motion:      fd_all_thrusters | fd_recover_thrusters | fd_unground
+      - f_generate_search_path: fd_spiral_low | fd_spiral_medium | fd_spiral_high | fd_unground
+      - f_follow_pipeline:      fd_follow_pipeline | fd_unground
+
+      ## Adaptation Rules
+      - mission_active = 0 → issue start_mission immediately, then wait one
+        cycle before retrying — do not issue start_mission again if already
+        issued last cycle and mission_active is still 0
+      - thruster_failure_detected = 1 → change f_maintain_motion to fd_recover_thrusters
+      - thruster recovered (error cleared) → change f_maintain_motion back to fd_all_thrusters
+      - water_visibility < 1.0  → fd_spiral_low
+      - water_visibility 1.0–2.0 → fd_spiral_medium
+      - water_visibility > 2.0  → fd_spiral_high
+      - Do not repeat an action already applied if condition is unchanged
+      - Never issue stop_mission unless explicitly required
+
+      When proposing actions, include only necessary changes and keep actions minimal.
+
+    tools:
+      enabled:
+        - get_recent_states
+        - summarize_metric_trends
+        - get_action_history
+        - list_supported_actions
+
+resilience:
+  rps: 0.2
+  burst: 4
+  max_retries: 3
+  base_backoff_ms: 200
+  max_backoff_ms: 3000
+
+world_model:
+  type: "statistical"
+  statistical:
+    window_size: 120
+    use_kalman: true
+
+knowledge_store:
+  type: "memory"
+  memory:
+    max_states_per_system: 1500
+
+meta_learner:
+  enabled: false
+
+observability:
+  logging:
+    type: "human"
+    level: "DEBUG"
+    console: true
+    file: true
+    file_path: "./logs/suave_polaris.log"
+    use_colors: true
+  metrics:
+    enabled: true
+    collector_type: "simple"
+    export:
+      enabled: true
+      formats:
+        - json
+        - csv
+      output_dir: "./metrics/suave"
+      auto_export_interval_minutes: 5
+      experiment_name: "suave_adaptation_run"
+      include_timestamp: true
+    simple:
+      histogram_max_values: 2000
+    components:
+      core_framework: true
+      monitoring_loop: true
+      event_bus: true
+      registry: true
+      strategy: true
+      connectors: true
+      world_model: true
+      knowledge_store: true
+      meta_learner: false

@@ -344,6 +344,15 @@ class AgenticLLMStrategy(AdaptationStrategy):
                                 "Agentic tool execution error", tool=tool, error=str(e)
                             )
                         tool_result = {"error": f"tool_error: {type(e).__name__}: {str(e)}"}
+
+                self._log_tool_response(
+                    system_id=state.system_id,
+                    step=step + 1,
+                    tool=tool,
+                    args=args,
+                    tool_result=tool_result,
+                )
+
                 tool_msg = json.dumps({"tool_result": {"tool": tool, "data": tool_result}})
                 messages.append(LLMMessage(role="user", content=tool_msg))
                 self.metrics.increment(
@@ -704,6 +713,42 @@ class AgenticLLMStrategy(AdaptationStrategy):
             s = s[:max_chars] + f"\n...<truncated {len(snippet) - max_chars} chars>"
 
         self.logger.debug("LLM extracted JSON", extracted_from=label, extracted_json=s)
+
+    def _log_tool_response(
+        self,
+        system_id: str,
+        step: int,
+        tool: Optional[str],
+        args: Dict[str, Any],
+        tool_result: Any,
+    ) -> None:
+        """Log tool responses in debug mode with truncation for safety."""
+        if not self.logger:
+            return
+
+        import os
+
+        try:
+            max_chars = int(os.getenv("POLARIS_LOG_TOOL_RESPONSE_MAX_CHARS", "2000"))
+        except Exception:
+            max_chars = 2000
+
+        try:
+            serialized = json.dumps(tool_result, default=str)
+        except Exception:
+            serialized = str(tool_result)
+
+        if len(serialized) > max_chars:
+            serialized = serialized[:max_chars] + f"...<truncated {len(serialized) - max_chars} chars>"
+
+        self.logger.debug(
+            "Agentic tool response",
+            system_id=system_id,
+            step=step,
+            tool=tool,
+            args=args,
+            tool_response=serialized,
+        )
 
     def _get_tool_descriptions(self) -> str:
         """Get descriptions of available tools for the system prompt."""

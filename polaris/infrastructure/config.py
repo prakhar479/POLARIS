@@ -54,6 +54,14 @@ class SystemConfig(BaseModel):
             if port is not None:
                 self._validate_port(port, "Wildfire")
 
+        if self.connector_type == "suave" and self.connection:
+            host = self.connection.get("host")
+            if host is not None and not isinstance(host, str):
+                raise ValueError("SUAVE host must be a string")
+            port = self.connection.get("port")
+            if port is not None:
+                self._validate_port(port, "SUAVE")
+
         return self
 
 
