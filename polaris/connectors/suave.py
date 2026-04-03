@@ -165,8 +165,7 @@ class SUAVEConnector(Connector):
         """Initialize SUAVEConnector with rosbridge parameters."""
         if roslibpy is None:
             raise ImportError(
-                "roslibpy is required for SUAVEConnector. "
-                "Install it with: pip install roslibpy"
+                "roslibpy is required for SUAVEConnector. " "Install it with: pip install roslibpy"
             )
         self.host = host
         self.port = port

@@ -353,8 +353,8 @@ def _register_default_strategy_factories() -> None:
         HybridStrategy,
         LLMReasoningStrategy,
         MultiAgentStrategy,
-        ThreadAgenticStrategy,
         SuaveThresholdStrategy,
+        ThreadAgenticStrategy,
         ThresholdReactiveStrategy,
     )
 
