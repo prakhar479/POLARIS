@@ -16,10 +16,12 @@ class SuaveThresholdStrategy(AdaptationStrategy):
 
     Behavior
     --------
-    - Only triggers under degraded conditions ("too horrible"):
-      - visibility below trigger threshold, or
-      - performance metric above trigger threshold, or
-      - thruster failure detected.
+        - Only triggers under degraded conditions ("too horrible"):
+            - visibility below trigger threshold, or
+            - thruster failure detected.
+        - This is the reactive baseline described in the paper: it reacts to
+            current visibility and thruster status, while the agentic strategy can
+            use higher-level reasoning and trends to act proactively.
     - When triggered, emits two ``change_mode`` actions:
       - R1: search-path mode from visibility bands
       - R2: maintain-motion mode from thruster failure state
@@ -63,6 +65,9 @@ class SuaveThresholdStrategy(AdaptationStrategy):
                 "thruster_failed",
             ]
         )
+        # Performance metrics are retained for observability and optional
+        # future extensions, but the paper's baseline reactive strategy uses
+        # visibility and thruster status as its actual triggers.
         self.performance_metric_names = list(
             performance_metric_names
             or [
@@ -127,22 +132,21 @@ class SuaveThresholdStrategy(AdaptationStrategy):
 
         visibility = self._extract_metric_float(state, self.visibility_metric_names)
         thruster_raw = self._extract_metric_float(state, self.thruster_failure_metric_names)
-        performance = self._extract_metric_float(state, self.performance_metric_names)
-
         thruster_failed = (
             thruster_raw is not None and thruster_raw >= self.trigger_thruster_failure_at_or_above
         )
         visibility_bad = visibility is not None and visibility < self.trigger_visibility_below
-        performance_bad = (
-            performance is not None and performance >= self.trigger_performance_at_or_above
-        )
 
-        if not (thruster_failed or visibility_bad or performance_bad):
+        if not (thruster_failed or visibility_bad):
             self.metrics.increment(
                 "polaris.strategy.suave_threshold.no_action_needed",
                 tags={"system_id": state.system_id},
             )
             return []
+
+        # Preserve performance as an informational metric only, so callers can
+        # inspect it in logs without it changing the paper's reactive baseline.
+        performance = self._extract_metric_float(state, self.performance_metric_names)
 
         visibility_mode = self._visibility_to_mode(visibility)
         motion_mode = self.recover_thrusters_mode if thruster_failed else self.all_thrusters_mode
@@ -186,7 +190,6 @@ class SuaveThresholdStrategy(AdaptationStrategy):
                 performance=performance,
                 thruster_failed=thruster_failed,
                 visibility_bad=visibility_bad,
-                performance_bad=performance_bad,
                 visibility_mode=visibility_mode,
                 motion_mode=motion_mode,
             )

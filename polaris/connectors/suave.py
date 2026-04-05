@@ -45,10 +45,10 @@ SUAVE ROS 2 interfaces used
 
 Docker launch
 -------------
-  ros2 launch suave_missions mission.launch.py \\
-      adaptation_manager:=polaris mission_type:=time_constrained_mission
+    ros2 launch suave_missions mission.launch.py \\
+            adaptation_manager:=polaris mission_type:=time_constrained_mission
 
-suave_polaris.launch.py sets task_bridge:=False and starts rosbridge on 9090.
+suave_polaris.launch.py sets task_bridge:=True and starts rosbridge on 9090.
 """
 
 import asyncio
@@ -165,8 +165,7 @@ class SUAVEConnector(Connector):
         """Initialize SUAVEConnector with rosbridge parameters."""
         if roslibpy is None:
             raise ImportError(
-                "roslibpy is required for SUAVEConnector. "
-                "Install it with: pip install roslibpy"
+                "roslibpy is required for SUAVEConnector. " "Install it with: pip install roslibpy"
             )
         self.host = host
         self.port = port
