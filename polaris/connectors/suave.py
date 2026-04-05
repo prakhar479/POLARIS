@@ -24,11 +24,18 @@ Key corrections vs. previous version
    - change_mode is only called for ADAPTATION, not to start the mission.
    - To trigger thruster recovery: change_mode(f_maintain_motion, fd_recover_thrusters)
 
-5. Telemetry accumulates /diagnostics for up to 5 s to collect SUAVE monitor
-   data (water_visibility, thruster_monitor), which publish at lower frequency
-   than mavros. Only SUAVE monitor entries are parsed; mavros noise is ignored.
+5. Telemetry uses PERSISTENT background subscriptions to /diagnostics,
+   /pipeline/detected — no blocking wait per poll cycle. The cached values
+   are always fresh (updated by background threads) and collected instantly.
+   This ensures the MAPE-K loop never stalls and metrics are never stale.
 
-6. f_follow_pipeline stuck in 'activating': this happens when change_mode
+6. Actual SUAVE diagnostic names (confirmed from source):
+   - water_visibility_observer: "water_visibility_observer: Water visibility measurement"
+     key: "water_visibility"
+   - thruster_monitor: "thruster_monitor: Thruster status"
+     key: "c_thruster_N" with values "FALSE"/"ERROR" (failure) or "RECOVERED"/"OK" (recovery)
+
+7. f_follow_pipeline stuck in 'activating': this happens when change_mode
    activates it BEFORE the pipeline is detected. Coordinate Mission handles
    this transition. Polaris should only request follow_pipeline task AFTER
    pipeline_detected == 1, or let Coordinate Mission do it automatically.
@@ -38,17 +45,15 @@ SUAVE ROS 2 interfaces used
   /task/request          (suave_msgs/srv/Task)             service  — start a task
   /task/cancel           (suave_msgs/srv/Task)             service  — cancel a task
   /pipeline/detected     (std_msgs/Bool)                   subscribe
-  /diagnostics           (diagnostic_msgs/DiagnosticArray) subscribe
+  /diagnostics           (diagnostic_msgs/DiagnosticArray) subscribe (persistent)
   /f_maintain_motion/change_mode      (system_modes_msgs/ChangeMode) service
   /f_generate_search_path/change_mode (system_modes_msgs/ChangeMode) service
   /f_follow_pipeline/change_mode      (system_modes_msgs/ChangeMode) service
 
 Docker launch
 -------------
-    ros2 launch suave_missions mission.launch.py \\
+    ros2 launch suave_missions mission.launch.py \
             adaptation_manager:=polaris mission_type:=time_constrained_mission
-
-suave_polaris.launch.py sets task_bridge:=True and starts rosbridge on 9090.
 """
 
 import asyncio
@@ -56,7 +61,7 @@ import math
 import threading
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 try:
     import roslibpy
@@ -115,12 +120,42 @@ _ACTION_START_MISSION = "start_mission"
 _ACTION_STOP_MISSION = "stop_mission"
 _ACTION_CHANGE_MODE = "change_mode"
 
-# Substrings that identify SUAVE monitor diagnostic entries (not mavros)
+# ---------------------------------------------------------------------------
+# Exact diagnostic names published by SUAVE monitor nodes (confirmed in source)
+# ---------------------------------------------------------------------------
+# water_visibility_observer.py publishes:
+#   status_msg.name = "water_visibility_observer: Water visibility measurement"
+#   key_value.key   = "water_visibility"
+#
+# thruster_monitor.py publishes:
+#   status_msg.name = 'thruster_monitor: Thruster status'
+#   key_value.key   = 'c_thruster_N'   (N = 1..6)
+#   value           = 'FALSE'/'ERROR'  on failure  → level=2 (ERROR)
+#   value           = 'RECOVERED'/'OK' on recovery → level=0 (OK)
+#
+# After the safe_name transform (strip, replace ' ' with '_', lower):
+#   "water_visibility_observer: Water visibility measurement"
+#     → "water_visibility_observer:_water_visibility_measurement"
+#   "thruster_monitor: Thruster status"
+#     → "thruster_monitor:_thruster_status"
+#
+_DIAG_NAME_WATER_VIS = "water_visibility_observer: Water visibility measurement"
+_DIAG_NAME_THRUSTER = "thruster_monitor: Thruster status"
+
+# Substrings that identify SUAVE monitor entries we care about (case-insensitive in name)
 _SUAVE_MONITOR_SUBSTRINGS = (
-    "water_visibility",
+    "water_visibility_observer",
     "thruster_monitor",
-    "thruster monitor",
 )
+
+# Failure string values from thruster_monitor.py
+_THRUSTER_FAILURE_VALUES = {"false", "error", "failure", "0"}
+_THRUSTER_OK_VALUES = {"recovered", "ok", "true", "1"}
+
+
+def _safe_name(raw: str) -> str:
+    """Normalise a diagnostic status name to a metric key prefix."""
+    return str(raw).strip().replace(" ", "_").lower()
 
 
 class SUAVEConnector(Connector):
@@ -128,7 +163,7 @@ class SUAVEConnector(Connector):
     Connector for SUAVE (Self-Adaptive Underwater Vehicle Exemplar).
 
     Mission lifecycle follows the SUAVE README exactly:
-      - Subscribe to /diagnostics for monitoring data
+      - Subscribe to /diagnostics (persistent) for monitoring data
       - Use /task/request and /task/cancel for mission start/stop
       - Use /f_*/change_mode services only for adaptation reconfiguration
 
@@ -176,17 +211,41 @@ class SUAVEConnector(Connector):
         self._client: Optional["_roslibpy.Ros"] = None
         self._connected = False
 
-        # Cached state updated by background subscriptions
+        # ---------------------------------------------------------------
+        # Persistent cached state — updated by background subscriptions.
+        # _diag_lock guards all _diag_* fields.
+        # ---------------------------------------------------------------
         self._pipeline_detected: bool = False
         self._mission_running: bool = False
+
+        self._diag_lock = threading.Lock()
+
+        # Latest parsed water-visibility reading (metres) and its ROS timestamp
+        self._water_visibility: Optional[float] = None
+        self._water_visibility_ts: Optional[float] = None  # monotonic seconds
+
+        # Per-thruster status: key = "c_thruster_N", value = True(ok)/False(failed)
+        self._thruster_status: Dict[str, bool] = {}
+        self._thruster_status_ts: Optional[float] = None  # monotonic seconds
+
+        # Diagnostic-level counters from latest SUAVE monitor messages
+        self._last_diag_error_count: int = 0
+        self._last_diag_warn_count: int = 0
+
+        # All parsed per-entry key-value metrics from the latest diagnostics burst
+        # key = "<safe_status_name>.<safe_key>", value = float
+        self._extra_metrics: Dict[str, Tuple[float, float]] = {}  # val, mono_ts
+
+        # Subscription handles (kept to allow unsubscribe on disconnect)
         self._pipeline_topic: Optional["_roslibpy.Topic"] = None
+        self._diag_topic: Optional["_roslibpy.Topic"] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def connect(self) -> bool:
-        """Connect to rosbridge and set up subscriptions."""
+        """Connect to rosbridge and set up persistent subscriptions."""
         try:
             self._client = roslibpy.Ros(host=self.host, port=self.port)
             t = threading.Thread(target=self._client.run, daemon=True)
@@ -200,9 +259,14 @@ class SUAVEConnector(Connector):
 
             self._connected = True
             self._subscribe_pipeline_detected()
+            self._subscribe_diagnostics()
 
             if self._logger:
-                self._logger.info("SUAVEConnector connected", host=self.host, port=self.port)
+                self._logger.info(
+                    "SUAVEConnector connected",
+                    host=self.host,
+                    port=self.port,
+                )
             if self._metrics:
                 self._metrics.increment("polaris.connector.suave.connected")
             return True
@@ -218,19 +282,25 @@ class SUAVEConnector(Connector):
     async def disconnect(self) -> bool:
         """Disconnect from rosbridge and clean up subscriptions."""
         try:
-            if self._pipeline_topic is not None:
-                try:
-                    self._pipeline_topic.unsubscribe()
-                except Exception:
-                    pass
-                self._pipeline_topic = None
+            for topic_attr in ("_pipeline_topic", "_diag_topic"):
+                topic = getattr(self, topic_attr, None)
+                if topic is not None:
+                    try:
+                        topic.unsubscribe()
+                    except Exception:
+                        pass
+                    setattr(self, topic_attr, None)
 
             if self._client is not None:
                 self._client.terminate()
                 self._client = None
             self._connected = False
             if self._logger:
-                self._logger.info("SUAVEConnector disconnected", host=self.host, port=self.port)
+                self._logger.info(
+                    "SUAVEConnector disconnected",
+                    host=self.host,
+                    port=self.port,
+                )
             if self._metrics:
                 self._metrics.increment("polaris.connector.suave.disconnected")
             return True
@@ -244,18 +314,15 @@ class SUAVEConnector(Connector):
         return "suave"
 
     # ------------------------------------------------------------------
-    # Background subscription
+    # Persistent background subscriptions
     # ------------------------------------------------------------------
 
     def _subscribe_pipeline_detected(self) -> None:
         """
-        Subscribe to /pipeline/detected (std_msgs/Bool).
+        Subscribe to /pipeline/detected (std_msgs/Bool) — persistent.
 
-        This is the T1→T2 signal. True means pipeline found; Coordinate
-        Mission will (or already has) switched to T2 automatically.
-        We cache this so telemetry can report it without an extra poll,
-        and so Polaris knows when it is safe to call change_mode on
-        f_follow_pipeline if it wants to intervene.
+        This is the T1→T2 transition signal.  True means the pipeline has been
+        found; Coordinate Mission will (or already has) switched to T2 automatically.
         """
         if self._client is None:
             return
@@ -274,28 +341,152 @@ class SUAVEConnector(Connector):
 
         self._pipeline_topic.subscribe(_on_pipeline)
 
+    def _subscribe_diagnostics(self) -> None:
+        """
+        Subscribe to /diagnostics (diagnostic_msgs/DiagnosticArray) — persistent.
+
+        Parses every incoming message from SUAVE monitor nodes and updates the
+        cached metric fields under _diag_lock.  This runs entirely in background
+        threads managed by roslibpy; collect_telemetry() just reads the cache.
+
+        SUAVE diagnostic messages:
+          water_visibility_observer publishes at qa_publishing_period (1.0 s by default,
+          starts once MAVROS enters GUIDED mode).
+          thruster_monitor publishes only on state-change events (failure/recovery).
+
+        The persistent subscription means telemetry is always fresh and collect_telemetry
+        never blocks.
+        """
+        if self._client is None:
+            return
+
+        self._diag_topic = roslibpy.Topic(
+            self._client, "/diagnostics", "diagnostic_msgs/DiagnosticArray"
+        )
+
+        def _on_diag(msg: dict) -> None:
+            now_mono = time.monotonic()
+            error_count = 0
+            warn_count = 0
+            extra: Dict[str, Tuple[float, float]] = {}
+            new_wv: Optional[float] = None
+            thruster_updates: Dict[str, bool] = {}
+
+            for status in msg.get("status", []):
+                name: str = status.get("name", "")
+
+                # Only parse SUAVE monitor entries; skip mavros noise.
+                if not any(sub in name.lower() for sub in _SUAVE_MONITOR_SUBSTRINGS):
+                    continue
+
+                # Level
+                raw_level = status.get("level", 0)
+                try:
+                    level = (
+                        int.from_bytes(raw_level, "little")
+                        if isinstance(raw_level, (bytes, bytearray))
+                        else int(raw_level)
+                    )
+                except (TypeError, ValueError):
+                    level = 0
+
+                if level == 2:
+                    error_count += 1
+                elif level == 1:
+                    warn_count += 1
+
+                safe_prefix = _safe_name(name)
+
+                for kv in status.get("values", []):
+                    key = str(kv.get("key", "")).strip()
+                    raw_val = kv.get("value", "")
+                    safe_key = key.replace(" ", "_").lower()
+                    metric_key = f"{safe_prefix}.{safe_key}"
+
+                    # ---- water_visibility ----
+                    if (
+                        "water_visibility_observer" in name.lower()
+                        and safe_key == "water_visibility"
+                    ):
+                        try:
+                            wv = float(raw_val)
+                            if math.isfinite(wv):
+                                new_wv = wv
+                                extra[metric_key] = (wv, now_mono)
+                        except (ValueError, TypeError):
+                            pass
+                        continue
+
+                    # ---- thruster status ----
+                    if "thruster_monitor" in name.lower() and key.startswith("c_thruster_"):
+                        val_str = str(raw_val).strip().lower()
+                        if val_str in _THRUSTER_FAILURE_VALUES:
+                            thruster_updates[key] = False  # failed
+                        elif val_str in _THRUSTER_OK_VALUES:
+                            thruster_updates[key] = True  # ok
+                        # Store as 0.0 (failed) or 1.0 (ok) for extra metrics
+                        fval = 0.0 if val_str in _THRUSTER_FAILURE_VALUES else 1.0
+                        extra[metric_key] = (fval, now_mono)
+                        continue
+
+                    # ---- generic numeric/string ----
+                    try:
+                        parsed = float(raw_val)
+                        if math.isfinite(parsed):
+                            extra[metric_key] = (parsed, now_mono)
+                    except (ValueError, TypeError):
+                        if isinstance(raw_val, str):
+                            fval = (
+                                0.0
+                                if raw_val.strip().lower() in ("failure", "error", "false", "0")
+                                else 1.0
+                            )
+                            extra[metric_key] = (fval, now_mono)
+
+            # Commit atomically
+            with self._diag_lock:
+                self._last_diag_error_count = error_count
+                self._last_diag_warn_count = warn_count
+                # Merge extra metrics; newer always wins
+                for k, v in extra.items():
+                    existing = self._extra_metrics.get(k)
+                    if existing is None or v[1] >= existing[1]:
+                        self._extra_metrics[k] = v
+                if new_wv is not None:
+                    self._water_visibility = new_wv
+                    self._water_visibility_ts = now_mono
+                if thruster_updates:
+                    self._thruster_status.update(thruster_updates)
+                    self._thruster_status_ts = now_mono
+
+        self._diag_topic.subscribe(_on_diag)
+
     # ------------------------------------------------------------------
-    # Telemetry
+    # Telemetry — reads from in-memory cache, no blocking wait
     # ------------------------------------------------------------------
 
     async def collect_telemetry(self) -> SystemState:
         """
-        Collect diagnostics from SUAVE monitor nodes.
+        Collect fresh telemetry from SUAVE using the in-memory subscription cache.
 
-        Accumulates /diagnostics for up to 5 s, keeping the latest entry
-        per named status.  Only SUAVE monitor entries (water_visibility,
-        thruster_monitor) are parsed; mavros entries are ignored.
+        Telemetry is read from cache data maintained by the persistent
+        /diagnostics subscription.
+
+        This method is non-blocking (O(1)); all data is updated in background
+        by _subscribe_diagnostics() and _subscribe_pipeline_detected().
 
         Metrics produced
         ----------------
-        pipeline_detected           1/0 — from /pipeline/detected subscription
-        mission_running             1/0 — tracked via task calls
-        water_visibility            alias (metres)
-        thruster_failure_detected   1 if any thruster reports failure
-        diagnostics.suave_count     SUAVE monitor entries seen
-        diagnostics.error_count     ERROR-level entries
-        diagnostics.warn_count      WARN-level entries
-        <node_name>.<key>           per-entry parsed values
+        pipeline_detected           1/0
+        mission_running             1/0
+        mission_active              1/0 (alias for mission_running)
+        water_visibility            metres (latest reading)
+        water_visibility_age_s      seconds since last reading (-1 if never)
+        thruster_failure_detected   1 if any thruster currently failed
+        thruster_N_ok               1/0 per thruster (N=1..6)
+        diagnostics.error_count     error-level entries in last diagnostics msg
+        diagnostics.warn_count      warn-level entries
+        <prefix>.<key>              all other parsed numeric values
         """
         if self._metrics:
             self._metrics.increment("polaris.connector.suave.telemetry_calls")
@@ -311,38 +502,22 @@ class SUAVEConnector(Connector):
                 metadata={"error": "Not connected"},
             )
 
-        start_time = time.monotonic()
-        loop = asyncio.get_event_loop()
+        start_mono = time.monotonic()
 
-        # Accumulate SUAVE-monitor entries by name for up to 5 s
-        accumulated: Dict[str, dict] = {}
-        stop_event = threading.Event()
-
-        topic = roslibpy.Topic(self._client, "/diagnostics", "diagnostic_msgs/DiagnosticArray")
-
-        def _on_diag(msg: dict) -> None:
-            for s in msg.get("status", []):
-                name = s.get("name", "")
-                if any(sub in name.lower() for sub in _SUAVE_MONITOR_SUBSTRINGS):
-                    accumulated[name] = s
-            # Stop early once we have both monitor nodes
-            has_vis = any("water_visibility" in n.lower() for n in accumulated)
-            has_thr = any("thruster" in n.lower() for n in accumulated)
-            if has_vis and has_thr:
-                stop_event.set()
-
-        topic.subscribe(_on_diag)
-
-        def _wait() -> None:
-            stop_event.wait(timeout=5.0)
-            topic.unsubscribe()
-
-        await loop.run_in_executor(None, _wait)
+        # Snapshot cache atomically
+        with self._diag_lock:
+            water_visibility = self._water_visibility
+            water_visibility_ts = self._water_visibility_ts
+            thruster_status = dict(self._thruster_status)
+            error_count = self._last_diag_error_count
+            warn_count = self._last_diag_warn_count
+            extra_metrics = dict(self._extra_metrics)
 
         now = datetime.now(timezone.utc)
+        now_mono = time.monotonic()
         metrics: Dict[str, MetricValue] = {}
 
-        # Always include cached state regardless of diagnostics availability
+        # ---- Pipeline / mission state ----
         metrics["pipeline_detected"] = MetricValue(
             name="pipeline_detected",
             value=1 if self._pipeline_detected else 0,
@@ -362,77 +537,53 @@ class SUAVEConnector(Connector):
             timestamp=now,
         )
 
-        if not accumulated:
-            if self._logger:
-                self._logger.warning(
-                    "SUAVEConnector: no SUAVE monitor diagnostics received — "
-                    "mission may not be running yet (this is normal before "
-                    "start_mission is called)"
-                )
-            return SystemState(
-                system_id="suave",
+        # ---- Water visibility ----
+        if water_visibility is not None and math.isfinite(water_visibility):
+            metrics["water_visibility"] = MetricValue(
+                name="water_visibility",
+                value=water_visibility,
+                unit="m",
                 timestamp=now,
-                metrics=metrics,
-                health_status=(
-                    HealthStatus.HEALTHY if self._mission_running else HealthStatus.UNHEALTHY
-                ),
-                metadata={"warning": "No SUAVE monitor diagnostics received"},
+            )
+            age = now_mono - water_visibility_ts if water_visibility_ts else -1.0
+            metrics["water_visibility_age_s"] = MetricValue(
+                name="water_visibility_age_s",
+                value=round(age, 1),
+                unit="s",
+                timestamp=now,
+            )
+        else:
+            # Provide a sentinel so the strategy knows data is missing
+            metrics["water_visibility_age_s"] = MetricValue(
+                name="water_visibility_age_s",
+                value=-1.0,
+                unit="s",
+                timestamp=now,
             )
 
-        error_count = 0
-        warn_count = 0
+        # ---- Thruster health ----
+        # True = ok, False = failed
+        any_failed = False
+        for thruster_key, is_ok in thruster_status.items():
+            # thruster_key = "c_thruster_1", etc.
+            metric_name = thruster_key.replace("c_", "") + "_ok"
+            metrics[metric_name] = MetricValue(
+                name=metric_name,
+                value=1 if is_ok else 0,
+                unit="bool",
+                timestamp=now,
+            )
+            if not is_ok:
+                any_failed = True
 
-        for raw_name, status in accumulated.items():
-            raw_level = status.get("level", 0)
-            try:
-                level = (
-                    int.from_bytes(raw_level, "little")
-                    if isinstance(raw_level, (bytes, bytearray))
-                    else int(raw_level)
-                )
-            except (TypeError, ValueError):
-                level = 0
-
-            if level == 2:
-                error_count += 1
-            elif level == 1:
-                warn_count += 1
-
-            safe_name = str(raw_name).replace(" ", "_").lower()
-
-            for kv in status.get("values", []):
-                key = str(kv.get("key", "")).replace(" ", "_").lower()
-                raw_val = kv.get("value", "")
-                metric_name = f"{safe_name}.{key}"
-
-                try:
-                    parsed = float(raw_val)
-                    if not math.isfinite(parsed):
-                        continue
-                    value: float = int(parsed) if parsed == int(parsed) else parsed
-                    metrics[metric_name] = MetricValue(
-                        name=metric_name, value=value, unit="", timestamp=now
-                    )
-                except (ValueError, TypeError, OverflowError):
-                    if isinstance(raw_val, str):
-                        fval = (
-                            0.0
-                            if raw_val.strip().lower() in ("failure", "error", "false", "0")
-                            else 1.0
-                        )
-                        metrics[metric_name] = MetricValue(
-                            name=metric_name,
-                            value=fval,
-                            unit="status",
-                            timestamp=now,
-                        )
-
-        metrics["diagnostics.suave_count"] = MetricValue(
-            name="diagnostics.suave_count",
-            value=len(accumulated),
-            unit="count",
+        metrics["thruster_failure_detected"] = MetricValue(
+            name="thruster_failure_detected",
+            value=1 if any_failed else 0,
+            unit="bool",
             timestamp=now,
         )
+
+        # ---- Diagnostic-level counters ----
         metrics["diagnostics.error_count"] = MetricValue(
             name="diagnostics.error_count",
             value=error_count,
@@ -446,48 +597,45 @@ class SUAVEConnector(Connector):
             timestamp=now,
         )
 
-        # Water visibility alias
-        for candidate in (
-            "water_visibility_observer.water_visibility",
-            "water_visibility_observer_node.water_visibility",
-        ):
-            if candidate in metrics:
-                metrics["water_visibility"] = MetricValue(
-                    name="water_visibility",
-                    value=metrics[candidate].value,
-                    unit="m",
-                    timestamp=now,
-                )
-                break
-
-        # Thruster failure flag
-        thruster_failed = any(
-            v.value == 0.0
-            for k, v in metrics.items()
-            if "thruster_monitor" in k and "thruster_" in k
-        )
-        metrics["thruster_failure_detected"] = MetricValue(
-            name="thruster_failure_detected",
-            value=1 if thruster_failed else 0,
-            unit="bool",
-            timestamp=now,
-        )
+        # ---- All other parsed key-values from latest diagnostics ----
+        for k, (v, _ts) in extra_metrics.items():
+            if k not in metrics:
+                metrics[k] = MetricValue(name=k, value=v, unit="", timestamp=now)
 
         health = HealthStatus.UNHEALTHY if error_count > 0 else HealthStatus.HEALTHY
 
         if self._metrics:
             self._metrics.histogram(
                 "polaris.connector.suave.telemetry_duration_seconds",
-                time.monotonic() - start_time,
+                time.monotonic() - start_mono,
             )
 
         if self._logger:
             self._logger.debug(
                 "SUAVEConnector telemetry collected",
-                suave_monitor_count=len(accumulated),
+                water_visibility=water_visibility,
+                thruster_failure=any_failed,
                 error_count=error_count,
                 pipeline_detected=self._pipeline_detected,
                 mission_running=self._mission_running,
+            )
+
+        # Warn if no monitor data has ever arrived
+        if water_visibility is None and not thruster_status:
+            if self._logger:
+                self._logger.warning(
+                    "SUAVEConnector: no SUAVE monitor diagnostics received yet — "
+                    "water_visibility and thruster_status unavailable. "
+                    "This is normal before ArduSub enters GUIDED mode."
+                )
+            return SystemState(
+                system_id="suave",
+                timestamp=now,
+                metrics=metrics,
+                health_status=(
+                    HealthStatus.HEALTHY if self._mission_running else HealthStatus.UNHEALTHY
+                ),
+                metadata={"warning": "Awaiting SUAVE monitor data (pre-GUIDED)"},
             )
 
         return SystemState(
@@ -632,14 +780,17 @@ class SUAVEConnector(Connector):
         request tasks. Coordinate Mission then activates the correct lifecycle
         nodes:
           T1 search_pipeline  → f_generate_search_path + f_maintain_motion
-          T2 follow_pipeline  → f_follow_pipeline + f_maintain_motion
+          T2 inspect_pipeline → f_follow_pipeline + f_maintain_motion
 
         Polaris requests T1 first.  Coordinate Mission transitions to T2
         automatically when the pipeline is detected. Polaris should NOT call
         change_mode on f_follow_pipeline before pipeline_detected == 1.
+
+        _mission_running is set to True ONLY if SUAVE returns success=True.
         """
         params = action.parameters or {}
         task_name = params.get("task", TASK_SEARCH_PIPELINE)
+        # Normalise legacy task name
         if task_name == TASK_FOLLOW_PIPELINE_LEGACY:
             task_name = TASK_INSPECT_PIPELINE
 
@@ -656,19 +807,34 @@ class SUAVEConnector(Connector):
                 error_message=f"/task/request failed: {exc}",
             )
 
-        self._mission_running = True
-
-        if self._logger:
-            self._logger.info(
-                "SUAVEConnector: task requested",
-                task=task_name,
-                response=response,
-            )
+        # Only update internal flag when SUAVE confirms success
+        if response.get("success", False):
+            self._mission_running = True
+            exec_status = ExecutionStatus.SUCCESS
+            if self._logger:
+                self._logger.info(
+                    "SUAVEConnector: task requested successfully",
+                    task=task_name,
+                    response=response,
+                )
+        else:
+            exec_status = ExecutionStatus.FAILED
+            if self._logger:
+                self._logger.warning(
+                    "SUAVEConnector: /task/request returned success=False",
+                    task=task_name,
+                    response=response,
+                )
 
         return ExecutionResult(
             action_id=action.action_id,
-            status=ExecutionStatus.SUCCESS,
+            status=exec_status,
             result_data={"task": task_name, "response": response},
+            error_message=(
+                None
+                if exec_status == ExecutionStatus.SUCCESS
+                else f"/task/request success=False for task '{task_name}'"
+            ),
         )
 
     async def _execute_stop_mission(self, action: AdaptationAction) -> ExecutionResult:

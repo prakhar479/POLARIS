@@ -49,7 +49,7 @@ From repository root:
 ```bash
 docker build \
   -f examples/managed-system/suave/Dockerfile \
-  --build-arg BASE_IMAGE=vcnk4v/suave-polaris:snapshot-20260404 \
+  --build-arg BASE_IMAGE=vcnk4v/suave-polaris:snapshot-20260406 \
   -t vcnk4v/suave-polaris-managed:v1 \
   .
 ```
@@ -71,14 +71,14 @@ docker run -it --shm-size=512m \
 ### 1) Push your base snapshot image
 
 ```bash
-docker tag suave_polaris:snapshot-20260404 vcnk4v/suave-polaris:snapshot-20260404
-docker push vcnk4v/suave-polaris:snapshot-20260404
+docker tag suave_polaris:snapshot-20260406 vcnk4v/suave-polaris:snapshot-20260406
+docker push vcnk4v/suave-polaris:snapshot-20260406
 ```
 
 Optional rolling tag:
 
 ```bash
-docker tag suave_polaris:snapshot-20260404 vcnk4v/suave-polaris:latest
+docker tag suave_polaris:snapshot-20260406 vcnk4v/suave-polaris:latest
 docker push vcnk4v/suave-polaris:latest
 ```
 
@@ -87,7 +87,7 @@ docker push vcnk4v/suave-polaris:latest
 ```bash
 docker build \
   -f examples/managed-system/suave/Dockerfile \
-  --build-arg BASE_IMAGE=vcnk4v/suave-polaris:snapshot-20260404 \
+  --build-arg BASE_IMAGE=vcnk4v/suave-polaris:snapshot-20260406 \
   -t vcnk4v/suave-polaris-managed:v1 \
   -t vcnk4v/suave-polaris-managed:latest \
   .

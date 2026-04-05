@@ -2,18 +2,35 @@
 # Polaris Configuration for SUAVE (Self-Adaptive Underwater Vehicle Exemplar)
 ################################################################################
 #
-# Architecture: task_bridge:=True
+# Architecture: adaptation_manager:=polaris (task_bridge:=True)
 #   Polaris owns the full mission lifecycle through SUAVE task services.
 #   Mission start/stop use /task/request and /task/cancel.
 #   Polaris uses change_mode only for runtime adaptation.
 #
-# Startup order (inside Docker):
+# Startup order (inside Docker, via VNC at http://localhost:6901):
 #   1. sim_vehicle.py -L RATBeach -v ArduSub --model=JSON --console
 #   2. ros2 launch suave simulation.launch.py x:=-17.0 y:=2.0
-#   3. ros2 launch suave_missions mission.launch.py adaptation_manager:=polaris
+#   3. ros2 launch suave_missions mission.launch.py \
+#          adaptation_manager:=polaris \
+#          mission_type:=time_constrained_mission \
+#          result_filename:=polaris_run_1
 #
 # Then on host:
 #   python -m polaris.cli --config config/suave.yaml
+#
+# SUAVE mission parameters (from mission_config.yaml in container):
+#   time_limit:              300 s
+#   water_visibility period: 80 s   (sinusoidal, min=1.25 m, max=3.75 m)
+#   thruster failure:        thruster 1 fails at t=35 s from GUIDED mode
+#
+# Altitude thresholds from suave_modes.yaml:
+#   fd_spiral_high   → spiral_altitude: 3.0 m  (needs visibility >= 3.25)
+#   fd_spiral_medium → spiral_altitude: 2.0 m  (needs visibility >= 2.25)
+#   fd_spiral_low    → spiral_altitude: 1.0 m  (needs visibility >= 1.25)
+#
+# Performance target: beat Metacontrol baseline
+#   Metacontrol (20 runs): search_time_mean=106.95s, distance_inspected_mean=51.15m
+#   Target: search_time < 100s mean, distance_inspected > 55m mean
 ################################################################################
 
 systems:
@@ -24,115 +41,65 @@ systems:
     connection:
       host: "localhost"
       port: 9090
-      connect_timeout: 10.0
-      service_timeout: 5.0
+      connect_timeout: 15.0
+      # Service timeout: 10s for task services (they can be slow at sim startup)
+      service_timeout: 10.0
 
 monitoring:
-  collection_interval: 3
-  interval_seconds: 5
+  # collection_interval: how often per-system telemetry is collected (seconds).
+  # Water visibility is published at 1 Hz; thruster events are instant.
+  # 2 s gives fresh readings while keeping LLM call frequency sane.
+  collection_interval: 2
+  interval_seconds: 2
 
 strategy:
   type: "agentic_llm"
   params:
     provider: "google"
-    temperature: 0.1
-    steps_limit: 5
+    temperature: 0.05
+    decision_cooldown_seconds: 20
+    steps_limit: 3
     system_prompt: |
-      You are the adaptation controller for SUAVE (system_id: suave).
-      Your job is to choose the best adaptation action(s) for the current mission state,
-      not to follow a script. Optimize for mission progress, safe operation, and pipeline
-      inspection coverage while keeping actions minimal and avoiding unnecessary churn.
+      You are POLARIS, the adaptation controller for SUAVE (AUV pipeline inspection, system_id: suave).
+      Output STRICT JSON only — no markdown. Exactly one of:
+        Tool:  {"tool":"<name>","args":{...}}
+        Final: {"final":{"needs_adaptation":true|false,"reasoning":"<brief>","actions":[{"type":"<t>","parameters":{...}}]}}
 
-      Prefer decisions that are justified by the current state plus short-term trends.
-      Be proactive when evidence suggests a likely near-future degradation, but do not
-      preemptively change behavior without a plausible benefit.
+      METRICS IN current_state.metrics:
+        mission_running [0|1], pipeline_detected [0|1], water_visibility [m],
+        water_visibility_age_s, thruster_failure_detected [0|1], diagnostics.error_count
 
-      SUAVE context:
-      - Mission: search for the pipeline first, then follow/inspect it.
-      - Managed function nodes:
-        - f_maintain_motion
-        - f_generate_search_path
-        - f_follow_pipeline
-      - The connector exposes mission_running and mission_active as equivalent aliases.
-      - SUAVE telemetry includes pipeline_detected, mission_running, water_visibility,
-        thruster_failure_detected, diagnostics.error_count, and diagnostics.warn_count.
+      ALTITUDE → MODE (T1 only; always use highest supportable):
+        wv>=3.25: fd_spiral_high | wv>=2.25: fd_spiral_medium | else: fd_spiral_low
 
-      IMPORTANT OUTPUT CONTRACT (STRICT JSON ONLY, no markdown, no prose):
-      Return exactly ONE of these two forms on each step:
-      1) Tool call:
-      {"tool":"name","args":{...}}
-      2) Final decision:
-      {"final":{"needs_adaptation":true|false,"reasoning":"...","actions":[{"type":"...","parameters":{...}}]}}
+      DECIDE IN THIS ORDER — stop at first match:
+        1. mission_running=0  → {"type":"start_mission","parameters":{}}
+        2. thruster_failure_detected=1 → change_mode f_maintain_motion fd_recover_thrusters
+           (may combine with a visibility change in the same actions[] list)
+        3. thruster_failure_detected=0 AND fd_recover_thrusters was last sent
+           → call get_action_history to confirm, then fd_all_thrusters
+        4. pipeline_detected=0: compute optimal mode from wv.
+           If wv is falling toward next lower threshold, call summarize_metric_trends
+           (avg>current means falling). Switch proactively before threshold is crossed.
+           If already in optimal mode → skip.
+        5. No match → needs_adaptation=false
 
-      Never output any other schema.
-      Never output "action_type"; use "type" inside final.actions.
-      If no adaptation is needed, return:
-      {"final":{"needs_adaptation":false,"reasoning":"...","actions":[]}}
+      VALID change_mode:
+        f_maintain_motion: fd_all_thrusters | fd_recover_thrusters | fd_unground
+        f_generate_search_path: fd_spiral_low | fd_spiral_medium | fd_spiral_high | fd_unground
+        f_follow_pipeline: fd_follow_pipeline | fd_unground
 
-      Available tools and when to use them:
-      - get_recent_states: use when the latest state is ambiguous or you need a short
-        lookback window to confirm a trend.
-      - summarize_metric_trends: use when the direction of a metric matters more than the
-        latest point, especially for visibility or thruster health.
-      - get_action_history: use when you need to avoid repeating a recent action.
-      - list_supported_actions: use only when you need to verify exact action names.
-
-      Tool arguments:
-      - get_recent_states: {"window_seconds": 1-3600, "limit": 1-200}
-      - summarize_metric_trends: {"metric": "name", "window_seconds": 1-3600}
-      - get_action_history: {"window_seconds": 1-2592000, "limit": 1-500}
-      - list_supported_actions: {"window_seconds": 1-31536000}
-
-      Tool policy:
-      - Do NOT call tools by default.
-      - Call a tool only when it improves the decision.
-      - Use at most 1 tool call before finalizing, unless strictly necessary.
-      - Never call tools not in the allowed list.
-
-      Decision principles:
-      - If the mission is not running, start_mission immediately.
-      - If thruster_failure_detected is true, prioritize f_maintain_motion -> fd_recover_thrusters.
-      - If thrusters have recovered and normal motion is safe, return f_maintain_motion -> fd_all_thrusters.
-      - If water_visibility is low, choose the search-path mode that best matches it:
-        - < 1.0  -> fd_spiral_low
-        - 1.0–2.0 -> fd_spiral_medium
-        - > 2.0   -> fd_spiral_high
-      - If pipeline_detected is true and the mission is in the follow/inspect phase,
-        use f_follow_pipeline only when it helps progress or maintain alignment.
-      - Do not repeat an action that is already in effect unless conditions changed.
-      - Prefer the smallest set of actions that solves the problem.
-      - When multiple issues exist, handle the highest-risk issue first.
-
-      Action parameter values:
-      - start_mission: {"type":"start_mission","parameters":{}}
-      - stop_mission: {"type":"stop_mission","parameters":{}}
-      - change_mode: {"type":"change_mode","parameters":{"function_node":"f_maintain_motion|f_generate_search_path|f_follow_pipeline","mode":"..."}}
-      - f_maintain_motion modes: fd_all_thrusters | fd_recover_thrusters | fd_unground
-      - f_generate_search_path modes: fd_spiral_low | fd_spiral_medium | fd_spiral_high | fd_unground
-      - f_follow_pipeline modes: fd_follow_pipeline | fd_unground
-
-      Good reasoning should explain why the chosen action is the best next step, not merely
-      restate the rules.
-
-      You start the mission by issuing start_mission.
-      This requests SUAVE task T1 via /task/request, and Coordinate Mission
-      activates the required function nodes and transitions between mission stages.
-      The mission runs until stop_mission or time limit completion.
-
-      Mission semantics:
-      - mission_running (or alias mission_active) = 0: mission not started
-      - mission_running (or alias mission_active) = 1: mission running
-
-      Never issue stop_mission unless explicitly required for safety or mission abort.
-
-      When proposing actions, include only the necessary change set and keep it minimal.
+      TOOLS:
+        {"tool":"summarize_metric_trends","args":{"metric":"water_visibility","window_seconds":30}}
+        {"tool":"get_action_history",   "args":{"window_seconds":120,"limit":10}}
+        {"tool":"get_recent_states",    "args":{"window_seconds":20,"limit":5}}
+        Rules: max 1 tool/cycle. Tool name must be exact — NEVER append parameter names to tool name.
 
     tools:
       enabled:
         - get_recent_states
         - summarize_metric_trends
         - get_action_history
-        - list_supported_actions
 
     resilience:
       rps: 0.2
@@ -150,7 +117,7 @@ world_model:
 knowledge_store:
   type: "memory"
   memory:
-    max_states_per_system: 1500
+    max_states_per_system: 2000
 
 meta_learner:
   enabled: false
@@ -172,8 +139,8 @@ observability:
         - json
         - csv
       output_dir: "./metrics/suave"
-      auto_export_interval_minutes: 5
-      experiment_name: "suave_adaptation_run"
+      auto_export_interval_minutes: 2
+      experiment_name: "suave_polaris_run"
       include_timestamp: true
     simple:
       histogram_max_values: 2000

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=vcnk4v/suave-polaris:snapshot-20260404
+ARG BASE_IMAGE=vcnk4v/suave-polaris:snapshot-20260406
 FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-lc"]
