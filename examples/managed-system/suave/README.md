@@ -39,7 +39,7 @@ ros2 launch suave_missions mission.launch.py adaptation_manager:=polaris mission
 
 ```bash
 # Terminal 4 (Polaris)
-python -m polaris.cli --config config/suave.yaml --export-logs /opt/POLARIS/polaris.log
+python -m polaris.cli --config config/suave.yaml --export-logs polaris.log
 ```
 
 ## Option B: Build locally from this repository

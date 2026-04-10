@@ -21,7 +21,7 @@ dependencies = [
     "redis>=4.5.0",
     "kubernetes>=28.1.0",
     "openai>=1.0.0",
-    "google-generativeai>=0.3.0",
+    "google-generativeai>=0.7.2",
     "rich>=13.0.0",
     "groq>=0.4.1",
 ]
@@ -29,7 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 llm = [
     "openai>=1.0.0",
-    "google-generativeai>=0.3.0",
+    "google-generativeai>=0.7.2",
     "groq>=0.4.1",
 ]
 dashboard = [
@@ -37,7 +37,7 @@ dashboard = [
 ]
 all = [
     "openai>=1.0.0",
-    "google-generativeai>=0.3.0",
+    "google-generativeai>=0.7.2",
     "rich>=13.0.0",
     "groq>=0.4.1",
 ]

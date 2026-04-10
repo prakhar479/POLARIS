@@ -341,3 +341,79 @@ def test_maybe_log_llm_response(base_deps, monkeypatch):
     strategy._maybe_log_llm_response("sys", 2, long_content)
     # Falls back to 4000
     assert "extra_text" in base_deps["logger"].debug.call_args[1]["llm_raw"]
+
+
+@pytest.mark.asyncio
+async def test_native_tools_execute_polaris_tool_then_action(base_deps, state, context):
+    native_tools = [
+        {"type": "function", "function": {"name": "get_recent_states"}},
+        {"type": "function", "function": {"name": "scale_up"}},
+    ]
+    strategy = AgenticLLMStrategy(
+        **base_deps,
+        native_tools=native_tools,
+        allowed_tools=["get_recent_states"],
+        steps_limit=2,
+    )
+
+    base_deps["knowledge_store"].query_states = AsyncMock(return_value=[])
+    base_deps["llm_client"].generate_with_tools = AsyncMock(
+        side_effect=[
+            Mock(content="", tool_calls=[{"name": "get_recent_states", "arguments": {"limit": 5}}]),
+            Mock(content="", tool_calls=[{"name": "scale_up", "arguments": {"instances": 1}}]),
+        ]
+    )
+
+    actions = await strategy.assess(state, context)
+
+    assert len(actions) == 1
+    assert actions[0].action_type == "scale_up"
+    base_deps["knowledge_store"].query_states.assert_called_once()
+    assert base_deps["llm_client"].generate_with_tools.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_native_tools_reject_multiple_polaris_tools_per_step(base_deps, state, context):
+    native_tools = [
+        {"type": "function", "function": {"name": "get_recent_states"}},
+        {"type": "function", "function": {"name": "get_action_history"}},
+    ]
+    strategy = AgenticLLMStrategy(
+        **base_deps,
+        native_tools=native_tools,
+        allowed_tools=["get_recent_states", "get_action_history"],
+        steps_limit=2,
+    )
+
+    base_deps["llm_client"].generate_with_tools = AsyncMock(
+        return_value=Mock(
+            content="",
+            tool_calls=[
+                {"name": "get_recent_states", "arguments": {}},
+                {"name": "get_action_history", "arguments": {}},
+            ],
+        )
+    )
+
+    with pytest.raises(StrictContractViolation, match="at most one Polaris tool per step"):
+        await strategy.assess(state, context)
+
+
+@pytest.mark.asyncio
+async def test_native_tools_not_implemented_skips_cycle(base_deps, state, context):
+    native_tools = [{"type": "function", "function": {"name": "get_recent_states"}}]
+    strategy = AgenticLLMStrategy(
+        **base_deps,
+        native_tools=native_tools,
+        allowed_tools=["get_recent_states"],
+        steps_limit=2,
+    )
+
+    base_deps["llm_client"].generate_with_tools = AsyncMock(
+        side_effect=NotImplementedError("provider does not support native tools")
+    )
+
+    actions = await strategy.assess(state, context)
+
+    assert actions == []
+    base_deps["logger"].error.assert_called()

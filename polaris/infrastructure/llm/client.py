@@ -4,6 +4,7 @@ Provides abstraction over different LLM providers (Google Gemini, OpenAI, etc.)
 """
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -39,6 +40,16 @@ class LLMResponse:
     model: str
     tokens_used: Optional[int] = None
     finish_reason: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    """Normalized tool calls from native function-calling providers.
+
+    Each entry is a dict with keys:
+      - ``name`` (str): the function name called by the model
+      - ``arguments`` (dict): the parsed JSON arguments
+
+    None when the provider returned a plain text response, or when
+    native tool calling is not active / not supported.
+    """
 
 
 class LLMClient(ABC):
@@ -51,9 +62,44 @@ class LLMClient(ABC):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
-        """Generate a response from the LLM."""
+        """Generate a response from the LLM.
+
+        Args:
+            messages: Conversation messages.
+            temperature: Sampling temperature.
+            max_tokens: Maximum tokens in the response.
+            response_schema: Optional Pydantic schema for structured output.
+            tools: Optional list of OpenAI-format function definitions to enable
+                native tool calling. When provided, the model may respond with
+                ``tool_calls`` instead of plain text.
+            tool_choice: How the model selects tools. Common values: ``"auto"``
+                (default), ``"none"``, or a specific function name.
+        """
         pass
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate a response using provider-native tool calling.
+
+        This is an additive interface used by native tool-calling strategies.
+        Provider clients should implement this and normalize tool calls into
+        ``LLMResponse.tool_calls``.
+
+        Raises:
+            NotImplementedError: When a provider does not support native tools.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement native tool calling"
+        )
 
 
 class GoogleGeminiClient(LLMClient):
@@ -244,8 +290,21 @@ class GoogleGeminiClient(LLMClient):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
-        """Generate response using Google Gemini with error handling."""
+        """Generate response using Google Gemini with error handling.
+
+        When ``tools`` are provided the client translates the OpenAI-format
+        function definitions into Gemini ``FunctionDeclaration`` objects and
+        passes them as a ``genai_types.Tool`` to ``generate_content``.
+        Function-call parts in the response are normalised into the same
+        ``LLMResponse.tool_calls`` format used by the OpenAI / Groq clients,
+        so the strategy layer needs no provider-specific logic.
+
+        ``tool_choice`` is accepted for interface compatibility but is not
+        forwarded to Gemini (the model always selects tools automatically).
+        """
         try:
             # Convert messages to Gemini format
             prompt_parts = []
@@ -265,15 +324,66 @@ class GoogleGeminiClient(LLMClient):
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
             }
-            if response_schema:
+
+            # Build Gemini-native tools when OpenAI-format definitions are provided
+            gemini_tools: Optional[List[Any]] = None
+            if tools:
+                try:
+                    from google.generativeai import types as genai_types
+
+                    function_declarations = []
+                    for tool_def in tools:
+                        fn = tool_def.get("function", {})
+                        fn_name = fn.get("name", "")
+                        fn_desc = fn.get("description", "")
+                        fn_params = fn.get("parameters")  # JSON Schema dict or None
+                        # Gemini FunctionDeclaration accepts the raw JSON Schema dict
+                        # for `parameters`; clean it the same way we clean response schemas
+                        # so unsupported keys (title, default, …) don't cause SDK errors.
+                        cleaned_params: Optional[Dict[str, Any]] = None
+                        if isinstance(fn_params, dict):
+                            cleaned_params = cast(
+                                Dict[str, Any],
+                                GoogleGeminiClient._recursively_clean_schema(fn_params),
+                            )
+                        function_declarations.append(
+                            genai_types.FunctionDeclaration(
+                                name=fn_name,
+                                description=fn_desc,
+                                parameters=cleaned_params,
+                            )
+                        )
+                    if function_declarations:
+                        gemini_tools = [
+                            genai_types.Tool(function_declarations=function_declarations)
+                        ]
+                except Exception as tool_build_err:
+                    logging.getLogger("polaris.llm").warning(
+                        "GoogleGeminiClient: failed to build Gemini tools from native_tools "
+                        "definition — falling back to plain text response. Error: %s",
+                        tool_build_err,
+                    )
+                    gemini_tools = None
+
+            if response_schema and not gemini_tools:
+                # JSON structured output mode (only when not using tool calling)
                 gen_config["response_mime_type"] = "application/json"
                 gen_config["response_schema"] = self._clean_schema_for_gemini(response_schema)
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.client.generate_content(prompt, generation_config=gen_config),
-            )
+
+            if gemini_tools:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.generate_content(
+                        prompt, generation_config=gen_config, tools=gemini_tools
+                    ),
+                )
+            else:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.generate_content(prompt, generation_config=gen_config),
+                )
 
             if not response.candidates:
                 raise ValueError(
@@ -297,16 +407,46 @@ class GoogleGeminiClient(LLMClient):
                     "This is not a transient error; do not retry."
                 )
 
-            # Now it is safe to access .text
-            try:
-                text = response.text
-            except ValueError as ve:
-                raise ValueError(f"Gemini API response text unavailable: {ve}") from ve
+            # --- Tool-call response path ---
+            # When tools were provided, check for function_call parts first.
+            # Gemini returns function calls as parts in the candidate content,
+            # not as a separate field like OpenAI does.
+            tool_calls_out: Optional[List[Dict[str, Any]]] = None
+            if gemini_tools:
+                try:
+                    parts = candidate.content.parts if candidate.content else []
+                    raw_calls = []
+                    for part in parts:
+                        fc = getattr(part, "function_call", None)
+                        if fc and getattr(fc, "name", None):
+                            # fc.args is a MapComposite (dict-like), not a JSON string
+                            raw_calls.append({"name": fc.name, "arguments": dict(fc.args)})
+                    if raw_calls:
+                        tool_calls_out = raw_calls
+                except Exception as extract_err:
+                    logging.getLogger("polaris.llm").warning(
+                        "GoogleGeminiClient: error extracting function_call parts: %s",
+                        extract_err,
+                    )
 
-            if not text:
-                raise ValueError("Empty response from Gemini API")
+            # --- Text response path ---
+            # Used when no tool calls were found (or tools weren't requested).
+            text = ""
+            if not tool_calls_out:
+                try:
+                    text = response.text
+                except ValueError as ve:
+                    raise ValueError(f"Gemini API response text unavailable: {ve}") from ve
 
-            return LLMResponse(content=text, model=self.model, finish_reason=finish_reason)
+                if not text:
+                    raise ValueError("Empty response from Gemini API")
+
+            return LLMResponse(
+                content=text,
+                model=self.model,
+                finish_reason=finish_reason,
+                tool_calls=tool_calls_out,
+            )
 
         except ImportError:
             raise ImportError(
@@ -317,6 +457,23 @@ class GoogleGeminiClient(LLMClient):
             if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"Gemini API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using Gemini native function-calling format."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
 
 
 class OpenAIClient(LLMClient):
@@ -346,6 +503,8 @@ class OpenAIClient(LLMClient):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Generate response using OpenAI with error handling."""
         try:
@@ -365,16 +524,37 @@ class OpenAIClient(LLMClient):
                     "Pass a JSON-mode system prompt or use the structured-outputs API manually."
                 )
 
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+
             response = await self.client.chat.completions.create(**kwargs)
 
-            if not response.choices or not response.choices[0].message.content:
+            msg = response.choices[0].message if response.choices else None
+            if msg is None:
+                raise ValueError("Empty response from OpenAI API")
+
+            # Extract native tool calls if present
+            tool_calls_out: Optional[List[Dict[str, Any]]] = None
+            if msg.tool_calls:
+                tool_calls_out = []
+                for tc in msg.tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, AttributeError):
+                        arguments = {}
+                    tool_calls_out.append({"name": tc.function.name, "arguments": arguments})
+
+            content = msg.content or ""
+            if not content and not tool_calls_out:
                 raise ValueError("Empty response from OpenAI API")
 
             return LLMResponse(
-                content=response.choices[0].message.content,
+                content=content,
                 model=self.model,
                 tokens_used=response.usage.total_tokens if response.usage else None,
                 finish_reason=response.choices[0].finish_reason,
+                tool_calls=tool_calls_out,
             )
 
         except ImportError:
@@ -383,6 +563,23 @@ class OpenAIClient(LLMClient):
             if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"OpenAI API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using OpenAI native tool-calling format."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
 
 
 class OpenRouterClient(LLMClient):
@@ -445,6 +642,8 @@ class OpenRouterClient(LLMClient):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Generate response using OpenRouter (OpenAI-compatible) with error handling."""
         try:
@@ -463,16 +662,36 @@ class OpenRouterClient(LLMClient):
                     "implemented. The response will be unstructured text."
                 )
 
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+
             response = await self.client.chat.completions.create(**kwargs)
 
-            if not response.choices or not response.choices[0].message.content:
+            msg = response.choices[0].message if response.choices else None
+            if msg is None:
+                raise ValueError("Empty response from OpenRouter API")
+
+            tool_calls_out: Optional[List[Dict[str, Any]]] = None
+            if getattr(msg, "tool_calls", None):
+                tool_calls_out = []
+                for tc in msg.tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, AttributeError):
+                        arguments = {}
+                    tool_calls_out.append({"name": tc.function.name, "arguments": arguments})
+
+            content = msg.content or ""
+            if not content and not tool_calls_out:
                 raise ValueError("Empty response from OpenRouter API")
 
             return LLMResponse(
-                content=response.choices[0].message.content,
+                content=content,
                 model=self.model,
                 tokens_used=response.usage.total_tokens if response.usage else None,
                 finish_reason=response.choices[0].finish_reason,
+                tool_calls=tool_calls_out,
             )
         except ImportError:
             raise ImportError("openai package not installed. Install with: pip install openai")
@@ -480,6 +699,23 @@ class OpenRouterClient(LLMClient):
             if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"OpenRouter API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using OpenRouter native OpenAI-compatible tools."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
 
 
 class OllamaClient(LLMClient):
@@ -534,7 +770,9 @@ class OllamaClient(LLMClient):
                     base_url=self.base_url.rstrip("/") + "/v1",
                 )
             except ImportError:
-                raise ImportError("openai package not installed. Install with: pip install openai")
+                # Keep construction backward-compatible: allow client creation even
+                # when openai is missing, and fail lazily if openai_compat is used.
+                self._openai_client = None
 
     async def generate(
         self,
@@ -542,6 +780,8 @@ class OllamaClient(LLMClient):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Generate response using Ollama (OpenAI-compatible) with error handling."""
         try:
@@ -594,8 +834,8 @@ class OllamaClient(LLMClient):
             # Default: OpenAI-compatible endpoint
             if self._openai_client is None:
                 raise RuntimeError(
-                    "OllamaClient is configured for openai_compat but the OpenAI client "
-                    "could not be initialized."
+                    "OllamaClient is configured for openai_compat but OpenAI-compatible "
+                    "dependencies are not available. Install with: pip install openai"
                 )
 
             openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
@@ -607,6 +847,10 @@ class OllamaClient(LLMClient):
                 "max_tokens": max_tokens,
             }
 
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+
             if response_schema is not None:
                 logging.getLogger("polaris.llm").warning(
                     "OllamaClient.generate(openai_compat): response_schema was provided but is not yet "
@@ -615,14 +859,30 @@ class OllamaClient(LLMClient):
 
             response = await self._openai_client.chat.completions.create(**kwargs)
 
-            if not response.choices or not response.choices[0].message.content:
+            msg = response.choices[0].message if response.choices else None
+            if msg is None:
+                raise ValueError("Empty response from Ollama API")
+
+            tool_calls_out: Optional[List[Dict[str, Any]]] = None
+            if getattr(msg, "tool_calls", None):
+                tool_calls_out = []
+                for tc in msg.tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, AttributeError):
+                        arguments = {}
+                    tool_calls_out.append({"name": tc.function.name, "arguments": arguments})
+
+            content = msg.content or ""
+            if not content and not tool_calls_out:
                 raise ValueError("Empty response from Ollama API")
 
             return LLMResponse(
-                content=response.choices[0].message.content,
+                content=content,
                 model=self.model,
                 tokens_used=response.usage.total_tokens if response.usage else None,
                 finish_reason=response.choices[0].finish_reason,
+                tool_calls=tool_calls_out,
             )
 
         except ImportError:
@@ -631,6 +891,27 @@ class OllamaClient(LLMClient):
             if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"Ollama API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response with tools when Ollama runs in OpenAI-compatible mode."""
+        if self.generate_mode != "openai_compat":
+            raise NotImplementedError(
+                "Ollama native /api/generate mode does not support unified tool calling"
+            )
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
 
 
 class GroqClient(LLMClient):
@@ -664,35 +945,60 @@ class GroqClient(LLMClient):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Generate response using Groq with error handling."""
         try:
             groq_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
+            call_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": cast(Any, groq_messages),
+                "temperature": temperature,
+                "max_completion_tokens": max_tokens,
+                "top_p": 1,
+                "stream": False,
+                "stop": None,
+            }
+            if tools:
+                call_kwargs["tools"] = cast(Any, tools)
+                call_kwargs["tool_choice"] = tool_choice or "auto"
+
             loop = asyncio.get_running_loop()
-            # Mypy cannot safely infer non-streaming mode return types inexecutor.
+            # Mypy cannot safely infer non-streaming mode return types in executor.
             # Cast to Any for both messages and response to fix union-attr errors.
             response: Any = await loop.run_in_executor(
                 None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    messages=cast(Any, groq_messages),
-                    temperature=temperature,
-                    max_completion_tokens=max_tokens,
-                    top_p=1,
-                    stream=False,
-                    stop=None,
-                ),
+                lambda: self.client.chat.completions.create(**call_kwargs),
             )
 
-            if not response.choices or not response.choices[0].message.content:
+            msg = response.choices[0].message if response.choices else None
+            if msg is None:
+                raise ValueError("Empty response from Groq API")
+
+            # Extract native tool calls if present
+            tool_calls_out: Optional[List[Dict[str, Any]]] = None
+            raw_tool_calls = getattr(msg, "tool_calls", None)
+            if raw_tool_calls:
+                tool_calls_out = []
+                for tc in raw_tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, AttributeError):
+                        arguments = {}
+                    tool_calls_out.append({"name": tc.function.name, "arguments": arguments})
+
+            content = msg.content or ""
+            if not content and not tool_calls_out:
                 raise ValueError("Empty response from Groq API")
 
             return LLMResponse(
-                content=response.choices[0].message.content,
+                content=content,
                 model=self.model,
                 tokens_used=response.usage.total_tokens if response.usage else None,
                 finish_reason=response.choices[0].finish_reason,
+                tool_calls=tool_calls_out,
             )
 
         except ImportError:
@@ -701,6 +1007,23 @@ class GroqClient(LLMClient):
             if isinstance(e, (RuntimeError, ValueError)):
                 raise
             raise RuntimeError(f"Groq API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using Groq native OpenAI-compatible tools."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
 
 
 class ResilientLLMClient(LLMClient):
@@ -871,6 +1194,8 @@ class ResilientLLMClient(LLMClient):
         temperature: float = 0.7,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Generate response using resilient LLM client with retry logic."""
         semaphore = self._semaphore
@@ -888,6 +1213,8 @@ class ResilientLLMClient(LLMClient):
                         temperature=temperature,
                         max_tokens=max_tokens,
                         response_schema=response_schema,
+                        tools=tools,
+                        tool_choice=tool_choice,
                     )
                     latency_ms = int((time.monotonic() - start) * 1000)
                     self._logger.info(
@@ -905,6 +1232,74 @@ class ResilientLLMClient(LLMClient):
                         pass
                     return resp
 
+                except Exception as e:
+                    latency_ms = int((time.monotonic() - start) * 1000)
+                    is_retryable, is_rate, etype = self._classify_retryable(e)
+                    self._logger.info(
+                        "provider=%s model=%s status=error error_type=%s latency_ms=%d error=%s attempt=%d",
+                        self.provider,
+                        self.model or "unknown",
+                        etype,
+                        latency_ms,
+                        str(e).replace("\n", " ")[:512],
+                        attempt,
+                    )
+                    if is_rate and len(self._clients) > 1:
+                        self._rotate_client()
+                        self._logger.info(
+                            "provider=%s action=key_rotation new_index=%d",
+                            self.provider,
+                            self._client_idx,
+                        )
+                    if not is_retryable or attempt > self.max_retries:
+                        raise
+
+                    raw_backoff = self.base_backoff_ms * (2 ** (attempt - 1))
+                    jittered = raw_backoff * (0.5 + random.random())
+                    backoff = min(self.max_backoff_ms, jittered)
+                    await asyncio.sleep(backoff / 1000.0)
+        finally:
+            semaphore.release()
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using resilient retries for native tool calling."""
+        semaphore = self._semaphore
+        await semaphore.acquire()
+        try:
+            attempt = 0
+            while True:
+                attempt += 1
+                await self._acquire_token()
+
+                start = time.monotonic()
+                try:
+                    resp = await self._current_client().generate_with_tools(
+                        messages,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    latency_ms = int((time.monotonic() - start) * 1000)
+                    self._logger.info(
+                        "provider=%s model=%s status=success latency_ms=%d tokens=%s",
+                        self.provider,
+                        getattr(resp, "model", "unknown"),
+                        latency_ms,
+                        getattr(resp, "tokens_used", None),
+                    )
+                    return resp
+
+                except NotImplementedError:
+                    # Explicit signal that this provider/mode does not support native tools.
+                    raise
                 except Exception as e:
                     latency_ms = int((time.monotonic() - start) * 1000)
                     is_retryable, is_rate, etype = self._classify_retryable(e)

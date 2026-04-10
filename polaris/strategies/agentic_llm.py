@@ -102,6 +102,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         allowed_tools: Optional[List[str]] = None,
         system_prompt: Optional[str] = None,
         per_system_prompts: Optional[Dict[str, str]] = None,
+        native_tools: Optional[List[Dict[str, Any]]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -115,9 +116,14 @@ class AgenticLLMStrategy(AdaptationStrategy):
             temperature: LLM temperature for response randomness (default: 0.1)
             decision_cooldown_seconds: Minimum seconds between consecutive
                 adaptation decisions (default: 60.0)
-            allowed_tools: List of permitted tools for the LLM
+            allowed_tools: List of permitted Polaris built-in tools for the LLM
             system_prompt: Optional custom system prompt template
             per_system_prompts: Optional per-system prompt overrides keyed by system_id
+            native_tools: Optional list of OpenAI-format function definitions. When
+                provided, the strategy uses native provider tool calling instead of
+                the JSON text response flow. The list must contain dicts of the form
+                ``{"type": "function", "function": {"name": ..., "description": ...,
+                "parameters": {...}}}``.
             logger: Optional logger for debugging
             metrics: Optional metrics collector for monitoring
         """
@@ -130,6 +136,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self.allowed_tools = allowed_tools or list(DEFAULT_ALLOWED_TOOLS)
         self._system_prompt_template = system_prompt
         self._per_system_prompts = per_system_prompts or {}
+        self._native_tools: List[Dict[str, Any]] = list(native_tools) if native_tools else []
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
         self._action_resolver = ConnectorActionResolver()
@@ -153,17 +160,16 @@ class AgenticLLMStrategy(AdaptationStrategy):
     ) -> List[AdaptationAction]:
         """Assess system state and determine if adaptation is needed.
 
-        Uses the LLM to analyze the current system state and context through a tool-
-        using reasoning process. The LLM can query historical data, analyze trends, and
-        predict outcomes before making a final decision.
+        Dispatches to either the native tool-calling path (when ``native_tools``
+        are configured) or the JSON text reasoning loop (legacy default).
 
         Args:
             state: Current system state with metrics and health information
             context: Adaptation context containing world model insights
 
         Returns:
-            Optional[AdaptationAction]: Proposed adaptation action if needed, None if no
-                adaptation is required
+            List of AdaptationActions to execute, or an empty list when no
+            adaptation is required.
         """
         now = datetime.now(timezone.utc)
         if self.decision_cooldown_seconds > 0 and self._last_decision_time is not None:
@@ -186,6 +192,289 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self.metrics.increment(
             "polaris.strategy.agentic.assessments", tags={"system_id": state.system_id}
         )
+
+        if self._native_tools:
+            return await self._assess_with_native_tools(state, context)
+        return await self._assess_with_json_text(state, context)
+
+    async def _assess_with_native_tools(
+        self, state: SystemState, context: AdaptationContext
+    ) -> List[AdaptationAction]:
+        """Adaptation assessment via native provider tool calling.
+
+        Passes ``native_tools`` to the LLM, then maps the returned ``tool_calls``
+        either to internal Polaris tool execution (for analytical helper tools)
+        or directly to ``AdaptationAction`` objects (for connector actions).
+
+        If the model returns no ``tool_calls`` (e.g. it replied with plain text),
+        this falls back to attempting JSON text parsing so results are still
+        meaningful during a transition period or on providers that ignore tools.
+        """
+        _contract, supported_action_types, action_aliases = require_supported_action_contract(
+            context,
+            strategy_name="agentic",
+        )
+        start = datetime.now(timezone.utc)
+        messages: List[LLMMessage] = [
+            LLMMessage(
+                role="system",
+                content=self._system_prompt(state.system_id, supported_action_types),
+            ),
+            LLMMessage(role="user", content=self._initial_user_prompt(state, context)),
+        ]
+        try:
+            for step in range(self.steps_limit):
+                llm_start = datetime.now(timezone.utc)
+                try:
+                    response = await self.llm.generate_with_tools(
+                        messages,
+                        tools=self._native_tools,
+                        tool_choice="auto",
+                        temperature=self.temperature,
+                        max_tokens=DEFAULT_MAX_TOKENS_REASONING,
+                    )
+                except (NotImplementedError, AttributeError) as exc:
+                    if self.logger:
+                        self.logger.error(
+                            "Native tool calling is not implemented for configured provider",
+                            system_id=state.system_id,
+                            error=str(exc),
+                        )
+                    self.metrics.increment(
+                        "polaris.strategy.agentic.native_tools_not_implemented",
+                        tags={"system_id": state.system_id},
+                    )
+                    # Requested behavior: skip cycle on hard capability failure.
+                    return []
+                self.metrics.histogram(
+                    "polaris.strategy.agentic.llm_call_duration_seconds",
+                    (datetime.now(timezone.utc) - llm_start).total_seconds(),
+                    tags={"system_id": state.system_id},
+                )
+                self._maybe_log_llm_response(
+                    system_id=state.system_id,
+                    step=step + 1,
+                    content=getattr(response, "content", ""),
+                )
+
+                if response.tool_calls is None:
+                    # Soft failure: provider returned text path instead of native tool calls.
+                    if self.logger:
+                        self.logger.warning(
+                            "Native tool calling: provider returned tool_calls=None, "
+                            "falling back to JSON text parsing",
+                            system_id=state.system_id,
+                        )
+                    self.metrics.increment(
+                        "polaris.strategy.agentic.native_tools_fallback",
+                        tags={"system_id": state.system_id},
+                    )
+                    return await self._parse_json_text_response(
+                        response.content,
+                        state,
+                        context,
+                        supported_action_types,
+                        action_aliases,
+                    )
+
+                if not response.tool_calls:
+                    if self.logger:
+                        self.logger.warning(
+                            "Native tool calling: provider returned empty tool_calls, "
+                            "falling back to JSON text parsing",
+                            system_id=state.system_id,
+                        )
+                    self.metrics.increment(
+                        "polaris.strategy.agentic.native_tools_fallback",
+                        tags={"system_id": state.system_id},
+                    )
+                    return await self._parse_json_text_response(
+                        response.content,
+                        state,
+                        context,
+                        supported_action_types,
+                        action_aliases,
+                    )
+
+                self.metrics.increment(
+                    "polaris.strategy.agentic.native_tools_used",
+                    tags={"system_id": state.system_id},
+                )
+
+                # Sentinel: model chose not to adapt
+                if any(tc["name"] == "no_adaptation" for tc in response.tool_calls):
+                    if self.logger:
+                        reasoning = next(
+                            (
+                                tc["arguments"].get("reasoning", "")
+                                for tc in response.tool_calls
+                                if tc["name"] == "no_adaptation"
+                            ),
+                            "",
+                        )
+                        self.logger.info(
+                            "Agentic decision: no adaptation (native tool)",
+                            system_id=state.system_id,
+                            reasoning=reasoning,
+                        )
+                    self._last_decision_time = datetime.now(timezone.utc)
+                    return []
+
+                strategy_calls = [
+                    tc for tc in response.tool_calls if tc["name"] in self.allowed_tools
+                ]
+                action_calls = [
+                    tc for tc in response.tool_calls if tc["name"] not in self.allowed_tools
+                ]
+
+                # If a Polaris analytical tool is called, execute exactly one and continue.
+                if strategy_calls:
+                    if len(strategy_calls) > 1:
+                        raise StrictContractViolation(
+                            "Native tool response must call at most one Polaris tool per step"
+                        )
+                    if action_calls:
+                        raise StrictContractViolation(
+                            "Native tool response must not mix Polaris tool calls and action calls in the same step"
+                        )
+
+                    tc = strategy_calls[0]
+                    tool_name = tc["name"]
+                    tool_args = tc.get("arguments") or {}
+                    if not isinstance(tool_args, dict):
+                        raise StrictContractViolation(
+                            "Native Polaris tool call requires object arguments"
+                        )
+
+                    tool_result = await self._execute_tool(tool_name, tool_args, state, context)
+                    tool_msg = json.dumps({"tool_result": {"tool": tool_name, "data": tool_result}})
+                    messages.append(LLMMessage(role="user", content=tool_msg))
+                    continue
+
+                # Map all returned action calls to AdaptationActions.
+                proposed_actions: List[AdaptationAction] = []
+                for tc in action_calls:
+                    tool_name = tc["name"]
+                    tool_args = tc.get("arguments")
+
+                    resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                        resolver=self._action_resolver,
+                        action_type=tool_name,
+                        parameters=tool_args,
+                        supported_action_types=supported_action_types,
+                        action_aliases=action_aliases,
+                        system_id=state.system_id,
+                        missing_type_error="Native tool call requires a non-empty function name",
+                        invalid_parameters_error="Native tool call requires object arguments",
+                    )
+                    proposed_actions.append(
+                        AdaptationAction(
+                            action_id=str(uuid.uuid4()),
+                            action_type=resolved_action_type,
+                            target_system=state.system_id,
+                            parameters=resolved_parameters,
+                        )
+                    )
+
+                if self.logger:
+                    self.logger.info(
+                        "Agentic decision: propose actions (native tool)",
+                        system_id=state.system_id,
+                        action_count=len(proposed_actions),
+                    )
+                for action in proposed_actions:
+                    self.metrics.increment(
+                        "polaris.strategy.agentic.actions_proposed",
+                        tags={
+                            "system_id": state.system_id,
+                            "action_type": action.action_type,
+                        },
+                    )
+                self._last_decision_time = datetime.now(timezone.utc)
+                return proposed_actions
+
+            self.metrics.increment(
+                "polaris.strategy.agentic.step_limit_reached",
+                tags={"system_id": state.system_id},
+            )
+            raise StrictContractViolation(
+                "Agentic native tool strategy reached step limit without producing a final decision"
+            )
+
+        finally:
+            self.metrics.histogram(
+                "polaris.strategy.agentic.assess_duration_seconds",
+                (datetime.now(timezone.utc) - start).total_seconds(),
+                tags={"system_id": state.system_id},
+            )
+
+    async def _parse_json_text_response(
+        self,
+        content: str,
+        state: SystemState,
+        context: AdaptationContext,
+        supported_action_types: List[str],
+        action_aliases: Dict[str, str],
+    ) -> List[AdaptationAction]:
+        """Parse a JSON-text response into AdaptationActions (used as fallback)."""
+        parsed = self._parse_json_object(content)
+        try:
+            structured_response = AgenticResponseSchema.model_validate(parsed)
+        except Exception as exc:
+            raise StrictContractViolation(
+                f"Agentic response failed schema validation: {exc}"
+            ) from exc
+
+        if structured_response.final is None:
+            raise StrictContractViolation(
+                "Agentic JSON fallback response must include a 'final' block"
+            )
+        final = structured_response.final
+        if not isinstance(final.reasoning, str) or not final.reasoning.strip():
+            raise StrictContractViolation("Agentic final response requires non-empty 'reasoning'")
+        if not final.needs_adaptation:
+            if self.logger:
+                self.logger.info(
+                    "Agentic decision: no adaptation (JSON fallback)",
+                    system_id=state.system_id,
+                )
+            return []
+
+        if not final.actions:
+            raise StrictContractViolation(
+                "Agentic final response with needs_adaptation=true requires non-empty 'actions'"
+            )
+
+        proposed_actions: List[AdaptationAction] = []
+        for ab in final.actions:
+            resolved_action_type, resolved_parameters = resolve_strict_action_payload(
+                resolver=self._action_resolver,
+                action_type=ab.type,
+                parameters=ab.parameters,
+                supported_action_types=supported_action_types,
+                action_aliases=action_aliases,
+                system_id=state.system_id,
+                missing_type_error="Agentic action requires non-empty 'type'",
+                invalid_parameters_error="Agentic action requires object 'parameters'",
+            )
+            proposed_actions.append(
+                AdaptationAction(
+                    action_id=str(uuid.uuid4()),
+                    action_type=resolved_action_type,
+                    target_system=state.system_id,
+                    parameters={
+                        **resolved_parameters,
+                        "llm_reasoning": final.reasoning,
+                    },
+                )
+            )
+        self._last_decision_time = datetime.now(timezone.utc)
+        return proposed_actions
+
+    async def _assess_with_json_text(
+        self, state: SystemState, context: AdaptationContext
+    ) -> List[AdaptationAction]:
+        """Original multi-step JSON text reasoning loop (used when native_tools is empty)."""
         _contract, supported_action_types, action_aliases = require_supported_action_contract(
             context,
             strategy_name="agentic",
@@ -471,6 +760,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
             self._system_prompt_template = config["system_prompt"]
         if "per_system_prompts" in config and isinstance(config["per_system_prompts"], dict):
             self._per_system_prompts = config["per_system_prompts"]
+
+        # Update native tools if provided
+        if "native_tools" in config:
+            nt = config["native_tools"]
+            self._native_tools = list(nt) if isinstance(nt, list) else []
 
         # Update allowed tools in registry if changed
         if "tools" in config:

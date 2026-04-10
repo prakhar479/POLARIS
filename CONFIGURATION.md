@@ -19,6 +19,7 @@ Complete reference and guide for configuring the Polaris self-adaptive framework
 - [Troubleshooting](#troubleshooting-guide) - Common issues & solutions
 
 Strict runtime semantics:
+
 - LLM-based strategies accept only schema-valid JSON outputs.
 - Adaptation outputs must use `actions` (list); singular `action` is not supported.
 - Contract violations fail the affected system iteration while the monitoring loop continues for other systems.
@@ -588,17 +589,17 @@ A committee of three specialized LLM agents — **Diagnostician**, **Planner**, 
 strategy:
   type: "multi_agent"
   params:
-    provider: google             # Shared default LLM provider
-    temperature: 0.1             # Shared default temperature
-    steps_limit: 3               # Default max reasoning steps per agent (new)
+    provider: google # Shared default LLM provider
+    temperature: 0.1 # Shared default temperature
+    steps_limit: 3 # Default max reasoning steps per agent (new)
     system_description: "SWIM web application server pool"
 
     # --- Per-agent overrides (all optional) ---
     # Omit any block to inherit shared values.
 
     diagnostician:
-      provider: google           # Fast model for anomaly detection
-      temperature: 0.0           # Deterministic
+      provider: google # Fast model for anomaly detection
+      temperature: 0.0 # Deterministic
       max_tokens: 1024
       # system_prompt: |
       #   You are a precise diagnostician for {system_description}.
@@ -611,7 +612,7 @@ strategy:
         max_backoff_ms: 4000
 
     planner:
-      provider: openai           # Stronger creative model for planning
+      provider: openai # Stronger creative model for planning
       temperature: 0.2
       max_tokens: 1500
       # system_prompt: |
@@ -620,16 +621,16 @@ strategy:
 
     validator:
       provider: google
-      temperature: 0.0           # Conservative: reject borderline plans
+      temperature: 0.0 # Conservative: reject borderline plans
       max_tokens: 1500
-      tools:                     # Restricted tools for validator
+      tools: # Restricted tools for validator
         - get_world_model_insights
         - predict_outcome
       # system_prompt: |
       #   You are a conservative Safety Validator for {system_description}.
       #   Only approve safe, reversible plans.
 
-    resilience:                  # Shared resilience defaults
+    resilience: # Shared resilience defaults
       rps: 1
       burst: 2
       concurrency: 2
@@ -647,6 +648,7 @@ strategy:
 **Hot-reloadable parameters** (without restart):
 
 The following parameters can be updated via the configuration file and will take effect immediately:
+
 - `temperature`, `steps_limit`, `system_description`
 - `diagnostician.temperature`, `planner.temperature`, `validator.temperature`
 - `diagnostician.steps_limit`, `planner.steps_limit`, `validator.steps_limit`
@@ -720,9 +722,9 @@ systems:
     connector_type: "kubernetes"
     enabled: true
     connection:
-      kubeconfig_path: null   # Path to kubeconfig file (null = ~/.kube/config)
-      in_cluster: false       # Set to true when running as a pod inside the cluster
-      namespace: "default"    # Kubernetes namespace to monitor and manage
+      kubeconfig_path: null # Path to kubeconfig file (null = ~/.kube/config)
+      in_cluster: false # Set to true when running as a pod inside the cluster
+      namespace: "default" # Kubernetes namespace to monitor and manage
     monitoring:
       collection_interval: 10
 ```
@@ -1056,6 +1058,10 @@ observability:
 - [ ] `strategy.params.system_prompt`: Optional system prompt template
 - [ ] `strategy.params.per_system_prompts`: Optional per-system prompt overrides
 - [ ] `strategy.params.tools.enabled`: Array of tool names (non-empty)
+- [ ] `strategy.params.native_tools`: Optional OpenAI-format function definitions list
+- [ ] Native tools are provider-agnostic in config; each provider converts internally
+- [ ] If native tool response has `tool_calls=None`, strategy falls back to JSON text parsing
+- [ ] If provider does not implement native tools (`NotImplementedError`), cycle is skipped
 
 **THREAD Agentic Strategy:**
 
@@ -1161,32 +1167,32 @@ Configure the managed systems to monitor and adapt.
 
 ### Strategy
 
-| Field           | Type   | Default     | Description                                                                         |
-| --------------- | ------ | ----------- | ----------------------------------------------------------------------------------- |
+| Field           | Type   | Default     | Description                                                                                           |
+| --------------- | ------ | ----------- | ----------------------------------------------------------------------------------------------------- |
 | `strategy.type` | string | `threshold` | Strategy type: `threshold`, `llm_reasoning`, `hybrid`, `agentic_llm`, `thread_agentic`, `multi_agent` |
 
 **Threshold Strategy Parameters:**
 
-| Field                                 | Type    | Default | Description                                     |
-| ------------------------------------- | ------- | ------- | ----------------------------------------------- |
+| Field                              | Type    | Default | Description                                     |
+| ---------------------------------- | ------- | ------- | ----------------------------------------------- |
 | `strategy.params.thresholds`       | object  | -       | Metric thresholds mapping (high/low per metric) |
 | `strategy.params.cooldown_seconds` | integer | `60`    | Minimum seconds between successive adaptations  |
 | `strategy.params.enabled`          | boolean | `true`  | Enable/disable threshold strategy               |
 
 **LLM Reasoning Strategy Parameters:**
 
-| Field                                           | Type    | Default  | Description                       |
-| ----------------------------------------------- | ------- | -------- | --------------------------------- |
+| Field                                    | Type    | Default  | Description                                        |
+| ---------------------------------------- | ------- | -------- | -------------------------------------------------- |
 | `strategy.params.provider`               | string  | `google` | LLM provider: google/openai/openrouter/groq/ollama |
-| `strategy.params.system_description`     | string  | -        | Description of the managed system |
-| `strategy.params.adaptation_goals`       | string  | -        | Adaptation objectives             |
-| `strategy.params.temperature`            | float   | `0.1`    | Model creativity (0.0-1.0)        |
-| `strategy.params.system_prompt`          | string  | -        | Custom system prompt              |
-| `strategy.params.per_system_prompts`     | object  | -        | Per-system prompt overrides       |
-| `strategy.params.resilience.rps`         | float   | `2.0`    | Requests per second               |
-| `strategy.params.resilience.burst`       | integer | `4`      | Max burst size                    |
-| `strategy.params.resilience.concurrency` | integer | `4`      | Max concurrent requests           |
-| `strategy.params.resilience.max_retries` | integer | `4`      | Retry attempts                    |
+| `strategy.params.system_description`     | string  | -        | Description of the managed system                  |
+| `strategy.params.adaptation_goals`       | string  | -        | Adaptation objectives                              |
+| `strategy.params.temperature`            | float   | `0.1`    | Model creativity (0.0-1.0)                         |
+| `strategy.params.system_prompt`          | string  | -        | Custom system prompt                               |
+| `strategy.params.per_system_prompts`     | object  | -        | Per-system prompt overrides                        |
+| `strategy.params.resilience.rps`         | float   | `2.0`    | Requests per second                                |
+| `strategy.params.resilience.burst`       | integer | `4`      | Max burst size                                     |
+| `strategy.params.resilience.concurrency` | integer | `4`      | Max concurrent requests                            |
+| `strategy.params.resilience.max_retries` | integer | `4`      | Retry attempts                                     |
 
 **Hybrid Strategy Parameters:**
 
@@ -1198,90 +1204,99 @@ Configure the managed systems to monitor and adapt.
 
 **Agentic LLM Strategy Parameters:**
 
-| Field                                     | Type    | Default  | Description                                                               |
-| ----------------------------------------- | ------- | -------- | ------------------------------------------------------------------------- |
+| Field                                | Type    | Default  | Description                                                               |
+| ------------------------------------ | ------- | -------- | ------------------------------------------------------------------------- |
 | `strategy.params.provider`           | string  | `google` | LLM provider: google/openai/openrouter/groq/ollama                        |
 | `strategy.params.steps_limit`        | integer | `3`      | Maximum reasoning steps                                                   |
 | `strategy.params.temperature`        | float   | `0.1`    | Model creativity                                                          |
 | `strategy.params.system_prompt`      | string  | -        | Custom system prompt template (supports `{system_id}`, `{allowed_tools}`) |
 | `strategy.params.per_system_prompts` | object  | -        | Per-system prompt overrides keyed by `systems[].id`                       |
 | `strategy.params.tools.enabled`      | array   | -        | Enabled tools array                                                       |
+| `strategy.params.native_tools`       | array   | -        | Optional OpenAI-format native tool definitions (`type:function`)          |
+
+Notes for `strategy.params.native_tools`:
+
+- The YAML shape stays OpenAI-compatible regardless of provider.
+- Providers (`google`, `openai`, `openrouter`, `groq`, `ollama`) convert internally to native tool-call formats.
+- Strategy behavior with native tools:
+  - `tool_calls` is `None` -> warning + JSON text fallback parsing.
+  - provider raises `NotImplementedError` -> error + skip current cycle.
 
 **THREAD Agentic Strategy Parameters:**
 
-| Field                                           | Type    | Default      | Description                                                       |
-| ----------------------------------------------- | ------- | ------------ | ----------------------------------------------------------------- |
-| `strategy.params.provider`              | string  | `google`     | LLM provider: google/openai/openrouter/groq/ollama               |
-| `strategy.params.steps_limit`           | integer | `4`          | Maximum reasoning steps per thread                                |
-| `strategy.params.temperature`           | float   | `0.1`        | Model creativity                                                   |
-| `strategy.params.max_thread_depth`      | integer | `3`          | Maximum recursive child depth                                     |
-| `strategy.params.max_total_threads`     | integer | `16`         | Global thread budget per assessment                               |
-| `strategy.params.child_timeout_seconds` | float   | `20.0`       | Timeout for each spawned child thread                             |
-| `strategy.params.max_repeated_spawns`   | integer | `2`          | Maximum repeated identical spawn signatures                       |
-| `strategy.params.phi_mode`              | string  | `last_line`  | Parent-to-child context mapping mode (`last_line`/`recent_lines`) |
-| `strategy.params.phi_max_lines`         | integer | `6`          | Number of parent lines used when `phi_mode=recent_lines`          |
-| `strategy.params.listen_token`          | string  | `=>`         | Child feedback framing prefix                                     |
-| `strategy.params.return_token`          | string  | `<=`         | Child feedback framing suffix                                     |
-| `strategy.params.tools.enabled`         | array   | -            | Enabled tools array                                                |
+| Field                                   | Type    | Default     | Description                                                       |
+| --------------------------------------- | ------- | ----------- | ----------------------------------------------------------------- |
+| `strategy.params.provider`              | string  | `google`    | LLM provider: google/openai/openrouter/groq/ollama                |
+| `strategy.params.steps_limit`           | integer | `4`         | Maximum reasoning steps per thread                                |
+| `strategy.params.temperature`           | float   | `0.1`       | Model creativity                                                  |
+| `strategy.params.max_thread_depth`      | integer | `3`         | Maximum recursive child depth                                     |
+| `strategy.params.max_total_threads`     | integer | `16`        | Global thread budget per assessment                               |
+| `strategy.params.child_timeout_seconds` | float   | `20.0`      | Timeout for each spawned child thread                             |
+| `strategy.params.max_repeated_spawns`   | integer | `2`         | Maximum repeated identical spawn signatures                       |
+| `strategy.params.phi_mode`              | string  | `last_line` | Parent-to-child context mapping mode (`last_line`/`recent_lines`) |
+| `strategy.params.phi_max_lines`         | integer | `6`         | Number of parent lines used when `phi_mode=recent_lines`          |
+| `strategy.params.listen_token`          | string  | `=>`        | Child feedback framing prefix                                     |
+| `strategy.params.return_token`          | string  | `<=`        | Child feedback framing suffix                                     |
+| `strategy.params.tools.enabled`         | array   | -           | Enabled tools array                                               |
 
 **Multi-Agent Strategy Parameters:**
 
-| Field                                             | Type        | Default                           | Description                                              |
-| ------------------------------------------------- | ----------- | --------------------------------- | -------------------------------------------------------- |
-| `strategy.params.provider`                   | string      | `google`                          | Shared default LLM provider                              |
-| `strategy.params.temperature`                | float       | `0.1`                             | Shared default sampling temperature                      |
-| `strategy.params.steps_limit`                | integer     | `3`                               | Shared default max reasoning steps per agent stage       |
-| `strategy.params.system_description`         | string      | `Managed system`                  | System description embedded in default agent prompts     |
-| `strategy.params.resilience.*`               | object      | -                                 | Shared LLM resilience settings (see resilience section)  |
-| `strategy.params.diagnostician`              | object      | -                                 | Per-agent override for Diagnostician role                |
-| `strategy.params.diagnostician.provider`     | string      | inherits shared                   | LLM provider for the Diagnostician agent                 |
-| `strategy.params.diagnostician.temperature`  | float       | inherits shared                   | Sampling temperature for the Diagnostician agent         |
-| `strategy.params.diagnostician.system_prompt`| string      | built-in                          | Custom system prompt for Diagnostician                   |
-| `strategy.params.diagnostician.max_tokens`   | integer     | `1024`                            | Max tokens for Diagnostician responses                   |
-| `strategy.params.diagnostician.steps_limit`  | integer     | inherits shared                   | Max reasoning steps for Diagnostician                    |
-| `strategy.params.diagnostician.tools`        | array       | all built-in tools                | Available tools for Diagnostician                        |
-| `strategy.params.diagnostician.resilience.*` | object      | inherits shared                   | Per-agent LLM resilience override                        |
-| `strategy.params.planner`                    | object      | -                                 | Per-agent override for Planner role                      |
-| `strategy.params.planner.provider`           | string      | inherits shared                   | LLM provider for the Planner agent                       |
-| `strategy.params.planner.temperature`        | float       | inherits shared                   | Sampling temperature for the Planner agent               |
-| `strategy.params.planner.system_prompt`      | string      | built-in                          | Custom system prompt for Planner                         |
-| `strategy.params.planner.max_tokens`         | integer     | `1500`                            | Max tokens for Planner responses                         |
-| `strategy.params.planner.steps_limit`        | integer     | inherits shared                   | Max reasoning steps for Planner                          |
-| `strategy.params.planner.tools`              | array       | all built-in tools                | Available tools for Planner                              |
-| `strategy.params.planner.resilience.*`       | object      | inherits shared                   | Per-agent LLM resilience override                        |
-| `strategy.params.validator`                  | object      | -                                 | Per-agent override for SafetyValidator role              |
-| `strategy.params.validator.provider`         | string      | inherits shared                   | LLM provider for the SafetyValidator agent               |
-| `strategy.params.validator.temperature`      | float       | inherits shared                   | Sampling temperature for the SafetyValidator agent       |
-| `strategy.params.validator.system_prompt`    | string      | built-in                          | Custom system prompt for SafetyValidator                 |
-| `strategy.params.validator.max_tokens`       | integer     | `1500`                            | Max tokens for SafetyValidator responses                 |
-| `strategy.params.validator.steps_limit`      | integer     | inherits shared                   | Max reasoning steps for SafetyValidator                  |
-| `strategy.params.validator.tools`            | array       | all built-in tools                | Available tools for SafetyValidator                      |
-| `strategy.params.validator.resilience.*`     | object      | inherits shared                   | Per-agent LLM resilience override                        |
+| Field                                         | Type    | Default            | Description                                             |
+| --------------------------------------------- | ------- | ------------------ | ------------------------------------------------------- |
+| `strategy.params.provider`                    | string  | `google`           | Shared default LLM provider                             |
+| `strategy.params.temperature`                 | float   | `0.1`              | Shared default sampling temperature                     |
+| `strategy.params.steps_limit`                 | integer | `3`                | Shared default max reasoning steps per agent stage      |
+| `strategy.params.system_description`          | string  | `Managed system`   | System description embedded in default agent prompts    |
+| `strategy.params.resilience.*`                | object  | -                  | Shared LLM resilience settings (see resilience section) |
+| `strategy.params.diagnostician`               | object  | -                  | Per-agent override for Diagnostician role               |
+| `strategy.params.diagnostician.provider`      | string  | inherits shared    | LLM provider for the Diagnostician agent                |
+| `strategy.params.diagnostician.temperature`   | float   | inherits shared    | Sampling temperature for the Diagnostician agent        |
+| `strategy.params.diagnostician.system_prompt` | string  | built-in           | Custom system prompt for Diagnostician                  |
+| `strategy.params.diagnostician.max_tokens`    | integer | `1024`             | Max tokens for Diagnostician responses                  |
+| `strategy.params.diagnostician.steps_limit`   | integer | inherits shared    | Max reasoning steps for Diagnostician                   |
+| `strategy.params.diagnostician.tools`         | array   | all built-in tools | Available tools for Diagnostician                       |
+| `strategy.params.diagnostician.resilience.*`  | object  | inherits shared    | Per-agent LLM resilience override                       |
+| `strategy.params.planner`                     | object  | -                  | Per-agent override for Planner role                     |
+| `strategy.params.planner.provider`            | string  | inherits shared    | LLM provider for the Planner agent                      |
+| `strategy.params.planner.temperature`         | float   | inherits shared    | Sampling temperature for the Planner agent              |
+| `strategy.params.planner.system_prompt`       | string  | built-in           | Custom system prompt for Planner                        |
+| `strategy.params.planner.max_tokens`          | integer | `1500`             | Max tokens for Planner responses                        |
+| `strategy.params.planner.steps_limit`         | integer | inherits shared    | Max reasoning steps for Planner                         |
+| `strategy.params.planner.tools`               | array   | all built-in tools | Available tools for Planner                             |
+| `strategy.params.planner.resilience.*`        | object  | inherits shared    | Per-agent LLM resilience override                       |
+| `strategy.params.validator`                   | object  | -                  | Per-agent override for SafetyValidator role             |
+| `strategy.params.validator.provider`          | string  | inherits shared    | LLM provider for the SafetyValidator agent              |
+| `strategy.params.validator.temperature`       | float   | inherits shared    | Sampling temperature for the SafetyValidator agent      |
+| `strategy.params.validator.system_prompt`     | string  | built-in           | Custom system prompt for SafetyValidator                |
+| `strategy.params.validator.max_tokens`        | integer | `1500`             | Max tokens for SafetyValidator responses                |
+| `strategy.params.validator.steps_limit`       | integer | inherits shared    | Max reasoning steps for SafetyValidator                 |
+| `strategy.params.validator.tools`             | array   | all built-in tools | Available tools for SafetyValidator                     |
+| `strategy.params.validator.resilience.*`      | object  | inherits shared    | Per-agent LLM resilience override                       |
 
 ### World Model & Knowledge Store
 
-| Field                                    | Type    | Default       | Description                       |
-| ---------------------------------------- | ------- | ------------- | --------------------------------- |
-| `world_model.type`                       | string  | `statistical` | World model type                  |
-| `world_model.statistical.window_size`    | integer | `100`         | Recent samples to keep per metric |
-| `world_model.statistical.use_kalman`     | boolean | `true`        | Enable Kalman filtering           |
+| Field                                          | Type    | Default       | Description                       |
+| ---------------------------------------------- | ------- | ------------- | --------------------------------- |
+| `world_model.type`                             | string  | `statistical` | World model type                  |
+| `world_model.statistical.window_size`          | integer | `100`         | Recent samples to keep per metric |
+| `world_model.statistical.use_kalman`           | boolean | `true`        | Enable Kalman filtering           |
 | `knowledge_store.type`                         | string  | `memory`      | Knowledge store type              |
 | `knowledge_store.memory.max_states_per_system` | integer | `1000`        | Max states per system             |
 
 ### Meta-Learner
 
-| Field                                  | Type    | Default       | Description                              |
-| -------------------------------------- | ------- | ------------- | ---------------------------------------- |
-| `meta_learner.enabled`                 | boolean | `true`        | Enable/disable meta-learning             |
-| `meta_learner.type`                    | string  | `statistical` | Type: statistical or llm                 |
-| `meta_learner.analysis_interval_hours` | float   | `1.0`         | Analysis interval in hours               |
-| `meta_learner.conservative_mode`       | boolean | `true`        | Conservative mode (cautious adjustments) |
-| `meta_learner.transparency.enabled`    | boolean | `true`        | Persist per-cycle update transparency    |
-| `meta_learner.transparency.output_path` | string  | `./logs/meta_learning_updates.jsonl` | JSONL file for transparency records |
-| `meta_learner.llm.provider`            | string  | `google`      | LLM provider (if type=llm)               |
-| `meta_learner.llm.temperature`         | float   | `0.1`         | Model creativity                         |
-| `meta_learner.llm.auto_apply`          | boolean | `false`       | Auto-apply proposals                     |
-| `meta_learner.llm.resilience.*`        | object  | -             | LLM resilience settings                  |
+| Field                                   | Type    | Default                              | Description                              |
+| --------------------------------------- | ------- | ------------------------------------ | ---------------------------------------- |
+| `meta_learner.enabled`                  | boolean | `true`                               | Enable/disable meta-learning             |
+| `meta_learner.type`                     | string  | `statistical`                        | Type: statistical or llm                 |
+| `meta_learner.analysis_interval_hours`  | float   | `1.0`                                | Analysis interval in hours               |
+| `meta_learner.conservative_mode`        | boolean | `true`                               | Conservative mode (cautious adjustments) |
+| `meta_learner.transparency.enabled`     | boolean | `true`                               | Persist per-cycle update transparency    |
+| `meta_learner.transparency.output_path` | string  | `./logs/meta_learning_updates.jsonl` | JSONL file for transparency records      |
+| `meta_learner.llm.provider`             | string  | `google`                             | LLM provider (if type=llm)               |
+| `meta_learner.llm.temperature`          | float   | `0.1`                                | Model creativity                         |
+| `meta_learner.llm.auto_apply`           | boolean | `false`                              | Auto-apply proposals                     |
+| `meta_learner.llm.resilience.*`         | object  | -                                    | LLM resilience settings                  |
 
 ### Observability
 
@@ -1317,18 +1332,18 @@ Configure the managed systems to monitor and adapt.
 
 ### Where Configuration is Loaded
 
-| Config Path                   | Loaded By                                     | File                              | Line    |
-| ----------------------------- | --------------------------------------------- | --------------------------------- | ------- |
-| `systems`                     | [config.py](polaris/infrastructure/config.py) | SystemConfig.**init**             | 23      |
-| `monitoring.interval_seconds` | [polaris.py](polaris/core/polaris.py)         | **init**                          | 153-159 |
-| `strategy.type`               | [config.py](polaris/infrastructure/config.py) | StrategyConfig                    | 166-172 |
-| `strategy.params` (threshold)    | [factories.py](polaris/core/factories.py)     | \_threshold_factory               | 121-130 |
-| `strategy.params` (llm_reasoning)| [factories.py](polaris/core/factories.py)     | \_llm_reasoning_factory           | 143-161 |
-| `strategy.params` (hybrid)       | [factories.py](polaris/core/factories.py)     | \_hybrid_factory                  | 167-224 |
-| `strategy.params` (agentic_llm)  | [factories.py](polaris/core/factories.py)     | \_agentic_llm_factory             | 231-282 |
-| `observability.logging`       | [polaris.py](polaris/core/polaris.py)         | \_create_logger_from_config       | 185-195 |
-| `observability.metrics`       | [polaris.py](polaris/core/polaris.py)         | \_create_metrics_from_config      | 206-225 |
-| `meta_learner`                | [polaris.py](polaris/core/polaris.py)         | \_create_meta_learner_from_config | 327-395 |
+| Config Path                       | Loaded By                                     | File                              | Line    |
+| --------------------------------- | --------------------------------------------- | --------------------------------- | ------- |
+| `systems`                         | [config.py](polaris/infrastructure/config.py) | SystemConfig.**init**             | 23      |
+| `monitoring.interval_seconds`     | [polaris.py](polaris/core/polaris.py)         | **init**                          | 153-159 |
+| `strategy.type`                   | [config.py](polaris/infrastructure/config.py) | StrategyConfig                    | 166-172 |
+| `strategy.params` (threshold)     | [factories.py](polaris/core/factories.py)     | \_threshold_factory               | 121-130 |
+| `strategy.params` (llm_reasoning) | [factories.py](polaris/core/factories.py)     | \_llm_reasoning_factory           | 143-161 |
+| `strategy.params` (hybrid)        | [factories.py](polaris/core/factories.py)     | \_hybrid_factory                  | 167-224 |
+| `strategy.params` (agentic_llm)   | [factories.py](polaris/core/factories.py)     | \_agentic_llm_factory             | 231-282 |
+| `observability.logging`           | [polaris.py](polaris/core/polaris.py)         | \_create_logger_from_config       | 185-195 |
+| `observability.metrics`           | [polaris.py](polaris/core/polaris.py)         | \_create_metrics_from_config      | 206-225 |
+| `meta_learner`                    | [polaris.py](polaris/core/polaris.py)         | \_create_meta_learner_from_config | 327-395 |
 
 ### Validation Rules
 

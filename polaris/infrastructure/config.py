@@ -133,6 +133,9 @@ class StrategyConfig(BaseModel):
                 minimum=0.0,
             )
             self._validate_tools_block(self.params.get("tools"), label="agentic_llm.tools")
+            self._validate_native_tools_block(
+                self.params.get("native_tools"), label="agentic_llm.native_tools"
+            )
         elif self.type == "thread_agentic":
             self._validate_llm_params(self.params, label="thread_agentic")
             self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
@@ -342,6 +345,39 @@ class StrategyConfig(BaseModel):
             return
         if not isinstance(value, (int, float)) or float(value) < minimum:
             raise ValueError(f"{field_name} must be a number >= {minimum}")
+
+    def _validate_native_tools_block(self, native_tools: Any, label: str) -> None:
+        """Validate an OpenAI-format native tool definitions list.
+
+        Each entry must follow the OpenAI function-calling schema::
+
+            {"type": "function", "function": {"name": str, "description": str,
+                "parameters": {"type": "object", "properties": {...}, "required": [...]}}}
+
+        The ``description`` and ``parameters`` fields are optional here because some
+        simple use-cases (e.g. a sentinel ``no_adaptation`` function) may omit them.
+        """
+        if native_tools is None:
+            return
+        if not isinstance(native_tools, list):
+            raise ValueError(f"{label} must be a list of function definition dicts")
+        for i, tool in enumerate(native_tools):
+            if not isinstance(tool, dict):
+                raise ValueError(f"{label}[{i}] must be a dict")
+            tool_type = tool.get("type")
+            if tool_type != "function":
+                raise ValueError(f"{label}[{i}].type must be 'function' (got {tool_type!r})")
+            fn = tool.get("function")
+            if not isinstance(fn, dict):
+                raise ValueError(f"{label}[{i}].function must be a dict")
+            fn_name = fn.get("name")
+            if not isinstance(fn_name, str) or not fn_name.strip():
+                raise ValueError(f"{label}[{i}].function.name must be a non-empty string")
+            params = fn.get("parameters")
+            if params is not None and not isinstance(params, dict):
+                raise ValueError(
+                    f"{label}[{i}].function.parameters must be a dict (JSON Schema object)"
+                )
 
 
 class PolarisConfig(BaseModel):

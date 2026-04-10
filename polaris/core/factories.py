@@ -670,11 +670,16 @@ def _register_default_strategy_factories() -> None:
         if isinstance(tools_cfg, dict):
             allowed_tools = tools_cfg.get("enabled")
 
+        # Native tool calling: OpenAI-format function definitions (optional)
+        native_tools = agent_conf.get("native_tools")  # list of dicts or None
+
         provider = agent_conf.get("provider", "google")
         resilience_cfg = agent_conf.get("resilience")
         llm_kwargs = dict(agent_conf)
         llm_kwargs.pop("provider", None)
         llm_kwargs.pop("resilience", None)
+        # Strip keys not understood by create_llm_client
+        llm_kwargs.pop("native_tools", None)
         llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
 
         return AgenticLLMStrategy(
@@ -687,6 +692,7 @@ def _register_default_strategy_factories() -> None:
             allowed_tools=allowed_tools,
             system_prompt=agent_conf.get("system_prompt"),
             per_system_prompts=agent_conf.get("per_system_prompts"),
+            native_tools=native_tools,
             logger=logger,
             metrics=metrics,
         )
