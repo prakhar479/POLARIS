@@ -87,6 +87,65 @@ def test_doctor_reports_missing_thread_agentic_credentials(tmp_path: Path, monke
     )
 
 
+def test_doctor_warns_on_unknown_tool_names(tmp_path: Path) -> None:
+    """Doctor should warn when tools list references unknown tool names."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "strategy:",
+                "  type: agentic_llm",
+                "  params:",
+                "    provider: google",
+                "    tools:",
+                "      enabled:",
+                "        - get_recent_states",
+                "        - definitely_not_a_tool",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = doctor_cli.run_doctor(str(config_file))
+
+    assert any(
+        item.status == "WARN"
+        and "unknown tool names" in item.message
+        and "definitely_not_a_tool" in item.message
+        for item in diagnostics
+    )
+
+
+def test_doctor_flags_ollama_native_mode_with_native_tools(tmp_path: Path) -> None:
+    """Doctor should fail when native_tools are configured for ollama native mode."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "strategy:",
+                "  type: agentic_llm",
+                "  params:",
+                "    provider: ollama",
+                "    generate_mode: native",
+                "    native_tools:",
+                "      - type: function",
+                "        function:",
+                "          name: get_recent_states",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = doctor_cli.run_doctor(str(config_file))
+
+    assert any(
+        item.status == "FAIL" and "does not support native tool calling" in item.message
+        for item in diagnostics
+    )
+
+
 def test_doctor_flags_legacy_strategy_schema_paths(tmp_path: Path) -> None:
     """Doctor should report deprecated type-keyed strategy blocks with explicit paths."""
     config_file = tmp_path / "config.yaml"

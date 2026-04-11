@@ -12,6 +12,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import polaris.infrastructure.llm as _llm
+from polaris.tools import register_tool_factory
 
 if TYPE_CHECKING:
     from polaris.abstractions import (
@@ -88,10 +89,14 @@ def _invoke_plugin_registration(registration_hook: Callable[..., Any]) -> None:
             "'register_connector_factory' and 'register_connector_config_validator'"
         )
 
-    registration_hook(
-        register_connector_factory=register_connector_factory,
-        register_connector_config_validator=register_connector_config_validator,
-    )
+    kwargs: Dict[str, Any] = {
+        "register_connector_factory": register_connector_factory,
+        "register_connector_config_validator": register_connector_config_validator,
+    }
+    if "register_tool_factory" in names:
+        kwargs["register_tool_factory"] = register_tool_factory
+
+    registration_hook(**kwargs)
 
 
 def _activate_plugin(plugin: Any) -> None:
@@ -665,9 +670,15 @@ def _register_default_strategy_factories() -> None:
         steps_limit = int(agent_conf.get("steps_limit", 3))
         temperature = float(agent_conf.get("temperature", 0.1))
         decision_cooldown_seconds = float(agent_conf.get("decision_cooldown_seconds", 60.0))
+        max_tool_result_chars = int(agent_conf.get("max_tool_result_chars", 1200))
+        native_tools_unsupported_policy = str(
+            agent_conf.get("native_tools_unsupported_policy", "skip_cycle")
+        )
         allowed_tools = None
         tools_cfg = agent_conf.get("tools")
-        if isinstance(tools_cfg, dict):
+        if isinstance(tools_cfg, list):
+            allowed_tools = [tool for tool in tools_cfg if isinstance(tool, str)]
+        elif isinstance(tools_cfg, dict):
             allowed_tools = tools_cfg.get("enabled")
 
         # Native tool calling: OpenAI-format function definitions (optional)
@@ -693,6 +704,8 @@ def _register_default_strategy_factories() -> None:
             system_prompt=agent_conf.get("system_prompt"),
             per_system_prompts=agent_conf.get("per_system_prompts"),
             native_tools=native_tools,
+            max_tool_result_chars=max_tool_result_chars,
+            native_tools_unsupported_policy=native_tools_unsupported_policy,
             logger=logger,
             metrics=metrics,
         )
@@ -724,7 +737,9 @@ def _register_default_strategy_factories() -> None:
 
         allowed_tools = None
         tools_cfg = thread_conf.get("tools")
-        if isinstance(tools_cfg, dict):
+        if isinstance(tools_cfg, list):
+            allowed_tools = [tool for tool in tools_cfg if isinstance(tool, str)]
+        elif isinstance(tools_cfg, dict):
             allowed_tools = tools_cfg.get("enabled")
 
         provider = thread_conf.get("provider", "google")
@@ -773,6 +788,7 @@ def _register_default_strategy_factories() -> None:
         agent_conf = getattr(strategy_cfg, "params", {})
         temperature = float(agent_conf.get("temperature", 0.1))
         system_description = agent_conf.get("system_description", "Managed system")
+        max_tool_result_chars = int(agent_conf.get("max_tool_result_chars", 1200))
 
         provider = agent_conf.get("provider", "google")
         resilience_cfg = agent_conf.get("resilience")
@@ -831,6 +847,7 @@ def _register_default_strategy_factories() -> None:
             temperature=temperature,
             system_description=system_description,
             steps_limit=int(agent_conf.get("steps_limit", 3)),
+            max_tool_result_chars=max_tool_result_chars,
             allowed_tools=shared_tools,
             diagnostician_config=diagnostician_config,
             planner_config=planner_config,

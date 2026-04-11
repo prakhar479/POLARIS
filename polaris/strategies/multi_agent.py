@@ -49,7 +49,7 @@ from polaris.strategies.utils import (
     format_system_state_for_llm,
     parse_strict_json,
 )
-from polaris.tools import ToolDependencies, ToolRegistry, get_builtin_tools
+from polaris.tools import ToolDependencies, ToolRegistry, build_registered_tools
 
 # ---------------------------------------------------------------------------
 # Agent output models
@@ -241,6 +241,7 @@ class MultiAgentStrategy(AdaptationStrategy):
         temperature: float = 0.1,
         system_description: str = "Managed system",
         steps_limit: int = 3,
+        max_tool_result_chars: int = 1200,
         allowed_tools: Optional[List[str]] = None,
         # Per-agent overrides
         diagnostician_config: Optional[AgentConfig] = None,
@@ -261,6 +262,8 @@ class MultiAgentStrategy(AdaptationStrategy):
             system_description: Description of the managed system embedded in default
                 agent prompts (default: "A generic managed cloud system").
             steps_limit: Default max reasoning steps for each agent stage (default: 3).
+            max_tool_result_chars: Maximum serialized tool result size injected into
+                model context before truncation metadata is applied.
             allowed_tools: List of enabled tools. If None, all built-in tools are
                 enabled.
             diagnostician_config: Optional per-agent config for the Diagnostician.
@@ -275,6 +278,7 @@ class MultiAgentStrategy(AdaptationStrategy):
         self.temperature = temperature
         self.system_description = system_description
         self.steps_limit = steps_limit
+        self.max_tool_result_chars = max(200, int(max_tool_result_chars))
         self.allowed_tools = allowed_tools or list(DEFAULT_ALLOWED_TOOLS)
 
         # Per-agent configs — normalise to AgentConfig objects
@@ -285,15 +289,8 @@ class MultiAgentStrategy(AdaptationStrategy):
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
         self._action_resolver = ConnectorActionResolver()
-        # Initialize tool registry with built-in tools
         self._tool_registry = ToolRegistry(metrics=self.metrics)
-        all_tools = get_builtin_tools()
-        if self.allowed_tools:
-            for tool in all_tools:
-                if tool.name in self.allowed_tools:
-                    self._tool_registry.register(tool)
-        else:
-            self._tool_registry.register_all(all_tools)
+        self._rebuild_tool_registry()
         self._adaptation_count = 0
         self._success_count = 0
 
@@ -584,6 +581,18 @@ class MultiAgentStrategy(AdaptationStrategy):
         if "steps_limit" in config:
             await self.update_parameter("steps_limit", config["steps_limit"])
 
+        if "max_tool_result_chars" in config:
+            self.max_tool_result_chars = max(200, int(config["max_tool_result_chars"]))
+
+        if "tools" in config:
+            tools_cfg = config["tools"]
+            if isinstance(tools_cfg, list):
+                self.allowed_tools = tools_cfg
+            elif isinstance(tools_cfg, dict):
+                enabled = tools_cfg.get("enabled")
+                if isinstance(enabled, list):
+                    self.allowed_tools = enabled
+
         if "system_description" in config:
             self.system_description = config["system_description"]
 
@@ -604,8 +613,14 @@ class MultiAgentStrategy(AdaptationStrategy):
                 cfg_obj.max_tokens = int(role_cfg["max_tokens"])
             if "steps_limit" in role_cfg:
                 cfg_obj.steps_limit = int(role_cfg["steps_limit"])
-            if "tools" in role_cfg and isinstance(role_cfg["tools"], list):
-                cfg_obj.allowed_tools = role_cfg["tools"]
+            if "tools" in role_cfg:
+                role_tools = role_cfg["tools"]
+                if isinstance(role_tools, list):
+                    cfg_obj.allowed_tools = role_tools
+                elif isinstance(role_tools, dict):
+                    enabled = role_tools.get("enabled")
+                    if isinstance(enabled, list):
+                        cfg_obj.allowed_tools = enabled
             # Resilience on per-agent client
             if "resilience" in role_cfg and cfg_obj.llm_client is not None:
                 if hasattr(cfg_obj.llm_client, "update_resilience"):
@@ -618,6 +633,8 @@ class MultiAgentStrategy(AdaptationStrategy):
                                 role=role,
                                 error=str(exc),
                             )
+
+        self._rebuild_tool_registry()
 
         # Shared resilience
         if "resilience" in config and hasattr(self.llm, "update_resilience"):
@@ -716,6 +733,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                     deps = ToolDependencies(
                         knowledge_store=self.knowledge_store,
                         world_model=self.world_model,
+                        connector=self._extract_connector_from_context(context),
                         system_contract=context.system_contract,
                         logger=self.logger,
                         metrics=self.metrics,
@@ -743,7 +761,7 @@ class MultiAgentStrategy(AdaptationStrategy):
                         recoverable=True,
                     ).to_dict()
 
-            tool_msg = json.dumps({"tool_result": {"tool": tool, "data": tool_result}})
+            tool_msg = self._build_tool_result_message(tool, tool_result)
             messages.append(LLMMessage(role="user", content=tool_msg))
 
         raise StrictContractViolation(
@@ -757,3 +775,66 @@ class MultiAgentStrategy(AdaptationStrategy):
     def _parse_json_object(self, content: str) -> Dict[str, Any]:
         """Parse strict JSON object from model output."""
         return parse_strict_json(content, StrictContractViolation)
+
+    def _registry_allowed_tools(self) -> Optional[List[str]]:
+        """Compute effective allowed tool list for registry population.
+
+        Includes shared allowed tools and per-agent overrides so role-specific tools
+        are available to execute when selected.
+        """
+        merged: set[str] = set(self.allowed_tools or [])
+        for cfg in (self._diagnostician_cfg, self._planner_cfg, self._validator_cfg):
+            if cfg.allowed_tools:
+                merged.update(cfg.allowed_tools)
+
+        if not merged:
+            return None
+        return sorted(merged)
+
+    def _rebuild_tool_registry(self) -> None:
+        """Rebuild tool registry from globally registered tool factories."""
+        self._tool_registry = ToolRegistry(metrics=self.metrics)
+        self._tool_registry.register_all(build_registered_tools(self._registry_allowed_tools()))
+
+    def _extract_connector_from_context(self, context: AdaptationContext) -> Any:
+        """Extract active connector from adaptation context metadata if available."""
+        metadata = context.metadata
+        if not isinstance(metadata, dict):
+            return None
+        return metadata.get("connector")
+
+    def _compact_json(self, value: Any, max_chars: int) -> str:
+        """Serialize payload to JSON and truncate to cap model context growth."""
+        try:
+            text = json.dumps(value, ensure_ascii=True, default=str)
+        except Exception:
+            text = str(value)
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "..."
+
+    def _bounded_tool_data(self, tool_result: Dict[str, Any]) -> Any:
+        """Return either original tool result or a truncated representation."""
+        try:
+            full_text = json.dumps(tool_result, ensure_ascii=True, default=str)
+        except Exception:
+            full_text = str(tool_result)
+
+        if len(full_text) <= self.max_tool_result_chars:
+            return tool_result
+
+        serialized = full_text[: self.max_tool_result_chars] + "..."
+
+        return {
+            "_truncated": True,
+            "preview": serialized,
+            "original_chars": len(full_text),
+        }
+
+    def _build_tool_result_message(self, tool_name: str, tool_result: Dict[str, Any]) -> str:
+        """Build bounded tool-result payload for model context."""
+        bounded = self._bounded_tool_data(tool_result)
+        return json.dumps(
+            {"tool_result": {"tool": tool_name, "data": bounded}},
+            ensure_ascii=True,
+        )

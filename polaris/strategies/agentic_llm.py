@@ -36,7 +36,7 @@ from polaris.strategies.utils import (
     format_system_state_for_llm,
     parse_strict_json,
 )
-from polaris.tools import ToolRegistry, get_builtin_tools
+from polaris.tools import ToolRegistry, build_registered_tools
 
 
 class ActionBlock(BaseModel):
@@ -90,6 +90,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
     """
 
     requires_system_contract: bool = True
+    _SUPPORTED_NATIVE_TOOLS_UNSUPPORTED_POLICIES = {
+        "skip_cycle",
+        "json_fallback",
+        "strict_fail",
+    }
 
     def __init__(
         self,
@@ -103,6 +108,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
         system_prompt: Optional[str] = None,
         per_system_prompts: Optional[Dict[str, str]] = None,
         native_tools: Optional[List[Dict[str, Any]]] = None,
+        max_tool_result_chars: int = 1200,
+        native_tools_unsupported_policy: str = "skip_cycle",
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -124,6 +131,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 the JSON text response flow. The list must contain dicts of the form
                 ``{"type": "function", "function": {"name": ..., "description": ...,
                 "parameters": {...}}}``.
+            max_tool_result_chars: Maximum serialized tool result size injected into
+                model context before truncation metadata is applied.
+            native_tools_unsupported_policy: Behavior when provider does not support
+                native tool calling. One of: ``skip_cycle`` (default),
+                ``json_fallback`` (retry via JSON text mode), ``strict_fail``.
             logger: Optional logger for debugging
             metrics: Optional metrics collector for monitoring
         """
@@ -137,19 +149,15 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self._system_prompt_template = system_prompt
         self._per_system_prompts = per_system_prompts or {}
         self._native_tools: List[Dict[str, Any]] = list(native_tools) if native_tools else []
+        self.max_tool_result_chars = max(200, int(max_tool_result_chars))
+        self.native_tools_unsupported_policy = self._normalize_native_tools_unsupported_policy(
+            native_tools_unsupported_policy
+        )
         self.logger = logger
         self.metrics = metrics or NullMetricsCollector()
         self._action_resolver = ConnectorActionResolver()
-        # Initialize tool registry with built-in tools
         self._tool_registry = ToolRegistry(metrics=self.metrics)
-        all_tools = get_builtin_tools()
-        if self.allowed_tools:
-            # Only register allowed tools
-            for tool in all_tools:
-                if tool.name in self.allowed_tools:
-                    self._tool_registry.register(tool)
-        else:
-            self._tool_registry.register_all(all_tools)
+        self._rebuild_tool_registry()
 
         self._adaptation_count = 0
         self._success_count = 0
@@ -239,12 +247,31 @@ class AgenticLLMStrategy(AdaptationStrategy):
                             "Native tool calling is not implemented for configured provider",
                             system_id=state.system_id,
                             error=str(exc),
+                            policy=self.native_tools_unsupported_policy,
                         )
                     self.metrics.increment(
                         "polaris.strategy.agentic.native_tools_not_implemented",
-                        tags={"system_id": state.system_id},
+                        tags={
+                            "system_id": state.system_id,
+                            "policy": self.native_tools_unsupported_policy,
+                        },
                     )
-                    # Requested behavior: skip cycle on hard capability failure.
+                    if self.native_tools_unsupported_policy == "strict_fail":
+                        raise StrictContractViolation(
+                            "Native tool calling is not supported by the configured provider"
+                        ) from exc
+
+                    if self.native_tools_unsupported_policy == "json_fallback":
+                        self.metrics.increment(
+                            "polaris.strategy.agentic.native_tools_fallback",
+                            tags={
+                                "system_id": state.system_id,
+                                "reason": "not_implemented",
+                            },
+                        )
+                        return await self._assess_with_json_text(state, context)
+
+                    # Default policy: skip current cycle on hard capability failure.
                     return []
                 self.metrics.histogram(
                     "polaris.strategy.agentic.llm_call_duration_seconds",
@@ -347,7 +374,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                         )
 
                     tool_result = await self._execute_tool(tool_name, tool_args, state, context)
-                    tool_msg = json.dumps({"tool_result": {"tool": tool_name, "data": tool_result}})
+                    tool_msg = self._build_tool_result_message(tool_name, tool_result)
                     messages.append(LLMMessage(role="user", content=tool_msg))
                     continue
 
@@ -596,7 +623,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     raise StrictContractViolation(f"Tool '{tool}' is not in allowed tool list")
                 else:
                     tool_result = await self._execute_tool(tool, args, state, context)
-                tool_msg = json.dumps({"tool_result": {"tool": tool, "data": tool_result}})
+                tool_msg = self._build_tool_result_message(tool, tool_result)
                 messages.append(LLMMessage(role="user", content=tool_msg))
             self.metrics.increment(
                 "polaris.strategy.agentic.step_limit_reached",
@@ -630,6 +657,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         deps = ToolDependencies(
             knowledge_store=self.knowledge_store,
             world_model=self.world_model,
+            connector=self._extract_connector_from_context(context),
             system_contract=context.system_contract,
             logger=self.logger,
             metrics=self.metrics,
@@ -766,29 +794,46 @@ class AgenticLLMStrategy(AdaptationStrategy):
             nt = config["native_tools"]
             self._native_tools = list(nt) if isinstance(nt, list) else []
 
+        if "max_tool_result_chars" in config:
+            self.max_tool_result_chars = max(200, int(config["max_tool_result_chars"]))
+
+        if "native_tools_unsupported_policy" in config:
+            try:
+                self.native_tools_unsupported_policy = (
+                    self._normalize_native_tools_unsupported_policy(
+                        config["native_tools_unsupported_policy"]
+                    )
+                )
+            except ValueError as exc:
+                if self.logger:
+                    self.logger.warning(
+                        "AgenticLLMStrategy invalid native_tools_unsupported_policy update ignored",
+                        error=str(exc),
+                    )
+
         # Update allowed tools in registry if changed
         if "tools" in config:
             tools_cfg = config["tools"]
-            if isinstance(tools_cfg, dict):
+            if isinstance(tools_cfg, list):
+                self.allowed_tools = tools_cfg
+                self._rebuild_tool_registry()
+            elif isinstance(tools_cfg, dict):
                 enabled = tools_cfg.get("enabled")
                 if isinstance(enabled, list):
                     self.allowed_tools = enabled
-                    # Re-initialize registry with new allowed tools
-                    self._tool_registry = ToolRegistry(metrics=self.metrics)
-                    all_tools = get_builtin_tools()
-                    for tool in all_tools:
-                        if tool.name in self.allowed_tools:
-                            self._tool_registry.register(tool)
+                    self._rebuild_tool_registry()
 
         resil = config.get("resilience")
-        if resil and hasattr(self.llm, "update_resilience"):
-            try:
-                self.llm.update_resilience(resil)
-            except Exception as exc:
-                if self.logger:
-                    self.logger.warning(
-                        "AgenticLLMStrategy resilience update failed", error=str(exc)
-                    )
+        if resil:
+            update_resilience = getattr(self.llm, "update_resilience", None)
+            if callable(update_resilience):
+                try:
+                    update_resilience(resil)
+                except Exception as exc:
+                    if self.logger:
+                        self.logger.warning(
+                            "AgenticLLMStrategy resilience update failed", error=str(exc)
+                        )
 
     async def get_performance_metrics(self) -> Dict[str, float]:
         """Get performance metrics for the strategy.
@@ -866,6 +911,65 @@ class AgenticLLMStrategy(AdaptationStrategy):
     def _parse_json_object(self, content: str) -> Dict[str, Any]:
         """Parse strict JSON object from model output."""
         return parse_strict_json(content, StrictContractViolation)
+
+    def _rebuild_tool_registry(self) -> None:
+        """Rebuild tool registry from globally registered tool factories."""
+        self._tool_registry = ToolRegistry(metrics=self.metrics)
+        allowed = self.allowed_tools if self.allowed_tools else None
+        self._tool_registry.register_all(build_registered_tools(allowed))
+
+    def _normalize_native_tools_unsupported_policy(self, value: Any) -> str:
+        """Normalize and validate unsupported-native-tools behavior policy."""
+        policy = str(value or "skip_cycle").strip().lower()
+        if policy not in self._SUPPORTED_NATIVE_TOOLS_UNSUPPORTED_POLICIES:
+            supported = sorted(self._SUPPORTED_NATIVE_TOOLS_UNSUPPORTED_POLICIES)
+            raise ValueError(
+                "native_tools_unsupported_policy must be one of " f"{supported}, got {value!r}"
+            )
+        return policy
+
+    def _extract_connector_from_context(self, context: AdaptationContext) -> Any:
+        """Extract the active connector from adaptation context metadata if present."""
+        metadata = context.metadata
+        if not isinstance(metadata, dict):
+            return None
+        return metadata.get("connector")
+
+    def _compact_json(self, value: Any, max_chars: int) -> str:
+        """Serialize payload to JSON and truncate to avoid unbounded context growth."""
+        try:
+            text = json.dumps(value, ensure_ascii=True, default=str)
+        except Exception:
+            text = str(value)
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "..."
+
+    def _bounded_tool_data(self, tool_result: Dict[str, Any]) -> Any:
+        """Return either original tool result or a truncated representation."""
+        try:
+            full_text = json.dumps(tool_result, ensure_ascii=True, default=str)
+        except Exception:
+            full_text = str(tool_result)
+
+        if len(full_text) <= self.max_tool_result_chars:
+            return tool_result
+
+        serialized = full_text[: self.max_tool_result_chars] + "..."
+
+        return {
+            "_truncated": True,
+            "preview": serialized,
+            "original_chars": len(full_text),
+        }
+
+    def _build_tool_result_message(self, tool_name: str, tool_result: Dict[str, Any]) -> str:
+        """Build a bounded tool result message for model context."""
+        bounded = self._bounded_tool_data(tool_result)
+        return json.dumps(
+            {"tool_result": {"tool": tool_name, "data": bounded}},
+            ensure_ascii=True,
+        )
 
     def _maybe_log_llm_response(self, system_id: str, step: int, content: str) -> None:
         """Optionally log raw LLM output for debugging parsing issues.

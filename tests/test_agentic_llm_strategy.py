@@ -417,3 +417,102 @@ async def test_native_tools_not_implemented_skips_cycle(base_deps, state, contex
 
     assert actions == []
     base_deps["logger"].error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_native_tools_not_implemented_json_fallback_policy(base_deps, state, context):
+    native_tools = [{"type": "function", "function": {"name": "get_recent_states"}}]
+    strategy = AgenticLLMStrategy(
+        **base_deps,
+        native_tools=native_tools,
+        allowed_tools=["get_recent_states"],
+        native_tools_unsupported_policy="json_fallback",
+        steps_limit=2,
+    )
+
+    base_deps["llm_client"].generate_with_tools = AsyncMock(
+        side_effect=NotImplementedError("provider does not support native tools")
+    )
+    base_deps["llm_client"].generate = AsyncMock(
+        return_value=Mock(
+            content='{"final": {"needs_adaptation": false, "reasoning": "stable", "actions": []}}'
+        )
+    )
+
+    actions = await strategy.assess(state, context)
+
+    assert actions == []
+    base_deps["llm_client"].generate.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_tools_not_implemented_strict_fail_policy(base_deps, state, context):
+    native_tools = [{"type": "function", "function": {"name": "get_recent_states"}}]
+    strategy = AgenticLLMStrategy(
+        **base_deps,
+        native_tools=native_tools,
+        allowed_tools=["get_recent_states"],
+        native_tools_unsupported_policy="strict_fail",
+        steps_limit=2,
+    )
+
+    base_deps["llm_client"].generate_with_tools = AsyncMock(
+        side_effect=NotImplementedError("provider does not support native tools")
+    )
+
+    with pytest.raises(StrictContractViolation, match="not supported"):
+        await strategy.assess(state, context)
+
+
+@pytest.mark.asyncio
+async def test_tool_result_payload_is_bounded_in_messages(base_deps, state, context):
+    strategy = AgenticLLMStrategy(
+        **base_deps,
+        allowed_tools=["get_system_status"],
+        steps_limit=2,
+        max_tool_result_chars=120,
+    )
+
+    captured_messages = []
+
+    async def _fake_generate(messages, **kwargs):
+        _ = kwargs
+        captured_messages.append(messages)
+        if len(captured_messages) == 1:
+            return Mock(content='{"tool": "get_system_status", "args": {}}')
+        return Mock(
+            content='{"final": {"needs_adaptation": false, "reasoning": "done", "actions": []}}'
+        )
+
+    base_deps["llm_client"].generate = AsyncMock(side_effect=_fake_generate)
+    strategy._tool_registry.execute = AsyncMock(return_value={"blob": "x" * 5000})
+
+    actions = await strategy.assess(state, context)
+
+    assert actions == []
+    assert len(captured_messages) == 2
+    tool_payload = json.loads(captured_messages[1][-1].content)
+    tool_data = tool_payload["tool_result"]["data"]
+    assert tool_data["_truncated"] is True
+    assert tool_data["original_chars"] > 120
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_injects_connector_from_context_metadata(base_deps, state, context):
+    strategy = AgenticLLMStrategy(**base_deps, allowed_tools=["get_system_status"])
+
+    connector = object()
+    ctx = AdaptationContext(
+        system_id=context.system_id,
+        historical_states=context.historical_states,
+        system_contract=context.system_contract,
+        metadata={"connector": connector},
+    )
+
+    strategy._tool_registry.execute = AsyncMock(return_value={"ok": True})
+
+    result = await strategy._execute_tool("get_system_status", {}, state, ctx)
+
+    assert result == {"ok": True}
+    deps = strategy._tool_registry.execute.await_args.kwargs["deps"]
+    assert deps.connector is connector

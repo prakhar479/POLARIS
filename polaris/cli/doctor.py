@@ -142,6 +142,93 @@ def _extract_connectors(raw_config: Dict[str, Any]) -> Set[str]:
     return connector_types
 
 
+def _normalize_tools_block(raw_tools: Any) -> List[str]:
+    """Normalize tools block into a list of tool names."""
+    if isinstance(raw_tools, list):
+        return [tool for tool in raw_tools if isinstance(tool, str)]
+    if isinstance(raw_tools, dict):
+        enabled = raw_tools.get("enabled")
+        if isinstance(enabled, list):
+            return [tool for tool in enabled if isinstance(tool, str)]
+    return []
+
+
+def _extract_tooling_requirements(raw_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract strategy tool/native-tool requirements for diagnostics."""
+    requirements: List[Dict[str, Any]] = []
+
+    def walk_strategy(path: str, strategy_type: str, params: Dict[str, Any]) -> None:
+        if strategy_type in {"agentic_llm", "thread_agentic"}:
+            requirements.append(
+                {
+                    "path": path,
+                    "strategy_type": strategy_type,
+                    "provider": _normalize_provider(params.get("provider", "google")),
+                    "tools": _normalize_tools_block(params.get("tools")),
+                    "native_tools": params.get("native_tools"),
+                    "generate_mode": params.get("generate_mode"),
+                }
+            )
+            return
+
+        if strategy_type == "multi_agent":
+            requirements.append(
+                {
+                    "path": path,
+                    "strategy_type": strategy_type,
+                    "provider": _normalize_provider(params.get("provider", "google")),
+                    "tools": _normalize_tools_block(params.get("tools")),
+                    "native_tools": None,
+                    "generate_mode": params.get("generate_mode"),
+                }
+            )
+            shared_provider = _normalize_provider(params.get("provider", "google"))
+            for role in ("diagnostician", "planner", "validator"):
+                role_cfg = params.get(role)
+                if not isinstance(role_cfg, dict):
+                    continue
+                requirements.append(
+                    {
+                        "path": f"{path}.{role}",
+                        "strategy_type": f"multi_agent.{role}",
+                        "provider": _normalize_provider(role_cfg.get("provider", shared_provider)),
+                        "tools": _normalize_tools_block(role_cfg.get("tools")),
+                        "native_tools": None,
+                        "generate_mode": role_cfg.get("generate_mode", params.get("generate_mode")),
+                    }
+                )
+            return
+
+        if strategy_type == "hybrid":
+            sub_defs = params.get("strategies", [])
+            if not isinstance(sub_defs, list):
+                return
+            for index, sub in enumerate(sub_defs):
+                if not isinstance(sub, dict):
+                    continue
+                sub_type = str(sub.get("type", "")).lower()
+                sub_params = sub.get("params")
+                if not isinstance(sub_params, dict):
+                    continue
+                walk_strategy(
+                    path=f"{path}.strategies[{index}].params",
+                    strategy_type=sub_type,
+                    params=sub_params,
+                )
+
+    strategy = raw_config.get("strategy")
+    if not isinstance(strategy, dict):
+        return requirements
+
+    strategy_type = str(strategy.get("type", "threshold")).lower()
+    params = strategy.get("params")
+    if not isinstance(params, dict):
+        params = {}
+
+    walk_strategy("strategy.params", strategy_type, params)
+    return requirements
+
+
 def _find_legacy_strategy_schema_paths(raw_config: Dict[str, Any]) -> List[str]:
     """Return paths that still use deprecated type-keyed strategy blocks."""
     paths: List[str] = []
@@ -424,6 +511,123 @@ def _diagnose_dependencies(
                 )
 
 
+def _diagnose_tooling(raw_config: Dict[str, Any], diagnostics: List[Diagnostic]) -> None:
+    """Diagnose tool-name validity and native-tool/provider compatibility."""
+    requirements = _extract_tooling_requirements(raw_config)
+    if not requirements:
+        diagnostics.append(
+            Diagnostic(
+                "OK",
+                "tooling",
+                "No tool-using strategy configuration detected",
+            )
+        )
+        return
+
+    try:
+        from polaris.tools import registered_tool_types
+
+        known_tools = {name for name in registered_tool_types() if isinstance(name, str)}
+    except Exception:
+        known_tools = set()
+
+    for requirement in requirements:
+        path = requirement["path"]
+        tools = requirement.get("tools") or []
+
+        if tools and known_tools:
+            unknown = sorted({tool for tool in tools if tool not in known_tools})
+            if unknown:
+                diagnostics.append(
+                    Diagnostic(
+                        "WARN",
+                        "tooling",
+                        f"{path}.tools references unknown tool names: {', '.join(unknown)}",
+                    )
+                )
+            else:
+                diagnostics.append(
+                    Diagnostic(
+                        "OK",
+                        "tooling",
+                        f"{path}.tools resolved against builtin tool registry",
+                    )
+                )
+
+        native_tools = requirement.get("native_tools")
+        if native_tools is None:
+            continue
+
+        provider = str(requirement.get("provider", "google")).lower()
+        generate_mode = str(requirement.get("generate_mode", "openai_compat")).lower()
+
+        if provider == "ollama" and generate_mode == "native":
+            diagnostics.append(
+                Diagnostic(
+                    "FAIL",
+                    "tooling",
+                    f"{path}: provider=ollama with generate_mode=native does not support native tool calling",
+                )
+            )
+
+        if not isinstance(native_tools, list):
+            diagnostics.append(
+                Diagnostic(
+                    "FAIL",
+                    "tooling",
+                    f"{path}.native_tools must be a list",
+                )
+            )
+            continue
+
+        function_names: List[str] = []
+        malformed = 0
+        for item in native_tools:
+            if not isinstance(item, dict):
+                malformed += 1
+                continue
+            fn = item.get("function")
+            if not isinstance(fn, dict):
+                malformed += 1
+                continue
+            name = fn.get("name")
+            if isinstance(name, str) and name.strip():
+                function_names.append(name.strip())
+            else:
+                malformed += 1
+
+        if malformed:
+            diagnostics.append(
+                Diagnostic(
+                    "WARN",
+                    "tooling",
+                    f"{path}.native_tools contains {malformed} malformed function entries",
+                )
+            )
+
+        if function_names and tools and known_tools:
+            native_polaris_tools = sorted(
+                {name for name in function_names if name in known_tools and name not in set(tools)}
+            )
+            if native_polaris_tools:
+                diagnostics.append(
+                    Diagnostic(
+                        "WARN",
+                        "tooling",
+                        f"{path}.native_tools includes Polaris tool(s) not enabled under tools: "
+                        f"{', '.join(native_polaris_tools)}",
+                    )
+                )
+
+        diagnostics.append(
+            Diagnostic(
+                "OK",
+                "tooling",
+                f"{path}.native_tools parsed ({len(function_names)} function definition(s))",
+            )
+        )
+
+
 def run_doctor(config_path: str) -> List[Diagnostic]:
     """Run all doctor diagnostics and return findings."""
     diagnostics: List[Diagnostic] = []
@@ -448,6 +652,7 @@ def run_doctor(config_path: str) -> List[Diagnostic]:
     raw_config = _diagnose_config(config_path, diagnostics)
     if isinstance(raw_config, dict):
         _diagnose_dependencies(raw_config, diagnostics)
+        _diagnose_tooling(raw_config, diagnostics)
 
     return diagnostics
 

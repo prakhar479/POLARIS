@@ -166,7 +166,7 @@ CLI options override config file settings.
 Polaris supports multiple LLM-powered strategies:
 
 - `llm_reasoning`: Single-shot LLM decision-making with reasoning
-- `agentic_llm`: Iterative tool-using loop where the LLM calls built-in tools (metrics, history, predictions)
+- `agentic_llm`: Iterative tool-using loop where the LLM calls registered tools (built-ins by default; extensible via tool factories)
 - `thread_agentic`: Recursive THREAD-style join-synchronized reasoning with dynamic child-thread spawning
 - `multi_agent`: Committee of three specialized agents (Diagnostician → Planner → SafetyValidator); each agent can use its own LLM provider, temperature, and prompt
 - `hybrid`: Combine any strategies (including LLM-based ones) with configurable selection mode
@@ -214,6 +214,8 @@ strategy:
     provider: google   # or "openai"/"openrouter"/"groq"/"ollama"
     steps_limit: 3
     temperature: 0.1
+    max_tool_result_chars: 1200
+    native_tools_unsupported_policy: skip_cycle   # skip_cycle | json_fallback | strict_fail
     tools:
       enabled:
         - get_recent_states
@@ -255,6 +257,8 @@ For `llm_reasoning`, `agentic_llm`, `thread_agentic`, and `multi_agent`, specify
 For `hybrid`, each sub-strategy config lives under `strategy.params.strategies[].params` and can set its own provider.
 
 The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
+Tool names configured under `strategy.params.tools` are validated against the registered tool factory names.
+When `strategy.params.native_tools` references a Polaris tool name, that tool must also be enabled in `strategy.params.tools`.
 
 ## Architecture
 
@@ -306,7 +310,32 @@ class MyStrategy(AdaptationStrategy):
         return {...}
 ```
 
-### 3. Swap Any Component
+### 3. Custom Tool
+
+Register a custom tool so it can be enabled in strategy config:
+
+```python
+from polaris.tools import register_tool_factory
+from polaris.tools.base import Tool
+
+
+class MyTool(Tool):
+    @property
+    def name(self) -> str:
+        return "my_custom_tool"
+
+    @property
+    def description(self) -> str:
+        return "Example custom tool"
+
+    async def execute(self, args, state, context, deps):
+        return {"ok": True}
+
+
+register_tool_factory("my_custom_tool", MyTool)
+```
+
+### 4. Swap Any Component
 
 ```python
 polaris = Polaris(

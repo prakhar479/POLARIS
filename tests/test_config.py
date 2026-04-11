@@ -67,6 +67,48 @@ def test_strategy_config_thread_phi_mode_validation():
         StrategyConfig(type="thread_agentic", params={"phi_mode": "invalid_mode"})
 
 
+def test_strategy_config_agentic_native_policy_validation():
+    with pytest.raises(ValueError, match="native_tools_unsupported_policy"):
+        StrategyConfig(
+            type="agentic_llm",
+            params={"native_tools_unsupported_policy": "unsupported"},
+        )
+
+
+def test_strategy_config_agentic_tool_payload_bound_validation():
+    with pytest.raises(ValueError, match="max_tool_result_chars"):
+        StrategyConfig(type="agentic_llm", params={"max_tool_result_chars": 0})
+
+
+def test_strategy_config_multi_agent_tool_payload_bound_validation():
+    with pytest.raises(ValueError, match="max_tool_result_chars"):
+        StrategyConfig(type="multi_agent", params={"max_tool_result_chars": 0})
+
+
+def test_strategy_config_rejects_unknown_tool_names_semantically():
+    with pytest.raises(ValueError, match="unknown tool name"):
+        StrategyConfig(
+            type="agentic_llm",
+            params={"tools": {"enabled": ["definitely_not_a_tool"]}},
+        )
+
+
+def test_strategy_config_native_tools_known_tool_must_be_enabled():
+    with pytest.raises(ValueError, match="not enabled under strategy.params.tools"):
+        StrategyConfig(
+            type="agentic_llm",
+            params={
+                "tools": {"enabled": ["get_action_history"]},
+                "native_tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "get_recent_states"},
+                    }
+                ],
+            },
+        )
+
+
 def test_strategy_config_tools_shape_validation():
     with pytest.raises(ValueError, match="enabled must be a list"):
         StrategyConfig(type="multi_agent", params={"tools": {"enabled": "tool-a"}})

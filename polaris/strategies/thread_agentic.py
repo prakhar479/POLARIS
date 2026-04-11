@@ -41,7 +41,7 @@ from polaris.strategies.utils import (
     format_system_state_for_llm,
     parse_strict_json,
 )
-from polaris.tools import ToolDependencies, ToolRegistry, get_builtin_tools
+from polaris.tools import ToolDependencies, ToolRegistry, build_registered_tools
 
 
 class ActionBlock(BaseModel):
@@ -210,13 +210,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         self._action_resolver = ConnectorActionResolver()
 
         self._tool_registry = ToolRegistry(metrics=self.metrics)
-        all_tools = get_builtin_tools()
-        if self.allowed_tools:
-            for tool in all_tools:
-                if tool.name in self.allowed_tools:
-                    self._tool_registry.register(tool)
-        else:
-            self._tool_registry.register_all(all_tools)
+        self._rebuild_tool_registry()
 
         self._adaptation_count = 0
         self._success_count = 0
@@ -458,10 +452,11 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 runtime.tool_calls += 1
                 compact_result = self._compact_json(tool_result, self.max_tool_result_chars)
                 transcript_lines.append(f"tool {tool}: {compact_result}")
+                tool_msg = self._build_tool_result_message(tool, tool_result)
                 messages.append(
                     LLMMessage(
                         role="user",
-                        content=json.dumps({"tool_result": {"tool": tool, "data": tool_result}}),
+                        content=tool_msg,
                     )
                 )
                 continue
@@ -647,6 +642,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         deps = ToolDependencies(
             knowledge_store=self.knowledge_store,
             world_model=self.world_model,
+            connector=self._extract_connector_from_context(context),
             system_contract=context.system_contract,
             logger=self.logger,
             metrics=self.metrics,
@@ -798,12 +794,51 @@ class ThreadAgenticStrategy(AdaptationStrategy):
     def _compact_json(self, value: Any, max_chars: int) -> str:
         """Serialize and truncate payload for bounded context growth."""
         try:
-            text = json.dumps(value, ensure_ascii=True)
+            text = json.dumps(value, ensure_ascii=True, default=str)
         except Exception:
             text = str(value)
         if len(text) <= max_chars:
             return text
         return text[:max_chars] + "..."
+
+    def _rebuild_tool_registry(self) -> None:
+        """Rebuild tool registry from globally registered tool factories."""
+        self._tool_registry = ToolRegistry(metrics=self.metrics)
+        allowed = self.allowed_tools if self.allowed_tools else None
+        self._tool_registry.register_all(build_registered_tools(allowed))
+
+    def _extract_connector_from_context(self, context: AdaptationContext) -> Any:
+        """Extract active connector from adaptation context metadata if available."""
+        metadata = context.metadata
+        if not isinstance(metadata, dict):
+            return None
+        return metadata.get("connector")
+
+    def _bounded_tool_data(self, tool_result: Dict[str, Any]) -> Any:
+        """Return either original tool result or a truncated representation."""
+        try:
+            full_text = json.dumps(tool_result, ensure_ascii=True, default=str)
+        except Exception:
+            full_text = str(tool_result)
+
+        if len(full_text) <= self.max_tool_result_chars:
+            return tool_result
+
+        serialized = full_text[: self.max_tool_result_chars] + "..."
+
+        return {
+            "_truncated": True,
+            "preview": serialized,
+            "original_chars": len(full_text),
+        }
+
+    def _build_tool_result_message(self, tool_name: str, tool_result: Dict[str, Any]) -> str:
+        """Build bounded tool-result payload for model context."""
+        bounded = self._bounded_tool_data(tool_result)
+        return json.dumps(
+            {"tool_result": {"tool": tool_name, "data": bounded}},
+            ensure_ascii=True,
+        )
 
     def _parse_json_object(self, content: str) -> Dict[str, Any]:
         """Parse strict JSON object from model output."""
@@ -926,14 +961,16 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         if "per_system_prompts" in config and isinstance(config["per_system_prompts"], dict):
             self._per_system_prompts = config["per_system_prompts"]
 
-        if "tools" in config and isinstance(config["tools"], dict):
-            enabled = config["tools"].get("enabled")
-            if isinstance(enabled, list):
-                self.allowed_tools = enabled
-                self._tool_registry = ToolRegistry(metrics=self.metrics)
-                for tool in get_builtin_tools():
-                    if tool.name in self.allowed_tools:
-                        self._tool_registry.register(tool)
+        if "tools" in config:
+            tools_cfg = config["tools"]
+            if isinstance(tools_cfg, list):
+                self.allowed_tools = tools_cfg
+                self._rebuild_tool_registry()
+            elif isinstance(tools_cfg, dict):
+                enabled = tools_cfg.get("enabled")
+                if isinstance(enabled, list):
+                    self.allowed_tools = enabled
+                    self._rebuild_tool_registry()
 
         resil = config.get("resilience")
         if resil and hasattr(self.llm, "update_resilience"):

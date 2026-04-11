@@ -133,7 +133,7 @@ monitoring:
 # Managed systems
 systems:
   - id: "system-name"
-    connector_type: "swim" # Must match a registered connector factory (built-ins: swim, wildfire)
+    connector_type: "swim" # Must match a registered connector factory (built-ins: swim, wildfire, suave, kubernetes)
     enabled: true
     connection:
       host: "localhost"
@@ -283,12 +283,20 @@ observability:
       meta_learner: true
 ```
 
-## Factory-based Registration (Connectors & Strategies)
+## Factory-based Registration (Connectors, Strategies & Tools)
 
-Polaris uses factory registries to map config type strings (for `systems[].connector_type` and `strategy.type`) to concrete implementations.
+Polaris uses registries to map config identifiers to concrete implementations:
 
-- Built-in connector and strategy factories are registered at import-time in `polaris.core.factories`.
-- Configuration validation uses the _registered_ types, so custom types must be registered before loading config.
+- `systems[].connector_type` -> connector factory
+- `strategy.type` -> strategy factory
+- `strategy.params.tools` / per-agent `tools` -> tool factories
+
+Built-ins are registered lazily from:
+
+- `polaris.core.factories` (connectors + strategies)
+- `polaris.tools.factories` (tools)
+
+Configuration validation uses the registered types and tool names, so custom registrations should happen before loading config.
 
 ### Registering a Custom Connector Factory
 
@@ -332,6 +340,40 @@ Then use it in YAML:
 ```yaml
 strategy:
   type: "my_strategy"
+```
+
+### Registering a Custom Tool Factory
+
+```python
+from polaris.tools import register_tool_factory
+from polaris.tools.base import Tool
+
+
+class MyTool(Tool):
+    @property
+    def name(self) -> str:
+        return "my_custom_tool"
+
+    @property
+    def description(self) -> str:
+        return "Example custom tool"
+
+    async def execute(self, args, state, context, deps):
+        return {"ok": True}
+
+
+register_tool_factory("my_custom_tool", MyTool)
+```
+
+Then enable it in strategy config:
+
+```yaml
+strategy:
+  type: "agentic_llm"
+  params:
+    tools:
+      enabled:
+        - my_custom_tool
 ```
 
 ## Connectors
@@ -470,7 +512,7 @@ The framework validates configuration at startup:
 
 - `id` cannot be empty
 - `connector_type` must be one of the types registered in the connector factory registry
-  (built-ins: `"swim"`, `"wildfire"`, `"kubernetes"`)
+  (built-ins: `"swim"`, `"wildfire"`, `"suave"`, `"kubernetes"`)
 - `port` must be a valid integer between 1-65535 (for connectors that use it)
 
 ### Strategy Configuration Validation
@@ -1001,7 +1043,7 @@ observability:
 - [ ] At least one system defined in `systems` array
 - [ ] Each system has required fields:
   - [ ] `id`: Unique system identifier (e.g., "swim", "wildfire-sim")
-  - [ ] `connector_type`: "swim" or "wildfire"
+  - [ ] `connector_type`: one of "swim", "wildfire", "suave", "kubernetes" (or another registered connector type)
   - [ ] `enabled`: true or false (boolean)
   - [ ] `connection`: Object with connector-specific params
 
@@ -1054,14 +1096,17 @@ observability:
 
 - [ ] `strategy.params.provider`: one of "google", "openai", "openrouter", "groq", "ollama"
 - [ ] `strategy.params.steps_limit`: Positive integer (default: 3)
-- [ ] `strategy.params.temperature`: Float between 0.0-1.0
+- [ ] `strategy.params.temperature`: Float between 0.0-2.0
 - [ ] `strategy.params.system_prompt`: Optional system prompt template
 - [ ] `strategy.params.per_system_prompts`: Optional per-system prompt overrides
-- [ ] `strategy.params.tools.enabled`: Array of tool names (non-empty)
+- [ ] `strategy.params.tools.enabled`: Array of registered tool names (non-empty)
 - [ ] `strategy.params.native_tools`: Optional OpenAI-format function definitions list
+- [ ] `strategy.params.max_tool_result_chars`: Integer >= 1
+- [ ] `strategy.params.native_tools_unsupported_policy`: one of `skip_cycle`, `json_fallback`, `strict_fail`
 - [ ] Native tools are provider-agnostic in config; each provider converts internally
 - [ ] If native tool response has `tool_calls=None`, strategy falls back to JSON text parsing
-- [ ] If provider does not implement native tools (`NotImplementedError`), cycle is skipped
+- [ ] If a native tool name matches a registered Polaris tool, it must also be enabled under `strategy.params.tools`
+- [ ] If provider does not implement native tools (`NotImplementedError`), behavior follows `native_tools_unsupported_policy`
 
 **THREAD Agentic Strategy:**
 
@@ -1070,7 +1115,8 @@ observability:
 - [ ] `strategy.params.max_thread_depth`: Non-negative integer (default: 3)
 - [ ] `strategy.params.max_total_threads`: Positive integer (default: 16)
 - [ ] `strategy.params.child_timeout_seconds`: Positive number
-- [ ] `strategy.params.tools.enabled`: Array of tool names (non-empty)
+- [ ] `strategy.params.max_tool_result_chars`: Integer >= 1
+- [ ] `strategy.params.tools.enabled`: Array of registered tool names (non-empty)
 
 #### 4. World Model Configuration (Optional)
 
@@ -1150,7 +1196,7 @@ Configure the managed systems to monitor and adapt.
 | Field                                      | Type    | Default       | Description                                     |
 | ------------------------------------------ | ------- | ------------- | ----------------------------------------------- |
 | `systems[].id`                             | string  | -             | Unique system identifier (required)             |
-| `systems[].connector_type`                 | string  | -             | Connector type: `swim` or `wildfire` (required) |
+| `systems[].connector_type`                 | string  | -             | Registered connector type (built-ins: `swim`, `wildfire`, `suave`, `kubernetes`) |
 | `systems[].enabled`                        | boolean | `true`        | Enable/disable monitoring for this system       |
 | `systems[].connection.host`                | string  | `localhost`   | Server host name or IP (SWIM/Wildfire)          |
 | `systems[].connection.port`                | integer | `4242`/`5000` | Server port (1-65535)                           |
@@ -1204,23 +1250,27 @@ Configure the managed systems to monitor and adapt.
 
 **Agentic LLM Strategy Parameters:**
 
-| Field                                | Type    | Default  | Description                                                               |
-| ------------------------------------ | ------- | -------- | ------------------------------------------------------------------------- |
-| `strategy.params.provider`           | string  | `google` | LLM provider: google/openai/openrouter/groq/ollama                        |
-| `strategy.params.steps_limit`        | integer | `3`      | Maximum reasoning steps                                                   |
-| `strategy.params.temperature`        | float   | `0.1`    | Model creativity                                                          |
-| `strategy.params.system_prompt`      | string  | -        | Custom system prompt template (supports `{system_id}`, `{allowed_tools}`) |
-| `strategy.params.per_system_prompts` | object  | -        | Per-system prompt overrides keyed by `systems[].id`                       |
-| `strategy.params.tools.enabled`      | array   | -        | Enabled tools array                                                       |
-| `strategy.params.native_tools`       | array   | -        | Optional OpenAI-format native tool definitions (`type:function`)          |
+| Field                                            | Type         | Default      | Description                                                               |
+| ------------------------------------------------ | ------------ | ------------ | ------------------------------------------------------------------------- |
+| `strategy.params.provider`                       | string       | `google`     | LLM provider: google/openai/openrouter/groq/ollama                        |
+| `strategy.params.steps_limit`                    | integer      | `3`          | Maximum reasoning steps                                                   |
+| `strategy.params.temperature`                    | float        | `0.1`        | Model creativity                                                          |
+| `strategy.params.system_prompt`                  | string       | -            | Custom system prompt template (supports `{system_id}`, `{allowed_tools}`) |
+| `strategy.params.per_system_prompts`             | object       | -            | Per-system prompt overrides keyed by `systems[].id`                       |
+| `strategy.params.tools`                          | object/array | -            | Tool allow-list (`{enabled: [...]}` or direct list), validated against registered tool names |
+| `strategy.params.max_tool_result_chars`          | integer      | `1200`       | Max serialized tool payload injected into model context                    |
+| `strategy.params.native_tools`                   | array        | -            | Optional OpenAI-format native tool definitions (`type:function`)          |
+| `strategy.params.native_tools_unsupported_policy` | string      | `skip_cycle` | Behavior when provider lacks native tools: `skip_cycle`, `json_fallback`, `strict_fail` |
 
 Notes for `strategy.params.native_tools`:
 
 - The YAML shape stays OpenAI-compatible regardless of provider.
 - Providers (`google`, `openai`, `openrouter`, `groq`, `ollama`) convert internally to native tool-call formats.
+- Configured tool names in `strategy.params.tools` are validated against the registered tool factory names.
+- If a `native_tools[].function.name` matches a registered Polaris tool, it must also be enabled in `strategy.params.tools`.
 - Strategy behavior with native tools:
   - `tool_calls` is `None` -> warning + JSON text fallback parsing.
-  - provider raises `NotImplementedError` -> error + skip current cycle.
+  - provider raises `NotImplementedError` -> follows `native_tools_unsupported_policy`.
 
 **THREAD Agentic Strategy Parameters:**
 
@@ -1233,11 +1283,12 @@ Notes for `strategy.params.native_tools`:
 | `strategy.params.max_total_threads`     | integer | `16`        | Global thread budget per assessment                               |
 | `strategy.params.child_timeout_seconds` | float   | `20.0`      | Timeout for each spawned child thread                             |
 | `strategy.params.max_repeated_spawns`   | integer | `2`         | Maximum repeated identical spawn signatures                       |
+| `strategy.params.max_tool_result_chars` | integer | `1200`      | Max serialized tool payload injected into model context           |
 | `strategy.params.phi_mode`              | string  | `last_line` | Parent-to-child context mapping mode (`last_line`/`recent_lines`) |
 | `strategy.params.phi_max_lines`         | integer | `6`         | Number of parent lines used when `phi_mode=recent_lines`          |
 | `strategy.params.listen_token`          | string  | `=>`        | Child feedback framing prefix                                     |
 | `strategy.params.return_token`          | string  | `<=`        | Child feedback framing suffix                                     |
-| `strategy.params.tools.enabled`         | array   | -           | Enabled tools array                                               |
+| `strategy.params.tools.enabled`         | array   | -           | Enabled tools array (validated against registered tool names)     |
 
 **Multi-Agent Strategy Parameters:**
 
@@ -1247,6 +1298,8 @@ Notes for `strategy.params.native_tools`:
 | `strategy.params.temperature`                 | float   | `0.1`              | Shared default sampling temperature                     |
 | `strategy.params.steps_limit`                 | integer | `3`                | Shared default max reasoning steps per agent stage      |
 | `strategy.params.system_description`          | string  | `Managed system`   | System description embedded in default agent prompts    |
+| `strategy.params.max_tool_result_chars`       | integer | `1200`             | Max serialized tool payload injected into model context |
+| `strategy.params.tools`                       | object/array | -             | Shared tool allow-list (`{enabled: [...]}` or direct list) |
 | `strategy.params.resilience.*`                | object  | -                  | Shared LLM resilience settings (see resilience section) |
 | `strategy.params.diagnostician`               | object  | -                  | Per-agent override for Diagnostician role               |
 | `strategy.params.diagnostician.provider`      | string  | inherits shared    | LLM provider for the Diagnostician agent                |
@@ -1254,7 +1307,7 @@ Notes for `strategy.params.native_tools`:
 | `strategy.params.diagnostician.system_prompt` | string  | built-in           | Custom system prompt for Diagnostician                  |
 | `strategy.params.diagnostician.max_tokens`    | integer | `1024`             | Max tokens for Diagnostician responses                  |
 | `strategy.params.diagnostician.steps_limit`   | integer | inherits shared    | Max reasoning steps for Diagnostician                   |
-| `strategy.params.diagnostician.tools`         | array   | all built-in tools | Available tools for Diagnostician                       |
+| `strategy.params.diagnostician.tools`         | array   | inherits shared    | Available tools for Diagnostician                       |
 | `strategy.params.diagnostician.resilience.*`  | object  | inherits shared    | Per-agent LLM resilience override                       |
 | `strategy.params.planner`                     | object  | -                  | Per-agent override for Planner role                     |
 | `strategy.params.planner.provider`            | string  | inherits shared    | LLM provider for the Planner agent                      |
@@ -1262,7 +1315,7 @@ Notes for `strategy.params.native_tools`:
 | `strategy.params.planner.system_prompt`       | string  | built-in           | Custom system prompt for Planner                        |
 | `strategy.params.planner.max_tokens`          | integer | `1500`             | Max tokens for Planner responses                        |
 | `strategy.params.planner.steps_limit`         | integer | inherits shared    | Max reasoning steps for Planner                         |
-| `strategy.params.planner.tools`               | array   | all built-in tools | Available tools for Planner                             |
+| `strategy.params.planner.tools`               | array   | inherits shared    | Available tools for Planner                             |
 | `strategy.params.planner.resilience.*`        | object  | inherits shared    | Per-agent LLM resilience override                       |
 | `strategy.params.validator`                   | object  | -                  | Per-agent override for SafetyValidator role             |
 | `strategy.params.validator.provider`          | string  | inherits shared    | LLM provider for the SafetyValidator agent              |
@@ -1270,7 +1323,7 @@ Notes for `strategy.params.native_tools`:
 | `strategy.params.validator.system_prompt`     | string  | built-in           | Custom system prompt for SafetyValidator                |
 | `strategy.params.validator.max_tokens`        | integer | `1500`             | Max tokens for SafetyValidator responses                |
 | `strategy.params.validator.steps_limit`       | integer | inherits shared    | Max reasoning steps for SafetyValidator                 |
-| `strategy.params.validator.tools`             | array   | all built-in tools | Available tools for SafetyValidator                     |
+| `strategy.params.validator.tools`             | array   | inherits shared    | Available tools for SafetyValidator                     |
 | `strategy.params.validator.resilience.*`      | object  | inherits shared    | Per-agent LLM resilience override                       |
 
 ### World Model & Knowledge Store

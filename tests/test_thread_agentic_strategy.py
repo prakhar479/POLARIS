@@ -150,3 +150,69 @@ async def test_thread_agentic_requires_contract(strategy, sample_state):
         StrictContractViolation, match="Missing connector-supported action contract"
     ):
         await strategy.assess(sample_state, context_without_contract)
+
+
+@pytest.mark.asyncio
+async def test_thread_agentic_tool_result_payload_is_bounded(
+    strategy, sample_state, sample_context
+):
+    strategy.steps_limit = 2
+    strategy.max_tool_result_chars = 100
+
+    captured_messages = []
+
+    async def _fake_generate(messages, **kwargs):
+        _ = kwargs
+        captured_messages.append(messages)
+        if len(captured_messages) == 1:
+            return MockLLMResponse(json.dumps({"tool": "get_recent_states", "args": {}}))
+        return MockLLMResponse(
+            json.dumps(
+                {
+                    "final": {
+                        "needs_adaptation": False,
+                        "reasoning": "done",
+                        "actions": [],
+                    }
+                }
+            )
+        )
+
+    strategy.llm.generate = AsyncMock(side_effect=_fake_generate)
+    strategy._tool_registry.execute = AsyncMock(return_value={"blob": "x" * 5000})
+
+    actions = await strategy.assess(sample_state, sample_context)
+
+    assert actions == []
+    assert len(captured_messages) == 2
+    payload = json.loads(captured_messages[1][-1].content)
+    tool_data = payload["tool_result"]["data"]
+    assert tool_data["_truncated"] is True
+    assert tool_data["original_chars"] > 100
+
+
+@pytest.mark.asyncio
+async def test_thread_agentic_execute_tool_injects_connector(sample_state, sample_context):
+    llm = Mock()
+    llm.generate = AsyncMock()
+    strategy = ThreadAgenticStrategy(llm_client=llm, knowledge_store=Mock(), world_model=Mock())
+
+    connector = object()
+    context_with_connector = AdaptationContext(
+        system_id=sample_context.system_id,
+        historical_states=sample_context.historical_states,
+        system_contract=sample_context.system_contract,
+        metadata={"connector": connector},
+    )
+    strategy._tool_registry.execute = AsyncMock(return_value={"ok": True})
+
+    result = await strategy._execute_tool(
+        "get_recent_states",
+        {},
+        sample_state,
+        context_with_connector,
+    )
+
+    assert result == {"ok": True}
+    deps = strategy._tool_registry.execute.await_args.kwargs["deps"]
+    assert deps.connector is connector

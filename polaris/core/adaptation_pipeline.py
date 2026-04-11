@@ -114,6 +114,7 @@ class AdaptationPipeline:
                 await self._world_model.get_insights() if self._world_model else None
             ),
             system_contract=system_contract,
+            metadata={"connector": connector},
         )
 
         # Assess

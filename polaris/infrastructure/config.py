@@ -15,6 +15,8 @@ from polaris.core.factories import (
     registered_strategy_types,
 )
 from polaris.infrastructure.constants import MAX_PORT, MIN_PORT
+from polaris.strategies.utils import DEFAULT_ALLOWED_TOOLS
+from polaris.tools import registered_tool_types
 
 _SUPPORTED_LLM_PROVIDERS = {"google", "openai", "openrouter", "groq", "ollama"}
 
@@ -132,9 +134,25 @@ class StrategyConfig(BaseModel):
                 self.params.get("decision_cooldown_seconds"),
                 minimum=0.0,
             )
+            self._validate_int_min(
+                "max_tool_result_chars",
+                self.params.get("max_tool_result_chars"),
+                minimum=1,
+            )
+            self._validate_choice(
+                "native_tools_unsupported_policy",
+                self.params.get("native_tools_unsupported_policy"),
+                {"skip_cycle", "json_fallback", "strict_fail"},
+            )
             self._validate_tools_block(self.params.get("tools"), label="agentic_llm.tools")
+            enabled_tools = self._effective_enabled_tools(
+                self.params.get("tools"),
+                default_tools=DEFAULT_ALLOWED_TOOLS,
+            )
             self._validate_native_tools_block(
-                self.params.get("native_tools"), label="agentic_llm.native_tools"
+                self.params.get("native_tools"),
+                label="agentic_llm.native_tools",
+                enabled_tools=enabled_tools,
             )
         elif self.type == "thread_agentic":
             self._validate_llm_params(self.params, label="thread_agentic")
@@ -180,6 +198,11 @@ class StrategyConfig(BaseModel):
         elif self.type == "multi_agent":
             self._validate_llm_params(self.params, label="multi_agent")
             self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
+            self._validate_int_min(
+                "max_tool_result_chars",
+                self.params.get("max_tool_result_chars"),
+                minimum=1,
+            )
             self._validate_tools_block(self.params.get("tools"), label="multi_agent.tools")
 
             for role in ("diagnostician", "planner", "validator"):
@@ -315,10 +338,16 @@ class StrategyConfig(BaseModel):
         """Validate tools config shape used by LLM-backed strategies."""
         if tools is None:
             return
+
+        known_tools = self._known_tool_names()
+
         if isinstance(tools, list):
+            normalized: List[str] = []
             for tool in tools:
                 if not isinstance(tool, str) or not tool.strip():
                     raise ValueError(f"{label} list entries must be non-empty strings")
+                normalized.append(tool.strip())
+            self._validate_known_tools(label, normalized, known_tools)
             return
         if isinstance(tools, dict):
             enabled = tools.get("enabled")
@@ -326,9 +355,12 @@ class StrategyConfig(BaseModel):
                 return
             if not isinstance(enabled, list):
                 raise ValueError(f"{label}.enabled must be a list of strings")
+            normalized = []
             for tool in enabled:
                 if not isinstance(tool, str) or not tool.strip():
                     raise ValueError(f"{label}.enabled entries must be non-empty strings")
+                normalized.append(tool.strip())
+            self._validate_known_tools(f"{label}.enabled", normalized, known_tools)
             return
         raise ValueError(f"{label} must be either a list of strings or a dictionary")
 
@@ -346,7 +378,12 @@ class StrategyConfig(BaseModel):
         if not isinstance(value, (int, float)) or float(value) < minimum:
             raise ValueError(f"{field_name} must be a number >= {minimum}")
 
-    def _validate_native_tools_block(self, native_tools: Any, label: str) -> None:
+    def _validate_native_tools_block(
+        self,
+        native_tools: Any,
+        label: str,
+        enabled_tools: Optional[set[str]] = None,
+    ) -> None:
         """Validate an OpenAI-format native tool definitions list.
 
         Each entry must follow the OpenAI function-calling schema::
@@ -361,6 +398,8 @@ class StrategyConfig(BaseModel):
             return
         if not isinstance(native_tools, list):
             raise ValueError(f"{label} must be a list of function definition dicts")
+
+        known_tools = self._known_tool_names()
         for i, tool in enumerate(native_tools):
             if not isinstance(tool, dict):
                 raise ValueError(f"{label}[{i}] must be a dict")
@@ -373,11 +412,65 @@ class StrategyConfig(BaseModel):
             fn_name = fn.get("name")
             if not isinstance(fn_name, str) or not fn_name.strip():
                 raise ValueError(f"{label}[{i}].function.name must be a non-empty string")
+            normalized_name = fn_name.strip()
             params = fn.get("parameters")
             if params is not None and not isinstance(params, dict):
                 raise ValueError(
                     f"{label}[{i}].function.parameters must be a dict (JSON Schema object)"
                 )
+
+            if (
+                enabled_tools is not None
+                and normalized_name in known_tools
+                and normalized_name not in enabled_tools
+            ):
+                raise ValueError(
+                    f"{label}[{i}].function.name references Polaris tool '{normalized_name}' "
+                    "that is not enabled under strategy.params.tools"
+                )
+
+    def _validate_choice(
+        self,
+        field_name: str,
+        value: Any,
+        supported_values: set[str],
+    ) -> None:
+        """Validate optional string field against supported values."""
+        if value is None:
+            return
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must be one of: {sorted(supported_values)}")
+        normalized = value.strip().lower()
+        if normalized not in supported_values:
+            raise ValueError(f"{field_name} must be one of: {sorted(supported_values)}")
+
+    def _known_tool_names(self) -> set[str]:
+        """Return currently registered tool names."""
+        try:
+            return {name for name in registered_tool_types() if isinstance(name, str)}
+        except Exception:
+            return set()
+
+    def _validate_known_tools(self, label: str, tools: List[str], known_tools: set[str]) -> None:
+        """Ensure configured tool names are known to the registry."""
+        if not known_tools:
+            return
+        unknown = sorted({tool for tool in tools if tool not in known_tools})
+        if unknown:
+            known = sorted(known_tools)
+            raise ValueError(
+                f"{label} contains unknown tool name(s): {unknown}. " f"Known tools: {known}"
+            )
+
+    def _effective_enabled_tools(self, tools: Any, default_tools: List[str]) -> set[str]:
+        """Resolve effective enabled tool names from tools block plus defaults."""
+        if isinstance(tools, list):
+            return {tool.strip() for tool in tools if isinstance(tool, str) and tool.strip()}
+        if isinstance(tools, dict):
+            enabled = tools.get("enabled")
+            if isinstance(enabled, list):
+                return {tool.strip() for tool in enabled if isinstance(tool, str) and tool.strip()}
+        return {tool.strip() for tool in default_tools if isinstance(tool, str) and tool.strip()}
 
 
 class PolarisConfig(BaseModel):

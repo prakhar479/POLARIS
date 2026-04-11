@@ -232,3 +232,66 @@ async def test_per_agent_llm_clients_used(
     assert planner_client.generate.call_count == 1
     assert validator_client.generate.call_count == 1
     assert shared_client.generate.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_agent_tool_result_payload_is_bounded(
+    mock_llm_client, mock_knowledge_store, mock_world_model, sample_state, sample_context
+):
+    captured_messages = []
+
+    async def _fake_generate(messages, **kwargs):
+        _ = kwargs
+        captured_messages.append(messages)
+        if len(captured_messages) == 1:
+            return MagicMock(content='{"tool": "get_recent_states", "args": {}}')
+        return _make_diag_resp(anomaly=False)
+
+    mock_llm_client.generate = AsyncMock(side_effect=_fake_generate)
+    strategy = MultiAgentStrategy(
+        llm_client=mock_llm_client,
+        knowledge_store=mock_knowledge_store,
+        world_model=mock_world_model,
+        max_tool_result_chars=100,
+    )
+    strategy._tool_registry.execute = AsyncMock(return_value={"blob": "x" * 5000})
+
+    actions = await strategy.assess(sample_state, sample_context)
+
+    assert actions == []
+    assert len(captured_messages) == 2
+    payload = json.loads(captured_messages[1][-1].content)
+    tool_data = payload["tool_result"]["data"]
+    assert tool_data["_truncated"] is True
+    assert tool_data["original_chars"] > 100
+
+
+@pytest.mark.asyncio
+async def test_multi_agent_injects_connector_from_context_metadata(
+    mock_llm_client, mock_knowledge_store, mock_world_model, sample_state, sample_context
+):
+    connector = object()
+    context_with_connector = AdaptationContext(
+        system_id=sample_context.system_id,
+        historical_states=sample_context.historical_states,
+        world_model_insights=sample_context.world_model_insights,
+        system_contract=sample_context.system_contract,
+        metadata={"connector": connector},
+    )
+
+    mock_llm_client.generate.side_effect = [
+        MagicMock(content='{"tool": "get_recent_states", "args": {}}'),
+        _make_diag_resp(anomaly=False),
+    ]
+    strategy = MultiAgentStrategy(
+        llm_client=mock_llm_client,
+        knowledge_store=mock_knowledge_store,
+        world_model=mock_world_model,
+    )
+    strategy._tool_registry.execute = AsyncMock(return_value={"ok": True})
+
+    actions = await strategy.assess(sample_state, context_with_connector)
+
+    assert actions == []
+    deps = strategy._tool_registry.execute.await_args.kwargs["deps"]
+    assert deps.connector is connector

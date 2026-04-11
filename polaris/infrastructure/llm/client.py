@@ -21,7 +21,7 @@ CANONICAL_LLM_PROVIDERS = {"google", "openai", "openrouter", "groq", "ollama"}
 try:
     import httpx
 except Exception:  # pragma: no cover
-    httpx = None  # type: ignore[assignment]
+    httpx = None
 
 
 @dataclass
