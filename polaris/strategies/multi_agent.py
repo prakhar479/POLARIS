@@ -46,10 +46,15 @@ from polaris.strategies.action_resolution import (
 )
 from polaris.strategies.utils import (
     DEFAULT_ALLOWED_TOOLS,
+    bounded_tool_data,
+    build_tool_result_message,
+    compact_json,
+    create_tool_registry,
+    extract_connector_from_context,
     format_system_state_for_llm,
     parse_strict_json,
 )
-from polaris.tools import ToolDependencies, ToolRegistry, build_registered_tools
+from polaris.tools import ToolDependencies, ToolRegistry
 
 # ---------------------------------------------------------------------------
 # Agent output models
@@ -793,48 +798,24 @@ class MultiAgentStrategy(AdaptationStrategy):
 
     def _rebuild_tool_registry(self) -> None:
         """Rebuild tool registry from globally registered tool factories."""
-        self._tool_registry = ToolRegistry(metrics=self.metrics)
-        self._tool_registry.register_all(build_registered_tools(self._registry_allowed_tools()))
+        self._tool_registry = create_tool_registry(self.metrics, self._registry_allowed_tools())
 
     def _extract_connector_from_context(self, context: AdaptationContext) -> Any:
         """Extract active connector from adaptation context metadata if available."""
-        metadata = context.metadata
-        if not isinstance(metadata, dict):
-            return None
-        return metadata.get("connector")
+        return extract_connector_from_context(context)
 
     def _compact_json(self, value: Any, max_chars: int) -> str:
         """Serialize payload to JSON and truncate to cap model context growth."""
-        try:
-            text = json.dumps(value, ensure_ascii=True, default=str)
-        except Exception:
-            text = str(value)
-        if len(text) <= max_chars:
-            return text
-        return text[:max_chars] + "..."
+        return compact_json(value, max_chars)
 
     def _bounded_tool_data(self, tool_result: Dict[str, Any]) -> Any:
         """Return either original tool result or a truncated representation."""
-        try:
-            full_text = json.dumps(tool_result, ensure_ascii=True, default=str)
-        except Exception:
-            full_text = str(tool_result)
-
-        if len(full_text) <= self.max_tool_result_chars:
-            return tool_result
-
-        serialized = full_text[: self.max_tool_result_chars] + "..."
-
-        return {
-            "_truncated": True,
-            "preview": serialized,
-            "original_chars": len(full_text),
-        }
+        return bounded_tool_data(tool_result, self.max_tool_result_chars)
 
     def _build_tool_result_message(self, tool_name: str, tool_result: Dict[str, Any]) -> str:
         """Build bounded tool-result payload for model context."""
-        bounded = self._bounded_tool_data(tool_result)
-        return json.dumps(
-            {"tool_result": {"tool": tool_name, "data": bounded}},
-            ensure_ascii=True,
+        return build_tool_result_message(
+            tool_name,
+            tool_result,
+            self.max_tool_result_chars,
         )

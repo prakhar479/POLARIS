@@ -121,159 +121,18 @@ class StrategyConfig(BaseModel):
         if not isinstance(self.params, dict):
             raise ValueError("strategy.params must be a dictionary")
 
-        if self.type == "threshold":
-            self._validate_threshold_params()
-        elif self.type == "llm_reasoning":
-            self._validate_llm_params(self.params, label="llm_reasoning")
-        elif self.type == "agentic_llm":
-            self._validate_llm_params(self.params, label="agentic_llm")
-            self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
-            self._validate_float_min(
-                "decision_cooldown_seconds",
-                self.params.get("decision_cooldown_seconds"),
-                minimum=0.0,
-            )
-            self._validate_int_min(
-                "max_tool_result_chars",
-                self.params.get("max_tool_result_chars"),
-                minimum=1,
-            )
-            self._validate_choice(
-                "native_tools_unsupported_policy",
-                self.params.get("native_tools_unsupported_policy"),
-                {"skip_cycle", "json_fallback", "strict_fail"},
-            )
-            self._validate_tools_block(self.params.get("tools"), label="agentic_llm.tools")
-            enabled_tools = self._effective_enabled_tools(
-                self.params.get("tools"),
-                default_tools=DEFAULT_ALLOWED_TOOLS,
-            )
-            self._validate_native_tools_block(
-                self.params.get("native_tools"),
-                label="agentic_llm.native_tools",
-                enabled_tools=enabled_tools,
-            )
-        elif self.type == "thread_agentic":
-            self._validate_llm_params(self.params, label="thread_agentic")
-            self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
-            self._validate_int_min(
-                "max_thread_depth", self.params.get("max_thread_depth"), minimum=0
-            )
-            self._validate_int_min(
-                "max_total_threads", self.params.get("max_total_threads"), minimum=1
-            )
-            self._validate_float_min(
-                "child_timeout_seconds",
-                self.params.get("child_timeout_seconds"),
-                minimum=0.000001,
-            )
-            self._validate_int_min(
-                "max_repeated_spawns", self.params.get("max_repeated_spawns"), minimum=1
-            )
-            self._validate_float_min(
-                "assessment_cooldown_seconds",
-                self.params.get("assessment_cooldown_seconds"),
-                minimum=0.0,
-            )
-            self._validate_int_min(
-                "max_tool_result_chars", self.params.get("max_tool_result_chars"), minimum=1
-            )
-            self._validate_int_min(
-                "max_child_payload_chars", self.params.get("max_child_payload_chars"), minimum=1
-            )
-            self._validate_int_min("phi_max_lines", self.params.get("phi_max_lines"), minimum=1)
-            self._validate_tools_block(self.params.get("tools"), label="thread_agentic.tools")
+        validators = {
+            "threshold": self._validate_threshold_params,
+            "llm_reasoning": self._validate_llm_reasoning_params,
+            "agentic_llm": self._validate_agentic_llm_params,
+            "thread_agentic": self._validate_thread_agentic_params,
+            "multi_agent": self._validate_multi_agent_params,
+            "hybrid": self._validate_hybrid_params,
+        }
 
-            phi_mode = self.params.get("phi_mode")
-            if phi_mode is not None and phi_mode not in {"last_line", "recent_lines"}:
-                raise ValueError("thread_agentic phi_mode must be 'last_line' or 'recent_lines'")
-
-            for token_name in ("listen_token", "return_token"):
-                token_value = self.params.get(token_name)
-                if token_value is not None and (
-                    not isinstance(token_value, str) or not token_value.strip()
-                ):
-                    raise ValueError(f"thread_agentic {token_name} must be a non-empty string")
-        elif self.type == "multi_agent":
-            self._validate_llm_params(self.params, label="multi_agent")
-            self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
-            self._validate_int_min(
-                "max_tool_result_chars",
-                self.params.get("max_tool_result_chars"),
-                minimum=1,
-            )
-            self._validate_tools_block(self.params.get("tools"), label="multi_agent.tools")
-
-            for role in ("diagnostician", "planner", "validator"):
-                role_cfg = self.params.get(role)
-                if role_cfg is None:
-                    continue
-                if not isinstance(role_cfg, dict):
-                    raise ValueError(f"multi_agent {role} config must be a dictionary")
-                self._validate_llm_params(role_cfg, label=f"multi_agent.{role}")
-                self._validate_int_min(
-                    f"multi_agent.{role}.steps_limit",
-                    role_cfg.get("steps_limit"),
-                    minimum=1,
-                )
-                self._validate_int_min(
-                    f"multi_agent.{role}.max_tokens",
-                    role_cfg.get("max_tokens"),
-                    minimum=1,
-                )
-                self._validate_tools_block(
-                    role_cfg.get("tools"),
-                    label=f"multi_agent.{role}.tools",
-                )
-
-        if self.type == "hybrid":
-            sel = self.params.get("selection_mode", "confidence")
-            if sel not in ["first", "priority", "confidence"]:
-                raise ValueError(
-                    "hybrid selection_mode must be one of: first, priority, confidence"
-                )
-            if "min_confidence" in self.params:
-                conf = self.params["min_confidence"]
-                if not isinstance(conf, (int, float)) or not 0.0 <= conf <= 1.0:
-                    raise ValueError("hybrid min_confidence must be a float between 0.0 and 1.0")
-
-            strategies = self.params.get("strategies")
-            if strategies is not None:
-                if not isinstance(strategies, list) or not strategies:
-                    raise ValueError("hybrid strategies must be a non-empty list")
-                for idx, strategy in enumerate(strategies):
-                    if not isinstance(strategy, dict):
-                        raise ValueError(f"hybrid strategies[{idx}] must be a dictionary")
-                    if "type" not in strategy:
-                        raise ValueError(f"hybrid strategies[{idx}] requires a 'type' field")
-                    strategy_type = strategy["type"]
-                    if not isinstance(strategy_type, str) or not strategy_type.strip():
-                        raise ValueError(
-                            f"hybrid strategies[{idx}].type must be a non-empty string"
-                        )
-
-                    unknown_keys = set(strategy.keys()) - {"type", "priority", "params"}
-                    if unknown_keys:
-                        unknown = sorted(unknown_keys)
-                        raise ValueError(
-                            f"hybrid strategies[{idx}] has unsupported keys: {unknown}. "
-                            "Use a 'params' block for sub-strategy configuration"
-                        )
-
-                    priority = strategy.get("priority")
-                    if priority is not None and not isinstance(priority, (int, float)):
-                        raise ValueError(f"hybrid strategies[{idx}].priority must be numeric")
-
-                    sub_params = strategy.get("params", {})
-                    if sub_params is None:
-                        sub_params = {}
-                    if not isinstance(sub_params, dict):
-                        raise ValueError(f"hybrid strategies[{idx}].params must be a dictionary")
-
-                    try:
-                        StrategyConfig(type=strategy_type, params=sub_params)
-                    except ValueError as exc:
-                        raise ValueError(f"hybrid strategies[{idx}] invalid params: {exc}") from exc
+        validator = validators.get(self.type)
+        if validator is not None:
+            validator()
 
         return self
 
@@ -309,6 +168,161 @@ class StrategyConfig(BaseModel):
             raise ValueError("threshold action_templates must be a dictionary")
 
         self._validate_int_min("cooldown_seconds", self.params.get("cooldown_seconds"), minimum=0)
+
+    def _validate_llm_reasoning_params(self) -> None:
+        """Validate llm_reasoning strategy params."""
+        self._validate_llm_params(self.params, label="llm_reasoning")
+
+    def _validate_agentic_llm_params(self) -> None:
+        """Validate agentic_llm strategy params."""
+        self._validate_llm_params(self.params, label="agentic_llm")
+        self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
+        self._validate_float_min(
+            "decision_cooldown_seconds",
+            self.params.get("decision_cooldown_seconds"),
+            minimum=0.0,
+        )
+        self._validate_int_min(
+            "max_tool_result_chars",
+            self.params.get("max_tool_result_chars"),
+            minimum=1,
+        )
+        self._validate_choice(
+            "native_tools_unsupported_policy",
+            self.params.get("native_tools_unsupported_policy"),
+            {"skip_cycle", "json_fallback", "strict_fail"},
+        )
+        self._validate_tools_block(self.params.get("tools"), label="agentic_llm.tools")
+        enabled_tools = self._effective_enabled_tools(
+            self.params.get("tools"),
+            default_tools=DEFAULT_ALLOWED_TOOLS,
+        )
+        self._validate_native_tools_block(
+            self.params.get("native_tools"),
+            label="agentic_llm.native_tools",
+            enabled_tools=enabled_tools,
+        )
+
+    def _validate_thread_agentic_params(self) -> None:
+        """Validate thread_agentic strategy params."""
+        self._validate_llm_params(self.params, label="thread_agentic")
+        self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
+        self._validate_int_min("max_thread_depth", self.params.get("max_thread_depth"), minimum=0)
+        self._validate_int_min("max_total_threads", self.params.get("max_total_threads"), minimum=1)
+        self._validate_float_min(
+            "child_timeout_seconds",
+            self.params.get("child_timeout_seconds"),
+            minimum=0.000001,
+        )
+        self._validate_int_min(
+            "max_repeated_spawns", self.params.get("max_repeated_spawns"), minimum=1
+        )
+        self._validate_float_min(
+            "assessment_cooldown_seconds",
+            self.params.get("assessment_cooldown_seconds"),
+            minimum=0.0,
+        )
+        self._validate_int_min(
+            "max_tool_result_chars", self.params.get("max_tool_result_chars"), minimum=1
+        )
+        self._validate_int_min(
+            "max_child_payload_chars", self.params.get("max_child_payload_chars"), minimum=1
+        )
+        self._validate_int_min("phi_max_lines", self.params.get("phi_max_lines"), minimum=1)
+        self._validate_tools_block(self.params.get("tools"), label="thread_agentic.tools")
+
+        phi_mode = self.params.get("phi_mode")
+        if phi_mode is not None and phi_mode not in {"last_line", "recent_lines"}:
+            raise ValueError("thread_agentic phi_mode must be 'last_line' or 'recent_lines'")
+
+        for token_name in ("listen_token", "return_token"):
+            token_value = self.params.get(token_name)
+            if token_value is not None and (
+                not isinstance(token_value, str) or not token_value.strip()
+            ):
+                raise ValueError(f"thread_agentic {token_name} must be a non-empty string")
+
+    def _validate_multi_agent_params(self) -> None:
+        """Validate multi_agent strategy params."""
+        self._validate_llm_params(self.params, label="multi_agent")
+        self._validate_int_min("steps_limit", self.params.get("steps_limit"), minimum=1)
+        self._validate_int_min(
+            "max_tool_result_chars",
+            self.params.get("max_tool_result_chars"),
+            minimum=1,
+        )
+        self._validate_tools_block(self.params.get("tools"), label="multi_agent.tools")
+
+        for role in ("diagnostician", "planner", "validator"):
+            role_cfg = self.params.get(role)
+            if role_cfg is None:
+                continue
+            if not isinstance(role_cfg, dict):
+                raise ValueError(f"multi_agent {role} config must be a dictionary")
+            self._validate_llm_params(role_cfg, label=f"multi_agent.{role}")
+            self._validate_int_min(
+                f"multi_agent.{role}.steps_limit",
+                role_cfg.get("steps_limit"),
+                minimum=1,
+            )
+            self._validate_int_min(
+                f"multi_agent.{role}.max_tokens",
+                role_cfg.get("max_tokens"),
+                minimum=1,
+            )
+            self._validate_tools_block(
+                role_cfg.get("tools"),
+                label=f"multi_agent.{role}.tools",
+            )
+
+    def _validate_hybrid_params(self) -> None:
+        """Validate hybrid strategy params."""
+        sel = self.params.get("selection_mode", "confidence")
+        if sel not in ["first", "priority", "confidence"]:
+            raise ValueError("hybrid selection_mode must be one of: first, priority, confidence")
+        if "min_confidence" in self.params:
+            conf = self.params["min_confidence"]
+            if not isinstance(conf, (int, float)) or not 0.0 <= conf <= 1.0:
+                raise ValueError("hybrid min_confidence must be a float between 0.0 and 1.0")
+
+        strategies = self.params.get("strategies")
+        if strategies is None:
+            return
+
+        if not isinstance(strategies, list) or not strategies:
+            raise ValueError("hybrid strategies must be a non-empty list")
+
+        for idx, strategy in enumerate(strategies):
+            if not isinstance(strategy, dict):
+                raise ValueError(f"hybrid strategies[{idx}] must be a dictionary")
+            if "type" not in strategy:
+                raise ValueError(f"hybrid strategies[{idx}] requires a 'type' field")
+            strategy_type = strategy["type"]
+            if not isinstance(strategy_type, str) or not strategy_type.strip():
+                raise ValueError(f"hybrid strategies[{idx}].type must be a non-empty string")
+
+            unknown_keys = set(strategy.keys()) - {"type", "priority", "params"}
+            if unknown_keys:
+                unknown = sorted(unknown_keys)
+                raise ValueError(
+                    f"hybrid strategies[{idx}] has unsupported keys: {unknown}. "
+                    "Use a 'params' block for sub-strategy configuration"
+                )
+
+            priority = strategy.get("priority")
+            if priority is not None and not isinstance(priority, (int, float)):
+                raise ValueError(f"hybrid strategies[{idx}].priority must be numeric")
+
+            sub_params = strategy.get("params", {})
+            if sub_params is None:
+                sub_params = {}
+            if not isinstance(sub_params, dict):
+                raise ValueError(f"hybrid strategies[{idx}].params must be a dictionary")
+
+            try:
+                StrategyConfig(type=strategy_type, params=sub_params)
+            except ValueError as exc:
+                raise ValueError(f"hybrid strategies[{idx}] invalid params: {exc}") from exc
 
     def _validate_llm_params(self, params: Dict[str, Any], label: str) -> None:
         """Validate common provider and temperature fields for LLM-backed strategies."""

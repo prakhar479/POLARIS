@@ -42,7 +42,7 @@ class ConfigReloader:
         if config_path:
             try:
                 self._config_mtime = os.path.getmtime(config_path)
-            except Exception:
+            except OSError:
                 self._config_mtime = None
 
     def update_strategy(self, strategy: Optional["AdaptationStrategy"]) -> None:
@@ -65,7 +65,7 @@ class ConfigReloader:
 
         try:
             mtime = os.path.getmtime(self._config_path)
-        except Exception:
+        except OSError:
             return None
 
         if self._config_mtime is not None and mtime <= self._config_mtime:
@@ -85,7 +85,12 @@ class ConfigReloader:
             return new_conf
         except Exception as e:
             self._emit("polaris.config.hot_reload.errors")
-            self._logger.warning(f"Hot-reload skipped due to error: {e}")
+            self._logger.warning(
+                f"Hot-reload skipped due to error: {e}",
+                error=str(e),
+                error_type=type(e).__name__,
+                config_path=self._config_path,
+            )
             return None
 
     async def _apply_strategy_hot_reload(self, strategy_config: Any) -> None:
@@ -118,7 +123,12 @@ class ConfigReloader:
         try:
             await self._strategy.apply_config_update(config_payload)
         except Exception as e:
-            self._logger.warning(f"Failed to apply strategy config update: {e}")
+            self._logger.warning(
+                f"Failed to apply strategy config update: {e}",
+                error=str(e),
+                error_type=type(e).__name__,
+                strategy_type=getattr(strategy_config, "type", None),
+            )
 
     async def _apply_meta_learner_hot_reload(self, meta_config: Any) -> None:
         """Apply meta-learner config updates (e.g., auto_apply, prompts, temperature).
@@ -177,7 +187,12 @@ class ConfigReloader:
                 temperature=getattr(meta_learner, "temperature", None),
             )
         except Exception as e:
-            self._logger.warning(f"Failed to apply meta-learner config update: {e}")
+            self._logger.warning(
+                f"Failed to apply meta-learner config update: {e}",
+                error=str(e),
+                error_type=type(e).__name__,
+                meta_type=meta_type,
+            )
 
     def _emit(self, metric: str) -> None:
         """Increment a metric if metrics collection is enabled."""

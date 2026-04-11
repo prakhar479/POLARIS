@@ -61,6 +61,126 @@ def parse_strict_json(content: str, error_class: type) -> Dict[str, Any]:
     return parsed
 
 
+def extract_connector_from_context(context: "AdaptationContext") -> Any:
+    """Extract active connector from typed field or legacy metadata.
+
+    The new preferred path is ``AdaptationContext.connector``. The metadata
+    fallback keeps compatibility with existing tests/callers.
+    """
+    connector = getattr(context, "connector", None)
+    if connector is not None:
+        return connector
+
+    metadata = getattr(context, "metadata", None)
+    if isinstance(metadata, dict):
+        return metadata.get("connector")
+    return None
+
+
+def compact_json(value: Any, max_chars: int) -> str:
+    """Serialize payload to JSON and truncate to avoid context bloat."""
+    try:
+        text = json.dumps(value, ensure_ascii=True, default=str)
+    except Exception:
+        text = str(value)
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
+
+
+def bounded_tool_data(tool_result: Dict[str, Any], max_chars: int) -> Any:
+    """Return tool payload unchanged or as a truncated preview object."""
+    try:
+        full_text = json.dumps(tool_result, ensure_ascii=True, default=str)
+    except Exception:
+        full_text = str(tool_result)
+
+    if len(full_text) <= max_chars:
+        return tool_result
+
+    serialized = full_text[:max_chars] + "..."
+    return {
+        "_truncated": True,
+        "preview": serialized,
+        "original_chars": len(full_text),
+    }
+
+
+def build_tool_result_message(
+    tool_name: str,
+    tool_result: Dict[str, Any],
+    max_chars: int,
+) -> str:
+    """Build bounded tool-result payload for model context."""
+    bounded = bounded_tool_data(tool_result, max_chars)
+    return json.dumps(
+        {"tool_result": {"tool": tool_name, "data": bounded}},
+        ensure_ascii=True,
+    )
+
+
+async def execute_strategy_tool(
+    *,
+    tool_registry: Any,
+    tool_name: str,
+    args: Dict[str, Any],
+    state: "SystemState",
+    context: "AdaptationContext",
+    knowledge_store: Any,
+    world_model: Any,
+    logger: Any,
+    metrics: Any,
+    metric_prefix: str,
+    error_log_message: str,
+) -> Dict[str, Any]:
+    """Execute one strategy tool with shared dependency wiring and error handling."""
+    from polaris.tools import ToolDependencies
+
+    deps = ToolDependencies(
+        knowledge_store=knowledge_store,
+        world_model=world_model,
+        connector=extract_connector_from_context(context),
+        system_contract=context.system_contract,
+        logger=logger,
+        metrics=metrics,
+    )
+
+    try:
+        tool_result = await tool_registry.execute(
+            tool_name=tool_name,
+            args=args,
+            state=state,
+            context=context,
+            deps=deps,
+        )
+        if metrics:
+            metrics.increment(
+                f"{metric_prefix}.tool_called",
+                tags={"tool": tool_name, "system_id": state.system_id},
+            )
+        if isinstance(tool_result, dict):
+            return tool_result
+        return {"result": tool_result}
+    except Exception as exc:
+        if metrics:
+            metrics.increment(
+                f"{metric_prefix}.tool_error",
+                tags={"tool": tool_name, "system_id": state.system_id},
+            )
+        if logger:
+            logger.error(error_log_message, tool=tool_name, error=str(exc))
+        return {"error": f"tool_error: {type(exc).__name__}: {str(exc)}"}
+
+
+def create_tool_registry(metrics: Any, allowed_tools: Any) -> Any:
+    """Build and populate a ToolRegistry from allowed tool names."""
+    from polaris.tools import ToolRegistry, build_registered_tools
+
+    registry = ToolRegistry(metrics=metrics)
+    registry.register_all(build_registered_tools(allowed_tools))
+    return registry
+
+
 # ---------------------------------------------------------------------------
 # System state serialization
 # ---------------------------------------------------------------------------

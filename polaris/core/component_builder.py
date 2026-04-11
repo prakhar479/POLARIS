@@ -5,12 +5,7 @@ orchestrator and used by third-party code that wants to construct individual
 components without instantiating the full framework.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
-
-from polaris.infrastructure.constants import (
-    DEFAULT_MAX_STATES_PER_SYSTEM,
-    DEFAULT_MONITORING_INTERVAL,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from polaris.abstractions import (
@@ -43,40 +38,9 @@ class ComponentBuilder:
         cli_overrides: Dict[str, Any],
     ) -> "Logger":
         """Create a logger from configuration with CLI overrides applied."""
-        from polaris.infrastructure.observability.logger import create_logger
+        from polaris.core.builders.observability import build_logger as build_logger_impl
 
-        logger_type = "structured"
-        level = "INFO"
-        console = True
-        log_file = None
-        use_colors = True
-
-        if hasattr(config, "observability") and config.observability:
-            logging_config = config.observability.get("logging", {})
-            logger_type = logging_config.get("type", logger_type)
-            level = logging_config.get("level", level)
-            console = logging_config.get("console", console)
-            use_colors = logging_config.get("use_colors", use_colors)
-            if logging_config.get("file", False):
-                log_file = logging_config.get("file_path", "./logs/polaris.log")
-
-        if "log_format" in cli_overrides:
-            logger_type = cli_overrides["log_format"]
-        if "log_level" in cli_overrides:
-            level = cli_overrides["log_level"]
-        if "console_logging" in cli_overrides:
-            console = bool(cli_overrides["console_logging"])
-        if "log_file" in cli_overrides:
-            log_file = cli_overrides["log_file"]
-
-        return create_logger(
-            logger_type=logger_type,
-            name="polaris",
-            level=level,
-            log_file=log_file,
-            console=console,
-            use_colors=use_colors,
-        )
+        return build_logger_impl(config, cli_overrides)
 
     @staticmethod
     def build_metrics(
@@ -89,26 +53,9 @@ class ComponentBuilder:
         components can call ``self.metrics.increment(...)`` unconditionally
         without ``if self.metrics:`` guards.
         """
-        from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+        from polaris.core.builders.observability import build_metrics as build_metrics_impl
 
-        if cli_overrides.get("metrics_enabled", True) is False:
-            return NullMetricsCollector()
-
-        metrics_config: Dict[str, Any] = {}
-        if hasattr(config, "observability") and config.observability:
-            metrics_config = config.observability.get("metrics", {})
-
-        if not metrics_config.get("enabled", True):
-            return NullMetricsCollector()
-
-        collector_type = metrics_config.get("collector_type", "simple")
-
-        if collector_type == "simple":
-            from polaris.infrastructure.observability.metrics import SimpleMetricsCollector
-
-            return SimpleMetricsCollector()
-
-        raise ValueError(f"Unknown metrics collector type '{collector_type}'")
+        return build_metrics_impl(config, cli_overrides)
 
     @staticmethod
     def build_event_bus(
@@ -117,39 +64,12 @@ class ComponentBuilder:
         logger: "Logger",
     ) -> "EventBus":
         """Create an EventBus, optionally wired to the metrics collector."""
-        from polaris.core.events import InMemoryEventBus
-
-        RedisEventBus: Optional[Any] = None
-        try:
-            from polaris.infrastructure.events.redis_bus import RedisEventBus as RedisEventBusCls
-
-            RedisEventBus = RedisEventBusCls
-        except ImportError:
-            pass
-
         event_bus_metrics = (
             metrics if ComponentBuilder.should_collect(config, "event_bus", metrics) else None
         )
+        from polaris.core.builders.observability import build_event_bus as build_event_bus_impl
 
-        bus_type = "memory"
-        if hasattr(config, "observability") and config.observability:
-            obs = config.observability
-            if "event_bus" in obs and isinstance(obs["event_bus"], dict):
-                bus_type = obs["event_bus"].get("type", "memory")
-
-        if bus_type == "redis" and RedisEventBus is not None:
-            redis_url = obs["event_bus"].get("url", "redis://localhost:6379")
-            return cast(
-                "EventBus",
-                RedisEventBus(redis_url=redis_url, metrics=event_bus_metrics, logger=logger),
-            )
-
-        if bus_type not in ("memory", "redis"):
-            raise ValueError(f"Unknown event bus type '{bus_type}'")
-        if bus_type == "redis" and RedisEventBus is None:
-            raise ImportError("RedisEventBus requested but redis dependency is not available")
-
-        return InMemoryEventBus(metrics=event_bus_metrics, logger=logger)
+        return build_event_bus_impl(config, event_bus_metrics, logger)
 
     # Core domain components
 
@@ -160,58 +80,12 @@ class ComponentBuilder:
         metrics: Optional["MetricsCollector"],
     ) -> "KnowledgeStore":
         """Create the knowledge store from canonical ``knowledge_store`` config."""
+        from polaris.core.builders.domain import build_knowledge_store as build_knowledge_store_impl
+
         ks_metrics = (
             metrics if ComponentBuilder.should_collect(config, "knowledge_store", metrics) else None
         )
-
-        ks_cfg: Dict[str, Any] = {}
-        if isinstance(config.knowledge_store, dict):
-            ks_cfg = config.knowledge_store
-
-        ks_type = str(ks_cfg.get("type", "memory")).lower()
-
-        max_states = 1000
-        db_path: Optional[str] = None
-
-        if ks_type == "sqlite":
-            sqlite_cfg = ks_cfg.get("sqlite", {}) if isinstance(ks_cfg.get("sqlite"), dict) else {}
-            db_path = sqlite_cfg.get("db_path") or ks_cfg.get("db_path")
-            max_states = int(
-                sqlite_cfg.get(
-                    "max_states_per_system",
-                    ks_cfg.get("max_states_per_system", DEFAULT_MAX_STATES_PER_SYSTEM),
-                )
-            )
-
-            if not db_path:
-                raise ValueError(
-                    "knowledge_store type 'sqlite' requires 'knowledge_store.sqlite.db_path' "
-                    "(or legacy 'knowledge_store.db_path')"
-                )
-
-            from polaris.knowledge.sqlite_store import SQLiteKnowledgeStore
-
-            return SQLiteKnowledgeStore(
-                db_path=db_path,
-                max_states_per_system=max_states,
-                logger=logger,
-                metrics=ks_metrics,
-            )
-        elif ks_type == "memory":
-            memory_cfg = ks_cfg.get("memory", {}) if isinstance(ks_cfg.get("memory"), dict) else {}
-            max_states = int(
-                memory_cfg.get("max_states_per_system", ks_cfg.get("max_states_per_system", 1000))
-            )
-        else:
-            raise ValueError(f"Unknown knowledge store type '{ks_type}'")
-
-        from polaris.knowledge import InMemoryKnowledgeStore
-
-        return InMemoryKnowledgeStore(
-            max_states_per_system=max_states,
-            logger=logger,
-            metrics=ks_metrics,
-        )
+        return build_knowledge_store_impl(config, logger, ks_metrics)
 
     @staticmethod
     def build_world_model(
@@ -221,37 +95,12 @@ class ComponentBuilder:
         metrics: Optional["MetricsCollector"],
     ) -> "WorldModel":
         """Create the default statistical world model."""
-        from polaris.world_model import StatisticalWorldModel
+        from polaris.core.builders.domain import build_world_model as build_world_model_impl
 
         wm_metrics = (
             metrics if ComponentBuilder.should_collect(config, "world_model", metrics) else None
         )
-        wm_cfg: Dict[str, Any] = {}
-        if isinstance(config.world_model, dict):
-            wm_cfg = config.world_model
-
-        wm_type = str(wm_cfg.get("type", "statistical")).lower()
-        if wm_type != "statistical":
-            raise ValueError(f"Unknown world model type '{wm_type}'")
-
-        stat_cfg = (
-            wm_cfg.get("statistical", {}) if isinstance(wm_cfg.get("statistical"), dict) else {}
-        )
-        use_kalman = bool(stat_cfg.get("use_kalman", False))
-        try:
-            window_size = int(stat_cfg.get("window_size", 100))
-        except Exception as exc:
-            raise ValueError("world_model.statistical.window_size must be an integer") from exc
-        if window_size <= 0:
-            raise ValueError("world_model.statistical.window_size must be > 0")
-
-        return StatisticalWorldModel(
-            knowledge_store,
-            use_kalman=use_kalman,
-            window_size=window_size,
-            logger=logger,
-            metrics=wm_metrics,
-        )
+        return build_world_model_impl(config, knowledge_store, logger, wm_metrics)
 
     @staticmethod
     def build_strategy(
@@ -264,17 +113,12 @@ class ComponentBuilder:
         config: "PolarisConfig",
     ) -> "AdaptationStrategy":
         """Create a strategy from configuration."""
-        from polaris.core.factories import get_strategy_factory
+        from polaris.core.builders.domain import build_strategy as build_strategy_impl
 
         strategy_metrics = (
             metrics if ComponentBuilder.should_collect(config, "strategy", metrics) else None
         )
-
-        factory = get_strategy_factory(strategy_config.type)
-        if not factory:
-            raise ValueError(f"No strategy factory registered for type '{strategy_config.type}'")
-
-        return factory(
+        return build_strategy_impl(
             strategy_config,
             logger,
             strategy_metrics,
@@ -299,68 +143,18 @@ class ComponentBuilder:
         as a side-effect stored on the returned object's ``_interval_seconds``
         attribute so the caller can read it.
         """
-        if not isinstance(meta_config, dict):
-            return None
+        from polaris.core.builders.domain import build_meta_learner as build_meta_learner_impl
 
         meta_metrics = (
             metrics if ComponentBuilder.should_collect(config, "meta_learner", metrics) else None
         )
-        meta_type = meta_config.get("type", "statistical")
-
-        if meta_type == "statistical":
-            from polaris.meta_learner.bayesian_optimizer import AcquisitionFunction
-            from polaris.meta_learner.statistical import StatisticalMetaLearner
-
-            stat_cfg = meta_config.get("statistical", {}) or {}
-            conservative_mode = bool(stat_cfg.get("conservative_mode", True))
-            enable_bayesian = bool(stat_cfg.get("enable_bayesian_optimization", True))
-            min_samples = int(stat_cfg.get("min_samples_for_optimization", 10))
-
-            acq_func_str = stat_cfg.get("acquisition_function", "expected_improvement")
-            try:
-                acquisition_function = AcquisitionFunction(acq_func_str)
-            except ValueError:
-                logger.warning(f"Unknown acquisition function '{acq_func_str}', using default")
-                acquisition_function = AcquisitionFunction.EXPECTED_IMPROVEMENT
-
-            exploration_weight = float(stat_cfg.get("exploration_weight", 0.1))
-
-            return StatisticalMetaLearner(
-                knowledge_store=knowledge_store,
-                logger=logger,
-                conservative_mode=conservative_mode,
-                world_model=world_model,
-                enable_bayesian_optimization=enable_bayesian,
-                acquisition_function=acquisition_function,
-                exploration_weight=exploration_weight,
-                min_samples_for_optimization=min_samples,
-            )
-
-        if meta_type == "llm":
-            try:
-                from polaris.infrastructure.llm import create_llm_client_from_config
-                from polaris.meta_learner.llm_based import LLMMetaLearner
-
-                llm_cfg = meta_config.get("llm", {}) or {}
-                llm_client = create_llm_client_from_config(llm_cfg)
-
-                return LLMMetaLearner(
-                    llm_client=llm_client,
-                    knowledge_store=knowledge_store,
-                    logger=logger,
-                    auto_apply=bool(llm_cfg.get("auto_apply", False)),
-                    temperature=float(llm_cfg.get("temperature", 0.1)),
-                    analysis_system_prompt=llm_cfg.get("analysis_system_prompt"),
-                    optimization_system_prompt=llm_cfg.get("optimization_system_prompt"),
-                    per_system_prompts=llm_cfg.get("per_system_prompts"),
-                    metrics=meta_metrics,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to initialize LLM meta-learner from config: {e}")
-                return None
-
-        logger.warning(f"Unknown meta_learner type '{meta_type}'. Meta-learning will be disabled.")
-        return None
+        return build_meta_learner_impl(
+            meta_config,
+            knowledge_store,
+            world_model,
+            logger,
+            meta_metrics,
+        )
 
     @staticmethod
     def build_connectors(
@@ -370,37 +164,12 @@ class ComponentBuilder:
         config: "PolarisConfig",
     ) -> List["Connector"]:
         """Create connectors for all enabled systems in the configuration."""
-        from polaris.core.factories import get_connector_factory
+        from polaris.core.builders.domain import build_connectors as build_connectors_impl
 
-        connectors: List[Any] = []
         connector_metrics = (
             metrics if ComponentBuilder.should_collect(config, "connectors", metrics) else None
         )
-
-        for system in systems_config:
-            if not system.enabled:
-                continue
-
-            factory = get_connector_factory(system.connector_type)
-            if not factory:
-                logger.error(
-                    f"No connector factory registered for type '{system.connector_type}', "
-                    f"skipping system '{system.id}'"
-                )
-                continue
-
-            try:
-                connector = factory(system, logger, connector_metrics)
-            except Exception as e:
-                logger.error(
-                    f"Failed to create connector for system '{system.id}' "
-                    f"(type '{system.connector_type}'): {e}"
-                )
-                continue
-
-            connectors.append(connector)
-
-        return connectors
+        return build_connectors_impl(systems_config, logger, connector_metrics)
 
     # Metrics export configuration
 
@@ -411,35 +180,11 @@ class ComponentBuilder:
         metrics: Optional["MetricsCollector"],
     ) -> Dict[str, Any]:
         """Build the metrics auto-export configuration dict."""
-        if not metrics or not hasattr(metrics, "export_to_file"):
-            return {"enabled": False}
-
-        export_config: Dict[str, Any] = {}
-        if hasattr(config, "observability") and config.observability:
-            metrics_config = config.observability.get("metrics", {})
-            export_config = metrics_config.get("export", {})
-
-        export_enabled = export_config.get("enabled", False)
-        export_dir = cli_overrides.get("metrics_export_dir") or export_config.get(
-            "output_dir", "./metrics"
+        from polaris.core.builders.runtime import (
+            build_metrics_export_config as build_metrics_export_config_impl,
         )
-        auto_interval = cli_overrides.get("metrics_auto_export_interval")
-        if auto_interval is None:
-            auto_interval = export_config.get("auto_export_interval_minutes", 0)
 
-        if export_enabled and auto_interval is not None and auto_interval > 0:
-            return {
-                "enabled": True,
-                "interval_minutes": auto_interval,
-                "output_dir": export_dir,
-                "formats": cli_overrides.get("metrics_export_formats")
-                or export_config.get("formats", ["json"]),
-                "experiment_name": cli_overrides.get("metrics_experiment_name")
-                or export_config.get("experiment_name"),
-                "include_timestamp": export_config.get("include_timestamp", True),
-            }
-
-        return {"enabled": False}
+        return build_metrics_export_config_impl(config, cli_overrides, metrics)
 
     # Helpers
 
@@ -463,48 +208,22 @@ class ComponentBuilder:
     @staticmethod
     def resolve_meta_learning_interval(meta_config: Optional[Dict[str, Any]]) -> float:
         """Return the meta-learning loop interval in seconds from config."""
-        if not isinstance(meta_config, dict):
-            return 3600.0
-        try:
-            interval_hours = float(meta_config.get("analysis_interval_hours", 1.0))
-            if interval_hours > 0:
-                return interval_hours * 3600.0
-        except Exception:
-            pass
-        return 3600.0
+        from polaris.core.builders.runtime import (
+            resolve_meta_learning_interval as resolve_meta_learning_interval_impl,
+        )
+
+        return resolve_meta_learning_interval_impl(meta_config)
 
     @staticmethod
     def resolve_meta_learning_transparency_config(
         meta_config: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Return normalized transparency config for meta-learning records."""
-        defaults = {
-            "enabled": True,
-            "output_path": "./logs/meta_learning_updates.jsonl",
-        }
-        if not isinstance(meta_config, dict):
-            return defaults
+        from polaris.core.builders.runtime import (
+            resolve_meta_learning_transparency_config as resolve_meta_learning_transparency_config_impl,
+        )
 
-        transparency = meta_config.get("transparency")
-        if transparency is None:
-            return defaults
-        if not isinstance(transparency, dict):
-            return defaults
-
-        enabled = transparency.get("enabled", defaults["enabled"])
-        if isinstance(enabled, str):
-            enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
-        elif not isinstance(enabled, bool):
-            enabled = defaults["enabled"]
-
-        output_path = transparency.get("output_path", defaults["output_path"])
-        if not isinstance(output_path, str) or not output_path.strip():
-            output_path = defaults["output_path"]
-
-        return {
-            "enabled": bool(enabled),
-            "output_path": output_path,
-        }
+        return resolve_meta_learning_transparency_config_impl(meta_config)
 
     @staticmethod
     def resolve_monitoring_interval(
@@ -513,19 +232,9 @@ class ComponentBuilder:
         logger: "Logger",
     ) -> float:
         """Return the validated monitoring interval in seconds."""
-        interval: float = DEFAULT_MONITORING_INTERVAL
+        _ = logger  # kept for backwards-compatible method signature
+        from polaris.core.builders.runtime import (
+            resolve_monitoring_interval as resolve_monitoring_interval_impl,
+        )
 
-        if hasattr(config, "monitoring") and config.monitoring:
-            interval = config.monitoring.get("interval_seconds", interval)
-        if "monitoring_interval" in cli_overrides:
-            interval = cli_overrides["monitoring_interval"]
-
-        try:
-            interval = float(interval)
-        except Exception as exc:
-            raise ValueError("monitoring.interval_seconds must be a number") from exc
-
-        if interval <= 0:
-            raise ValueError("monitoring.interval_seconds must be > 0")
-
-        return interval
+        return resolve_monitoring_interval_impl(config, cli_overrides)

@@ -19,6 +19,7 @@ class AdaptationContext:
     historical_states: List["SystemState"]
     world_model_insights: Optional[Dict[str, Any]] = None
     system_contract: Optional["SystemContract"] = None
+    connector: Optional[Any] = None
     metadata: Optional[Dict[str, Any]] = None
 
 

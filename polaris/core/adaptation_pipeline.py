@@ -103,7 +103,13 @@ class AdaptationPipeline:
                 )
                 # Exclude the current state (it was just stored by the monitoring loop)
                 historical_states = [s for s in historical_states if s.timestamp < now][-10:]
-            except Exception:
+            except Exception as exc:
+                self._logger.debug(
+                    "Failed to fetch historical states for adaptation context",
+                    system_id=state.system_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 historical_states = []
 
         # Build context
@@ -114,6 +120,7 @@ class AdaptationPipeline:
                 await self._world_model.get_insights() if self._world_model else None
             ),
             system_contract=system_contract,
+            connector=connector,
             metadata={"connector": connector},
         )
 
@@ -337,7 +344,13 @@ class AdaptationPipeline:
             if hasattr(action_policy, "model_dump"):
                 try:
                     dumped = action_policy.model_dump(exclude_none=True)
-                except Exception:
+                except (AttributeError, TypeError, ValueError) as exc:
+                    self._logger.debug(
+                        "Failed to dump action policy model",
+                        system_id=system_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
                     return {}
                 return dumped if isinstance(dumped, dict) else {}
 
