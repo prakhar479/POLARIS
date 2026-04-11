@@ -197,3 +197,51 @@ def test_system_collection_interval_validation():
         }
     )
     assert cfg.systems[0].monitoring["collection_interval"] == 5
+
+
+def test_connector_timeout_validation():
+    with pytest.raises(
+        ValueError,
+        match=r"monitoring\.connector_timeout_seconds",
+    ):
+        PolarisConfig.from_dict(
+            {
+                "monitoring": {
+                    "connector_timeout_seconds": 0,
+                }
+            }
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=r"systems\[\]\.monitoring\.connector_timeout_seconds",
+    ):
+        PolarisConfig.from_dict(
+            {
+                "systems": [
+                    {
+                        "id": "sys-1",
+                        "connector_type": "unknown",
+                        "monitoring": {"connector_timeout_seconds": -1},
+                    }
+                ]
+            }
+        )
+
+    cfg = PolarisConfig.from_dict(
+        {
+            "monitoring": {
+                "connector_timeout_seconds": 20,
+            },
+            "systems": [
+                {
+                    "id": "sys-1",
+                    "connector_type": "unknown",
+                    "monitoring": {"connector_timeout_seconds": 5},
+                }
+            ],
+        }
+    )
+
+    assert cfg.monitoring["connector_timeout_seconds"] == 20
+    assert cfg.systems[0].monitoring["connector_timeout_seconds"] == 5

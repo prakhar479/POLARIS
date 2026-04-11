@@ -85,6 +85,13 @@ class SystemConfig(BaseModel):
             if not isinstance(collection_interval, (int, float)) or float(collection_interval) <= 0:
                 raise ValueError("systems[].monitoring.collection_interval must be a number > 0")
 
+        connector_timeout = self.monitoring.get("connector_timeout_seconds")
+        if connector_timeout is not None:
+            if not isinstance(connector_timeout, (int, float)) or float(connector_timeout) <= 0:
+                raise ValueError(
+                    "systems[].monitoring.connector_timeout_seconds must be a number > 0"
+                )
+
         validator = get_connector_config_validator(self.connector_type)
         if validator is not None:
             connection = self.connection if isinstance(self.connection, dict) else {}
@@ -517,6 +524,22 @@ class PolarisConfig(BaseModel):
                     raise ValueError("max_concurrent_connectors must be an integer > 0") from exc
 
         return data
+
+    @model_validator(mode="after")
+    def validate_monitoring(self) -> "PolarisConfig":
+        """Validate top-level monitoring settings."""
+        if self.monitoring is None:
+            return self
+
+        if not isinstance(self.monitoring, dict):
+            raise ValueError("monitoring must be a dictionary")
+
+        timeout = self.monitoring.get("connector_timeout_seconds")
+        if timeout is not None:
+            if not isinstance(timeout, (int, float)) or float(timeout) <= 0:
+                raise ValueError("monitoring.connector_timeout_seconds must be a number > 0")
+
+        return self
 
     @classmethod
     def from_file(cls, path: str) -> "PolarisConfig":

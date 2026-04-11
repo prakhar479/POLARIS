@@ -187,6 +187,58 @@ def test_main_dispatches_doctor_subcommand(monkeypatch) -> None:
     assert called["argv"] == ["--config", "cfg.yaml"]
 
 
+def test_main_missing_config_prints_available_configs(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Missing config should print actionable guidance and nearby config files."""
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "default.yaml").write_text("{}\n", encoding="utf-8")
+    (cfg_dir / "wildfire.yaml").write_text("{}\n", encoding="utf-8")
+
+    missing_path = tmp_path / "config" / "missing.yaml"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_main.sys,
+        "argv",
+        ["polaris", "--config", str(missing_path)],
+    )
+
+    exit_code = cli_main.main()
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Configuration file not found" in output
+    assert "Available config files" in output
+    assert "polaris init" in output
+
+
+def test_main_unexpected_error_prints_debug_hint(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Unexpected errors should print debug hint without traceback by default."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("{}\n", encoding="utf-8")
+
+    class ExplodingPolaris:
+        def __init__(self, *args, **kwargs):
+            _ = args
+            _ = kwargs
+            raise RuntimeError("boom")
+
+    monkeypatch.delenv("POLARIS_DEBUG", raising=False)
+    monkeypatch.setattr(cli_main, "Polaris", ExplodingPolaris)
+    monkeypatch.setattr(
+        cli_main.sys,
+        "argv",
+        ["polaris", "--config", str(config_file)],
+    )
+
+    exit_code = cli_main.main()
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Error: boom" in output
+    assert "POLARIS_DEBUG=1" in output
+
+
 def test_main_interactive_uses_single_process_runner(tmp_path: Path, monkeypatch) -> None:
     """`--interactive` should run the in-process interactive runner."""
     config_file = tmp_path / "config.yaml"

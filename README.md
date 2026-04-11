@@ -103,6 +103,9 @@ polaris --config config/default.yaml --dashboard
 # Dashboard + interactive commands in split-screen mode
 polaris --config config/default.yaml --both
 
+# Dry-run mode (evaluate decisions without executing actions)
+polaris --config config/default.yaml --dry-run
+
 # Run diagnostics (config/env/optional dependencies)
 polaris doctor --config config/default.yaml
 

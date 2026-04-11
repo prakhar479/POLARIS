@@ -201,13 +201,59 @@ class Polaris:
 
         for connector in self._connectors:
             system_id = await connector.get_system_id()
-            contract = await build_system_contract(connector, logger=self.logger)
-            await self.registry.register(connector, contract=contract)
-            connected = await connector.connect()
-            if connected:
-                self.logger.info(f"Connected to system: {system_id}")
-            else:
-                self.logger.error(f"Failed to connect to system: {system_id}")
+            connector_type = type(connector).__name__
+
+            try:
+                connected = await connector.connect()
+            except Exception as exc:
+                connected = False
+                self.logger.error(
+                    "Connector connection raised exception",
+                    system_id=system_id,
+                    connector_type=connector_type,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            if not connected:
+                self.logger.warning(
+                    "Skipping unavailable connector",
+                    system_id=system_id,
+                    connector_type=connector_type,
+                )
+                if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
+                    self.metrics.increment(
+                        "polaris.core.connector_unavailable",
+                        tags={"system_id": system_id, "connector_type": connector_type},
+                    )
+                continue
+
+            try:
+                contract = await build_system_contract(connector, logger=self.logger)
+                await self.registry.register(connector, contract=contract)
+                self.logger.info(
+                    "Connected to system",
+                    system_id=system_id,
+                    connector_type=connector_type,
+                )
+            except Exception as exc:
+                self.logger.error(
+                    "Connected connector failed registration and will be dropped",
+                    system_id=system_id,
+                    connector_type=connector_type,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                try:
+                    await connector.disconnect()
+                except Exception:
+                    # Best effort cleanup if registration fails after connect.
+                    pass
+                if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
+                    self.metrics.increment(
+                        "polaris.core.connector_registration_errors",
+                        tags={"system_id": system_id, "connector_type": connector_type},
+                    )
 
         # Build sub-modules
         from polaris.core.adaptation_pipeline import AdaptationPipeline
@@ -287,6 +333,7 @@ class Polaris:
                     task.cancel()
             if self._tasks:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks = []
 
     async def stop(self) -> None:
         """Stop the framework gracefully."""
@@ -321,10 +368,39 @@ class Polaris:
             except Exception as e:
                 self.logger.error(f"Failed to export final metrics: {e}")
 
+        disconnect_errors = 0
         for connector in self.registry.all():
-            await connector.disconnect()
+            system_id = "unknown"
+            try:
+                system_id = await connector.get_system_id()
+            except Exception:
+                pass
 
-        await self.event_bus.stop()
+            try:
+                await connector.disconnect()
+            except Exception as exc:
+                disconnect_errors += 1
+                self.logger.error(
+                    "Connector disconnect failed",
+                    system_id=system_id,
+                    connector_type=type(connector).__name__,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        if disconnect_errors and ComponentBuilder.should_collect(
+            self.config, "core_framework", self.metrics
+        ):
+            self.metrics.increment("polaris.core.disconnect_errors", value=disconnect_errors)
+
+        try:
+            await self.event_bus.stop()
+        except Exception as exc:
+            self.logger.error(
+                "Event bus stop failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     # ──────────────────────────────────────────────────────────────────────
     # Public API

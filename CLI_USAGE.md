@@ -27,6 +27,7 @@ python -m polaris.cli doctor [--config config/default.yaml]
 |--------|-------|-------------|
 | `--config` | `-c` | Path to configuration file (YAML) |
 | `--version` | `-v` | Show version and exit |
+| `--dry-run` | `-` | Run monitoring and decision loop without executing adaptations |
 
 ### Interface Options
 
@@ -64,6 +65,9 @@ python -m polaris.cli --config config/default.yaml
 
 # With logging
 python -m polaris.cli --config config/default.yaml --export-logs polaris.log
+
+# Validate behavior without executing adaptations
+python -m polaris.cli --config config/default.yaml --dry-run
 ```
 
 ### Dashboard Mode
@@ -136,6 +140,7 @@ Polaris requires a YAML configuration file. Example structure:
 ```yaml
 monitoring:
   interval_seconds: 30
+  connector_timeout_seconds: 30 # Optional operation timeout per system cycle
 
 observability:
   logging:
@@ -163,6 +168,9 @@ strategy:
 
 Connector types (`systems[].connector_type`) and strategy types (`strategy.type`) must match types registered in Polaris' factory registries.
 Built-in types are registered automatically; custom types can be registered via the factory registration APIs.
+
+`monitoring.connector_timeout_seconds` sets the global timeout for telemetry collection and adaptation execution.
+Override per system with `systems[].monitoring.connector_timeout_seconds`.
 
 See `CONFIGURATION.md` for the registration pattern and examples.
 

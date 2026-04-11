@@ -136,6 +136,20 @@ class TestPolarisIntegration:
         await run_task
 
     @pytest.mark.asyncio
+    async def test_unavailable_connector_is_not_registered(self, polaris, mock_connector):
+        """Unavailable connectors should be skipped and excluded from registry."""
+        mock_connector.connect = AsyncMock(return_value=False)
+        mock_connector.get_system_id = AsyncMock(return_value="test-system")
+
+        run_task = asyncio.create_task(polaris.run())
+        await asyncio.sleep(0.1)
+
+        assert polaris.registry.get("test-system") is None
+
+        await polaris.stop()
+        await run_task
+
+    @pytest.mark.asyncio
     async def test_monitoring_loop_execution(self, polaris, mock_connector, mock_strategy):
         """Test that monitoring loop executes telemetry collection and adaptation."""
         # Setup mock connector to return telemetry
@@ -301,6 +315,25 @@ class TestPolarisIntegration:
 
         # Verify disconnect was called
         mock_connector.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_continues_on_disconnect_failure(self, polaris, mock_connector):
+        """Disconnect failures should be logged without preventing full shutdown."""
+        mock_connector.connect = AsyncMock(return_value=True)
+        mock_connector.get_system_id = AsyncMock(return_value="test-system")
+        mock_connector.disconnect = AsyncMock(side_effect=RuntimeError("disconnect failed"))
+        polaris.event_bus.stop = AsyncMock(return_value=None)
+
+        run_task = asyncio.create_task(polaris.run())
+        await asyncio.sleep(0.1)
+        await polaris.stop()
+        await run_task
+
+        polaris.event_bus.stop.assert_called_once()
+        assert any(
+            level == "error" and message == "Connector disconnect failed"
+            for level, message, _ctx in polaris.logger.logs
+        )
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self, polaris):

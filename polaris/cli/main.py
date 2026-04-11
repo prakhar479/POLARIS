@@ -6,7 +6,32 @@ import os
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from polaris import Polaris
+
+
+def _list_available_configs(config_dir: str = "config", limit: int = 10) -> list[str]:
+    """Return available YAML config paths for quick user guidance."""
+    base = Path(config_dir)
+    if not base.exists() or not base.is_dir():
+        return []
+
+    paths = sorted(base.glob("*.yaml"))
+    return [str(path) for path in paths[:limit]]
+
+
+def _first_task_exception(tasks: set[asyncio.Task]) -> Exception | None:
+    """Return the first non-cancellation exception from completed tasks."""
+    for task in tasks:
+        if task.cancelled():
+            continue
+
+        exc = task.exception()
+        if isinstance(exc, Exception):
+            return exc
+
+    return None
 
 
 def main() -> int:
@@ -132,7 +157,13 @@ def main() -> int:
 
     if not Path(config_path).exists():
         print(f"Error: Configuration file not found: {config_path}")
-        print("Please specify a valid config file with --config")
+        available = _list_available_configs()
+        if available:
+            print("Available config files:")
+            for path in available:
+                print(f"  - {path}")
+        print("Create a starter config with: polaris init --output config/custom.yaml")
+        print("Run diagnostics with: polaris doctor --config <path>")
         return 1
 
     try:
@@ -211,11 +242,37 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nShutting down...")
         return 0
+    except ValidationError as e:
+        print(f"Configuration validation failed for: {config_path}")
+        for err in e.errors()[:10]:
+            loc = ".".join(str(part) for part in err.get("loc", []))
+            message = err.get("msg", "Invalid value")
+            if loc:
+                print(f"  - {loc}: {message}")
+            else:
+                print(f"  - {message}")
+        if len(e.errors()) > 10:
+            print(f"  ... and {len(e.errors()) - 10} more validation issue(s)")
+        print(f"Tip: Run `polaris doctor --config {config_path}` for a full diagnostic report")
+        return 1
+    except ValueError as e:
+        print(f"Error: {e}")
+        print(f"Tip: Run `polaris doctor --config {config_path}` for diagnostics")
+        return 1
     except Exception as e:
         print(f"Error: {e}")
-        import traceback
+        debug_enabled = os.getenv("POLARIS_DEBUG", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if debug_enabled:
+            import traceback
 
-        traceback.print_exc()
+            traceback.print_exc()
+        else:
+            print("Tip: Set POLARIS_DEBUG=1 to print a full traceback")
         return 1
 
 
@@ -245,6 +302,7 @@ async def run_with_interactive_cli(polaris: Polaris) -> None:
         done, pending = await asyncio.wait(
             [polaris_task, cli_task], return_when=asyncio.FIRST_COMPLETED
         )
+        done_error = _first_task_exception(done)
 
         # Cancel remaining tasks
         for task in pending:
@@ -253,6 +311,9 @@ async def run_with_interactive_cli(polaris: Polaris) -> None:
                 await task
             except asyncio.CancelledError:
                 pass
+
+        if done_error is not None:
+            raise done_error
 
     except KeyboardInterrupt:
         pass
@@ -294,7 +355,7 @@ async def run_with_dashboard(polaris: Polaris, clear_screen: bool = False) -> No
         done, pending = await asyncio.wait(
             [polaris_task, dashboard_task], return_when=asyncio.FIRST_COMPLETED
         )
-        # done contains completed tasks, pending contains unfinished tasks
+        done_error = _first_task_exception(done)
 
         # Cancel remaining tasks
         for task in pending:
@@ -303,6 +364,9 @@ async def run_with_dashboard(polaris: Polaris, clear_screen: bool = False) -> No
                 await task
             except asyncio.CancelledError:
                 pass
+
+        if done_error is not None:
+            raise done_error
 
     except KeyboardInterrupt:
         pass
@@ -334,12 +398,17 @@ async def run_with_dashboard_and_interactive(polaris: Polaris, clear_screen: boo
         done, pending = await asyncio.wait(
             [polaris_task, both_task], return_when=asyncio.FIRST_COMPLETED
         )
+        done_error = _first_task_exception(done)
+
         for task in pending:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+
+        if done_error is not None:
+            raise done_error
     except KeyboardInterrupt:
         pass
     finally:

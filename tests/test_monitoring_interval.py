@@ -1,10 +1,12 @@
 """Tests for monitoring interval configuration and CLI semantics (F7)."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from polaris.core.models import HealthStatus, SystemState
 from polaris.core.monitoring_loop import MonitoringLoop
 from polaris.core.polaris import Polaris
 from polaris.infrastructure.config import PolarisConfig
@@ -120,6 +122,36 @@ def test_system_collection_interval_uses_global_floor(mock_logger, mock_metrics)
     assert loop._resolve_system_collection_interval("unknown-system") == 10.0
 
 
+def test_connector_timeout_resolution_with_global_and_per_system_overrides(
+    mock_logger, mock_metrics
+):
+    cfg = PolarisConfig.from_dict(
+        {
+            "monitoring": {"interval_seconds": 10, "connector_timeout_seconds": 20},
+            "systems": [
+                {
+                    "id": "slow",
+                    "connector_type": "unknown",
+                    "monitoring": {
+                        "collection_interval": 30,
+                        "connector_timeout_seconds": 45,
+                    },
+                },
+                {
+                    "id": "default",
+                    "connector_type": "unknown",
+                },
+            ],
+        }
+    )
+
+    loop = _build_monitoring_loop(cfg, mock_logger, mock_metrics, interval_seconds=10.0)
+
+    assert loop._resolve_system_connector_timeout("slow") == 45.0
+    assert loop._resolve_system_connector_timeout("default") == 20.0
+    assert loop._resolve_system_connector_timeout("missing") == 20.0
+
+
 def test_system_due_check_respects_effective_interval(mock_logger, mock_metrics):
     cfg = PolarisConfig.from_dict(
         {
@@ -194,3 +226,75 @@ async def test_monitoring_loop_skips_not_due_systems(monkeypatch, mock_logger, m
     assert loop._process_system.await_count == 1
     called_system_id = loop._process_system.await_args_list[0].args[0]
     assert called_system_id == "fast"
+
+
+@pytest.mark.asyncio
+async def test_process_system_telemetry_timeout_records_timeout_metric(mock_logger, mock_metrics):
+    cfg = PolarisConfig.from_dict(
+        {
+            "monitoring": {
+                "interval_seconds": 1,
+                "connector_timeout_seconds": 0.01,
+            }
+        }
+    )
+    loop = _build_monitoring_loop(cfg, mock_logger, mock_metrics, interval_seconds=1.0)
+
+    async def slow_collect() -> SystemState:
+        await asyncio.sleep(0.05)
+        return SystemState(
+            system_id="timeout-system",
+            timestamp=datetime.now(timezone.utc),
+            metrics={},
+            health_status=HealthStatus.HEALTHY,
+        )
+
+    connector = Mock()
+    connector.collect_telemetry = slow_collect
+
+    result = await loop._process_system("timeout-system", connector)
+
+    assert result == {"systems_processed": 0, "adaptations_executed": 0}
+    assert loop._pipeline.run.await_count == 0
+    assert any(
+        call[0] == "increment" and call[1] == "polaris.monitoring.timeouts"
+        for call in mock_metrics.metrics
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_system_pipeline_timeout_keeps_telemetry_processed(mock_logger, mock_metrics):
+    cfg = PolarisConfig.from_dict(
+        {
+            "monitoring": {
+                "interval_seconds": 1,
+                "connector_timeout_seconds": 0.01,
+            }
+        }
+    )
+    loop = _build_monitoring_loop(cfg, mock_logger, mock_metrics, interval_seconds=1.0)
+
+    async def fast_collect() -> SystemState:
+        return SystemState(
+            system_id="pipeline-timeout-system",
+            timestamp=datetime.now(timezone.utc),
+            metrics={},
+            health_status=HealthStatus.HEALTHY,
+        )
+
+    async def slow_pipeline(*_args, **_kwargs) -> bool:
+        await asyncio.sleep(0.05)
+        return False
+
+    connector = Mock()
+    connector.collect_telemetry = fast_collect
+    loop._pipeline.run = AsyncMock(side_effect=slow_pipeline)
+
+    result = await loop._process_system("pipeline-timeout-system", connector)
+
+    assert result == {"systems_processed": 1, "adaptations_executed": 0}
+    assert loop._event_bus.publish.await_count == 1
+    assert any(
+        call[0] == "increment" and call[1] == "polaris.monitoring.timeouts"
+        for call in mock_metrics.metrics
+    )

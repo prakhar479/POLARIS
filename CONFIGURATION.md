@@ -46,6 +46,7 @@ systems:
 
 monitoring:
   interval_seconds: 30
+  connector_timeout_seconds: 30
 
 strategy:
   type: "threshold"
@@ -129,6 +130,7 @@ meta_learner:
 # Core monitoring settings
 monitoring:
   interval_seconds: 30 # Global loop cadence floor (seconds)
+  connector_timeout_seconds: 30 # Global timeout for telemetry + adaptation per system (seconds)
 
 # Managed systems
 systems:
@@ -140,6 +142,7 @@ systems:
       port: 4242
     monitoring:
       collection_interval: 5 # Effective cadence = max(interval_seconds, collection_interval)
+      connector_timeout_seconds: 10 # Optional per-system override
 
 # Adaptation strategy
 strategy:
@@ -1204,12 +1207,14 @@ Configure the managed systems to monitor and adapt.
 | `systems[].connection.timeout`             | float   | `10.0`        | Request timeout in seconds (Wildfire)           |
 | `systems[].connection.session_id`          | string  | -             | Optional session ID (Wildfire)                  |
 | `systems[].monitoring.collection_interval` | integer | -             | Collection interval in seconds                  |
+| `systems[].monitoring.connector_timeout_seconds` | float | -      | Per-system telemetry/adaptation timeout (seconds) |
 
 ### Monitoring
 
 | Field                         | Type    | Default | Description                         |
 | ----------------------------- | ------- | ------- | ----------------------------------- |
 | `monitoring.interval_seconds` | integer | `30`    | Monitoring loop interval in seconds |
+| `monitoring.connector_timeout_seconds` | float | `30` | Global telemetry/adaptation timeout per system cycle |
 
 ### Strategy
 

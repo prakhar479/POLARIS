@@ -55,6 +55,7 @@ class MonitoringLoop:
         self._config = config
         self._running = False
         self._last_collection_at: Dict[str, datetime] = {}
+        self._default_connector_timeout_seconds = 30.0
 
     async def run(self) -> None:
         """Run the monitoring loop until cancelled."""
@@ -143,9 +144,12 @@ class MonitoringLoop:
 
         systems_processed = 0
         adaptations_executed = 0
+        operation_timeout_seconds = self._resolve_system_connector_timeout(system_id)
 
         try:
-            state = await connector.collect_telemetry()
+            state = await asyncio.wait_for(
+                connector.collect_telemetry(), timeout=operation_timeout_seconds
+            )
             systems_processed = 1
             self._emit_tagged(
                 "polaris.telemetry.collected",
@@ -183,13 +187,28 @@ class MonitoringLoop:
             )
 
             system_contract = self._registry.get_contract(state.system_id)
-            executed = await self._pipeline.run(
-                state,
-                connector,
-                system_contract=system_contract,
+            executed = await asyncio.wait_for(
+                self._pipeline.run(
+                    state,
+                    connector,
+                    system_contract=system_contract,
+                ),
+                timeout=operation_timeout_seconds,
             )
             if executed:
                 adaptations_executed = 1
+
+        except asyncio.TimeoutError:
+            self._logger.error(
+                "Monitoring operation timed out",
+                system_id=system_id,
+                timeout_seconds=operation_timeout_seconds,
+            )
+            self._emit_tagged(
+                "polaris.monitoring.timeouts",
+                system_id,
+                component="monitoring_loop",
+            )
 
         except Exception as e:
             self._logger.error(
@@ -241,6 +260,55 @@ class MonitoringLoop:
             return max(base_interval, configured_interval)
 
         return base_interval
+
+    def _resolve_system_connector_timeout(self, system_id: str) -> float:
+        """Resolve connector operation timeout with global and per-system overrides.
+
+        Precedence:
+        1) systems[].monitoring.connector_timeout_seconds
+        2) monitoring.connector_timeout_seconds
+        3) default timeout (30s)
+        """
+        timeout_seconds = self._default_connector_timeout_seconds
+
+        monitoring_cfg = getattr(self._config, "monitoring", None)
+        if isinstance(monitoring_cfg, dict):
+            timeout_seconds = self._coerce_positive_float(
+                monitoring_cfg.get("connector_timeout_seconds"),
+                fallback=timeout_seconds,
+            )
+
+        systems_cfg = getattr(self._config, "systems", []) or []
+        for system_cfg in systems_cfg:
+            if getattr(system_cfg, "id", None) != system_id:
+                continue
+
+            per_system_monitoring = getattr(system_cfg, "monitoring", {}) or {}
+            if not isinstance(per_system_monitoring, dict):
+                return timeout_seconds
+
+            return self._coerce_positive_float(
+                per_system_monitoring.get("connector_timeout_seconds"),
+                fallback=timeout_seconds,
+            )
+
+        return timeout_seconds
+
+    @staticmethod
+    def _coerce_positive_float(value: object, fallback: float) -> float:
+        """Parse a positive float or return fallback when invalid."""
+        if value is None:
+            return fallback
+
+        try:
+            parsed = float(value)  # type: ignore
+        except (TypeError, ValueError):
+            return fallback
+
+        if parsed <= 0:
+            return fallback
+
+        return parsed
 
     def _is_due_for_collection(self, system_id: str, now: datetime) -> bool:
         """Return True when a system is due for telemetry collection."""

@@ -6,11 +6,14 @@ Provides an interactive shell for querying knowledge base and world model.
 import asyncio
 import cmd
 import json
+import select
 import shlex
+import sys
+import threading
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from difflib import get_close_matches
-from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional
+from typing import IO, TYPE_CHECKING, Any, Deque, Dict, List, Optional, cast
 
 from polaris.infrastructure.constants import DEFAULT_JSON_INDENT
 
@@ -629,6 +632,66 @@ def run_interactive_cli_standalone(
     asyncio.run(run_with_interactive_cli(polaris))
 
 
+class _CancellationAwareStdin:
+    """File-like stdin proxy that can be interrupted by a stop event."""
+
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        stream: Optional[Any] = None,
+        poll_interval: float = 0.1,
+    ) -> None:
+        self._stop_event = stop_event
+        self._stream = stream or sys.stdin
+        self._poll_interval = poll_interval
+
+    def readline(self) -> str:
+        if self._stop_event.is_set():
+            return "quit\n"
+
+        try:
+            is_tty = bool(self._stream.isatty())
+        except Exception:
+            is_tty = False
+
+        # Non-interactive stdin should be read directly.
+        if not is_tty:
+            try:
+                line = self._stream.readline()
+            except Exception:
+                return "quit\n"
+            return line or "quit\n"
+
+        try:
+            fd = self._stream.fileno()
+        except Exception:
+            try:
+                line = self._stream.readline()
+            except Exception:
+                return "quit\n"
+            return line or "quit\n"
+
+        while not self._stop_event.is_set():
+            try:
+                ready, _, _ = select.select([fd], [], [], self._poll_interval)
+            except Exception:
+                break
+
+            if ready:
+                try:
+                    line = self._stream.readline()
+                except Exception:
+                    return "quit\n"
+                return line or "quit\n"
+
+        return "quit\n"
+
+
+async def _join_thread(thread: threading.Thread, timeout: float) -> None:
+    """Join a thread without blocking the event loop."""
+    await asyncio.to_thread(thread.join, timeout)
+
+
 async def run_interactive_cli(polaris: "Polaris") -> None:
     """Run the interactive CLI interface in the same process.
 
@@ -637,21 +700,40 @@ async def run_interactive_cli(polaris: "Polaris") -> None:
     """
     cli = PolarisInteractiveCLI(polaris)
 
-    # Run in a separate thread to avoid blocking
-    import threading
+    stop_event = threading.Event()
+
+    # Use non-raw input mode so readline can be interrupted during cancellation.
+    cli.use_rawinput = False
+    cli.stdin = cast(IO[str], _CancellationAwareStdin(stop_event))
+
+    def request_shutdown() -> None:
+        if stop_event.is_set():
+            return
+        stop_event.set()
+        try:
+            cli.cmdqueue.append("quit")
+        except Exception:
+            pass
 
     def run_cli() -> None:
         try:
             cli.cmdloop()
         except KeyboardInterrupt:
             print("\nExiting...")
+        finally:
+            stop_event.set()
 
-    cli_thread = threading.Thread(target=run_cli, daemon=False)
+    cli_thread = threading.Thread(target=run_cli, daemon=True, name="polaris-interactive-cli")
     cli_thread.start()
 
-    # Keep the async context alive
     try:
         while cli_thread.is_alive():
             await asyncio.sleep(0.1)
+    except asyncio.CancelledError:
+        request_shutdown()
+        raise
     except KeyboardInterrupt:
-        pass
+        request_shutdown()
+    finally:
+        request_shutdown()
+        await _join_thread(cli_thread, timeout=1.0)

@@ -78,6 +78,9 @@ monitoring:
   # systems[].monitoring.collection_interval can only slow a specific system down.
   # Effective per-system cadence = max(monitoring.interval_seconds, collection_interval).
   interval_seconds: 30
+  # Max seconds for telemetry collection and adaptation execution per system.
+  # systems[].monitoring.connector_timeout_seconds can override this per system.
+  connector_timeout_seconds: 30
 
 ################################################################################
 # 3. ADAPTATION STRATEGY
@@ -95,68 +98,64 @@ monitoring:
 #
 
 strategy:
-  type: "hybrid" # DEFAULT: "threshold"
+  type: "threshold" # Production-safe default. See commented hybrid profile below.
   # Canonical schema: strategy parameters live under strategy.params.
   params:
-    # Use threshold guard if response_time > 750 ms, otherwise agentic_llm
-    selection_mode: first # "first", "priority", "confidence" (default: confidence)
-    min_confidence: 0.7 # Min confidence to trust a decision (default: 0.7)
-    cooldown_seconds: 120 # Min seconds between any hybrid-selected actions (0 = disabled)
+    thresholds:
+      average_response_time:
+        high: 750.0 # milliseconds
+    cooldown_seconds: 45
 
-    # Define sub-strategies to combine (higher priority evaluated first)
-    strategies:
-      - type: threshold # Sub-strategy 1 (response-time guard)
-        priority: 0.9
-        params:
-          thresholds:
-            average_response_time:
-              high: 750.0 # milliseconds
-          cooldown_seconds: 45
-
-      - type: agentic_llm # Sub-strategy 2
-        priority: 0.6
-        params:
-          provider: google # One of: "google", "openai", "openrouter", "groq", "ollama"
-          steps_limit: 3 # Max reasoning steps (default: 3)
-          temperature: 0.1 # Model creativity (default: 0.1)
-          # Optional: Custom system prompt (supports {system_id}, {allowed_tools})
-          # Per-system prompt overrides (keyed by systems[].id)
-          per_system_prompts:
-            swim: |
-              You are an adaptation controller for the SWIM web server pool.
-              Metrics: average_response_time (ms), average_utilization (0-1), server_count, dimmer (0-1).
-              SWIM actions: scale_up, scale_down, set_dimmer (params: {"value": 0.0-1.0}).
-              Constraints: max 3 servers, you cannot scale down below 1 server or scale up above 3 servers. adjust dimmer in increments of 0.1.
-              prioritize response time improvements, which can be done fast by dimmer reduction.
-              If you see consistent low input laod and low utilization, consider increasing dimmer or scaling down to save resources.
-              IMPORTANT: NEVER undo or redo a scaling action consecutively.
-              Focus on metric trends and velocities.
-              Use tools to analyze trends and predict outcomes before deciding on scaling.
-              Available tools: get_recent_states, summarize_metric_trends, get_world_model_insights,
-                predict_outcome, get_action_history, list_supported_actions.
-              Reply ONLY as strict JSON - two forms:
-              1) {"tool": "name", "args": {...}}
-              2) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
-              Keep steps minimal. Scale up when utilization > 0.8 or response_time is rising.
-          #   wildfire: |
-          #     You are an adaptation controller for Wildfire.
-          #     Focus on containment and UAV safety.
-          tools:
-            enabled: # List of available tools for the agent
-              - get_recent_states
-              - summarize_metric_trends
-              - get_world_model_insights
-              - predict_outcome
-              - get_action_history
-              - list_supported_actions
-          resilience: # Resilience settings (same as LLM strategy)
-            rps: 0.2
-            burst: 1
-            concurrency: 1
-            max_retries: 4
-            base_backoff_ms: 200
-            max_backoff_ms: 4000
-  #           concurrency: 4
+    # Advanced demo profile (commented): hybrid threshold + agentic_llm
+    # selection_mode: first # "first", "priority", "confidence" (default: confidence)
+    # min_confidence: 0.7 # Min confidence to trust a decision (default: 0.7)
+    # cooldown_seconds: 120 # Min seconds between any hybrid-selected actions (0 = disabled)
+    # strategies:
+    #   - type: threshold
+    #     priority: 0.9
+    #     params:
+    #       thresholds:
+    #         average_response_time:
+    #           high: 750.0
+    #       cooldown_seconds: 45
+    #   - type: agentic_llm
+    #     priority: 0.6
+    #     params:
+    #       provider: google # One of: "google", "openai", "openrouter", "groq", "ollama"
+    #       steps_limit: 3
+    #       temperature: 0.1
+    #       per_system_prompts:
+    #         swim: |
+    #           You are an adaptation controller for the SWIM web server pool.
+    #           Metrics: average_response_time (ms), average_utilization (0-1), server_count, dimmer (0-1).
+    #           SWIM actions: scale_up, scale_down, set_dimmer (params: {"value": 0.0-1.0}).
+    #           Constraints: max 3 servers, you cannot scale down below 1 server or scale up above 3 servers. adjust dimmer in increments of 0.1.
+    #           prioritize response time improvements, which can be done fast by dimmer reduction.
+    #           If you see consistent low input laod and low utilization, consider increasing dimmer or scaling down to save resources.
+    #           IMPORTANT: NEVER undo or redo a scaling action consecutively.
+    #           Focus on metric trends and velocities.
+    #           Use tools to analyze trends and predict outcomes before deciding on scaling.
+    #           Available tools: get_recent_states, summarize_metric_trends, get_world_model_insights,
+    #             predict_outcome, get_action_history, list_supported_actions.
+    #           Reply ONLY as strict JSON - two forms:
+    #           1) {"tool": "name", "args": {...}}
+    #           2) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
+    #           Keep steps minimal. Scale up when utilization > 0.8 or response_time is rising.
+    #       tools:
+    #         enabled:
+    #           - get_recent_states
+    #           - summarize_metric_trends
+    #           - get_world_model_insights
+    #           - predict_outcome
+    #           - get_action_history
+    #           - list_supported_actions
+    #       resilience:
+    #         rps: 0.2
+    #         burst: 1
+    #         concurrency: 1
+    #         max_retries: 4
+    #         base_backoff_ms: 200
+    #         max_backoff_ms: 4000
 
   ###############################################################################
   # STRATEGY A: Threshold-Based Adaptation
@@ -452,13 +451,13 @@ knowledge_store:
 #
 
 meta_learner:
-  enabled: true # Set to true to enable (default: false)
+  enabled: false # Production-safe default. Enable only when you want autonomous tuning.
 
   # Type of meta-learner
-  type: "llm" # "statistical" or "llm" (default: statistical)
+  type: "statistical" # "statistical" or "llm" (default: statistical)
 
   # Interval between meta-learning analysis runs (hours)
-  analysis_interval_hours: 0.2 # DEFAULT: 1.0
+  analysis_interval_hours: 1.0 # DEFAULT: 1.0
 
   # Transparency ledger for meta-learning updates (full lifecycle)
   transparency:
@@ -477,51 +476,46 @@ meta_learner:
   # More cautious when metric variability is high
 
   # For LLM-Based Meta-Learner
-  llm:
-    provider: google # One of: "google", "openai", "openrouter", "groq", "ollama"
-    temperature: 0.1 # Model creativity (default: 0.1)
-    auto_apply: true # Auto-apply approved proposals (default: false)
-
-    # Per-system prompt overrides (keyed by systems[].id)
-    per_system_prompts:
-      swim:
-        analysis_system_prompt: |
-          Analyze SWIM performance: average_response_time (ms), average_utilization (0-1), server_count, dimmer.
-          Assess: Are thresholds triggering correctly? Is cooldown too long/short? Is the agentic LLM hitting its step limit?
-          Note: be specific about exact parameter paths. DO try to give valid learnings and patterns based on the data, not just generic advice.
-        optimization_system_prompt: |
-          Optimize a hybrid strategy (threshold + agentic LLM) for SWIM.
-          Tunable parameters (use exact paths. NOTE: response_time is in MILLISECONDS):
-            strategy_0.thresholds.average_response_time.high  float  190-1310  (current ~750 ms)
-            strategy_0.cooldown_seconds                       int    10-300     (current 45 s)
-            strategy_1.temperature                            float  0.0-2.0    (current 0.1)
-            strategy_1.steps_limit                            int    1-10       (current 3)
-            selection_mode                                    str    first|priority|confidence
-            min_confidence                                    float  0.0-1.0
-          always propose values within the min/max shown there.
-          Reply ONLY as JSON:
-          {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>,
-            "rationale": "<30+ words citing analysis evidence>",
-            "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
-          or
-           {"analysis": "<narrative with specific metric values and trends>",
-           "issues": ["<issue with metric evidence>"],
-            "recommendations": ["<specific param + direction, e.g. increase strategy_0.cooldown_seconds from X to Y because ..., or dimmer adjustments are more effective than server scaling based on recent trends>"]}>]}
-          Keep changes < 15% of current value. Confidence >= 0.75 for well-evidenced changes.
-          If no changes needed: {"proposals": []}
-    #   wildfire:
-    #     analysis_system_prompt: |
-    #       Analyze Wildfire metrics (fire_cells_burning_ratio, mr1_avg, safety)...
-    #     optimization_system_prompt: |
-    #       Propose parameter changes for optimal fire containment...
-
-    resilience: # Resilience settings for LLM calls
-      rps: 2
-      burst: 4
-      concurrency: 4
-      max_retries: 4
-      base_backoff_ms: 200
-      max_backoff_ms: 4000
+  # Advanced demo profile (commented): LLM meta-learner
+  # type: "llm"
+  # analysis_interval_hours: 0.2
+  # llm:
+  #   provider: google
+  #   temperature: 0.1
+  #   auto_apply: true
+  #   per_system_prompts:
+  #     swim:
+  #       analysis_system_prompt: |
+  #         Analyze SWIM performance: average_response_time (ms), average_utilization (0-1), server_count, dimmer.
+  #         Assess: Are thresholds triggering correctly? Is cooldown too long/short? Is the agentic LLM hitting its step limit?
+  #         Note: be specific about exact parameter paths. DO try to give valid learnings and patterns based on the data, not just generic advice.
+  #       optimization_system_prompt: |
+  #         Optimize a hybrid strategy (threshold + agentic LLM) for SWIM.
+  #         Tunable parameters (use exact paths. NOTE: response_time is in MILLISECONDS):
+  #           strategy_0.thresholds.average_response_time.high  float  190-1310  (current ~750 ms)
+  #           strategy_0.cooldown_seconds                       int    10-300     (current 45 s)
+  #           strategy_1.temperature                            float  0.0-2.0    (current 0.1)
+  #           strategy_1.steps_limit                            int    1-10       (current 3)
+  #           selection_mode                                    str    first|priority|confidence
+  #           min_confidence                                    float  0.0-1.0
+  #         always propose values within the min/max shown there.
+  #         Reply ONLY as JSON:
+  #         {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>,
+  #           "rationale": "<30+ words citing analysis evidence>",
+  #           "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
+  #         or
+  #          {"analysis": "<narrative with specific metric values and trends>",
+  #          "issues": ["<issue with metric evidence>"],
+  #           "recommendations": ["<specific param + direction, e.g. increase strategy_0.cooldown_seconds from X to Y because ..., or dimmer adjustments are more effective than server scaling based on recent trends>"]}>]}
+  #         Keep changes < 15% of current value. Confidence >= 0.75 for well-evidenced changes.
+  #         If no changes needed: {"proposals": []}
+  #   resilience:
+  #     rps: 2
+  #     burst: 4
+  #     concurrency: 4
+  #     max_retries: 4
+  #     base_backoff_ms: 200
+  #     max_backoff_ms: 4000
 
 ################################################################################
 # 7. OBSERVABILITY & LOGGING
