@@ -106,6 +106,7 @@ async def test_hybrid_sub_llm_provider_selection(monkeypatch):
     _ = Polaris(config=cfg)
     # Ensure an openai client was requested for the llm sub-strategy
     assert "openai" in captured["providers"]
+    assert captured["providers"].count("openai") == 1
 
 
 @pytest.mark.asyncio

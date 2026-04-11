@@ -1,0 +1,898 @@
+"""Provider-specific LLM client implementations."""
+
+import asyncio
+import logging
+import os
+from typing import Any, Dict, List, Optional, cast
+
+from polaris.infrastructure.constants import DEFAULT_GOOGLE_MODEL, DEFAULT_MAX_TOKENS
+from polaris.infrastructure.llm.base import LLMClient, LLMMessage, LLMResponse
+from polaris.infrastructure.llm.contracts import (
+    LLMBlockedResponseError,
+    LLMProviderCapabilities,
+    get_provider_capabilities,
+)
+from polaris.infrastructure.llm.openai_compat import parse_openai_compat_response
+
+httpx: Any
+try:
+    import httpx as _httpx
+except Exception:  # pragma: no cover
+    httpx = None
+else:
+    httpx = _httpx
+
+
+class GoogleGeminiClient(LLMClient):
+    """Google Gemini LLM client."""
+
+    def __init__(self, api_key: Optional[str] = None, model: str = DEFAULT_GOOGLE_MODEL):
+        """Initialize Google Gemini client with API key and model."""
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        self.model = model
+
+        if not self.api_key:
+            raise ValueError(
+                "Google API key not provided. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
+
+        try:
+            import google.generativeai as genai
+
+            genai.configure(api_key=self.api_key)
+            self.client = genai.GenerativeModel(model)
+        except ImportError:
+            raise ImportError(
+                "google-generativeai package not installed. "
+                "Install with: pip install google-generativeai"
+            )
+
+    def capabilities(self) -> LLMProviderCapabilities:
+        """Return capabilities for Google Gemini client."""
+        return get_provider_capabilities("google")
+
+    @staticmethod
+    def _clean_schema_for_gemini(schema: Any) -> Any:
+        """Convert Pydantic model schema to Gemini-compatible format.
+
+        Gemini API has stricter schema requirements and doesn't accept:
+        - "default" fields
+        - "examples" fields
+        - Other Pydantic-specific metadata
+
+        This function extracts only the core schema structure that Gemini accepts.
+
+        Args:
+            schema: A Pydantic BaseModel class or already-extracted dict schema
+
+        Returns:
+            A cleaned schema compatible with Gemini API (can be any type)
+        """
+        if hasattr(schema, "model_json_schema"):
+            schema_dict: Dict[str, Any] = schema.model_json_schema()
+        elif isinstance(schema, dict):
+            schema_dict = schema
+        else:
+            raise TypeError(
+                f"_clean_schema_for_gemini expects a Pydantic model class or a dict, "
+                f"got {type(schema)!r}"
+            )
+
+        defs = schema_dict.get("$defs", {})
+        if defs:
+            schema_dict = GoogleGeminiClient._inline_refs(schema_dict, defs)
+
+        return GoogleGeminiClient._recursively_clean_schema(schema_dict)
+
+    @staticmethod
+    def _inline_refs(obj: Any, defs: Dict[str, Any]) -> Any:
+        """Replace $ref pointers with the referenced schema inline."""
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                ref_path = obj["$ref"]
+                ref_name = ref_path.split("/")[-1]
+                if ref_name in defs:
+                    return GoogleGeminiClient._inline_refs(defs[ref_name], defs)
+                return obj  # Leave as-is if ref not found
+            return {k: GoogleGeminiClient._inline_refs(v, defs) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [GoogleGeminiClient._inline_refs(item, defs) for item in obj]
+        return obj
+
+    @staticmethod
+    def _recursively_clean_schema(obj: Any) -> Any:
+        """Recursively convert Pydantic schema to Gemini-compatible format.
+
+        Gemini API doesn't support:
+        - "default" fields
+        - "examples" fields
+        - "title" fields
+        - "anyOf" and "allOf" (needs flattening)
+        - "$defs" and "$ref" (should be inlined before this step)
+
+        This function converts the schema to be compatible with Gemini's limitations.
+
+        Args:
+            obj: Schema object (dict, list, or scalar)
+
+        Returns:
+            Gemini-compatible schema object
+        """
+        if isinstance(obj, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, value in obj.items():
+                if key in {"default", "examples", "title", "$defs", "$ref", "additionalProperties"}:
+                    continue
+
+                if key == "anyOf":
+                    # Handle anyOf by finding the most specific non-null type
+                    cleaned.update(GoogleGeminiClient._flatten_anyof(value))
+                elif key == "allOf":
+                    # Handle allOf by merging schemas
+                    merged = GoogleGeminiClient._merge_allof(value)
+                    if merged:
+                        cleaned.update(merged)
+                else:
+                    cleaned[key] = GoogleGeminiClient._recursively_clean_schema(value)
+            return cleaned
+        elif isinstance(obj, list):
+            return [GoogleGeminiClient._recursively_clean_schema(item) for item in obj]
+        else:
+            return obj
+
+    @staticmethod
+    def _flatten_anyof(anyof_list: List[Dict[str, Any]]) -> Any:
+        """Flatten anyOf to a single schema that Gemini understands.
+
+        For nullable fields (type + null), we use the non-null type. For multiple object
+        types, we merge their properties.
+
+        Returns:
+            Schema object (can be dict or empty)
+        """
+        if not anyof_list:
+            return {}
+
+        # Filter out null types and find the most specific type
+        non_null_options = [opt for opt in anyof_list if opt.get("type") != "null"]
+
+        if not non_null_options:
+            # All options are null, treat as optional
+            return {}
+
+        if len(non_null_options) == 1:
+            # Single non-null option, use it directly
+            return GoogleGeminiClient._recursively_clean_schema(non_null_options[0])
+
+        merged: Dict[str, Any] = {"type": "object", "properties": {}}
+        all_required: set = set()
+
+        for option in non_null_options:
+            cleaned_option = GoogleGeminiClient._recursively_clean_schema(option)
+            if cleaned_option.get("type") == "object" and "properties" in cleaned_option:
+                merged["properties"].update(cleaned_option["properties"])
+                if "required" in cleaned_option:
+                    all_required.update(cleaned_option["required"])
+            else:
+                # For non-object types, use the first one
+                return GoogleGeminiClient._recursively_clean_schema(non_null_options[0])
+
+        if all_required:
+            merged["required"] = list(all_required)
+
+        return merged
+
+    @staticmethod
+    def _merge_allof(allof_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge allOf schemas into a single schema."""
+        if not allof_list:
+            return {}
+
+        merged: Dict[str, Any] = {"type": "object", "properties": {}}
+        all_required: set = set()
+
+        for schema in allof_list:
+            cleaned_schema = GoogleGeminiClient._recursively_clean_schema(schema)
+            if cleaned_schema.get("type") == "object":
+                if "properties" in cleaned_schema:
+                    merged["properties"].update(cleaned_schema["properties"])
+                if "required" in cleaned_schema:
+                    all_required.update(cleaned_schema["required"])
+                # Copy other fields
+                for key, value in cleaned_schema.items():
+                    if key not in ("properties", "required", "type"):
+                        merged[key] = value
+
+        if all_required:
+            merged["required"] = list(all_required)
+
+        return merged
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate response using Google Gemini with error handling.
+
+        When ``tools`` are provided the client translates the OpenAI-format
+        function definitions into Gemini ``FunctionDeclaration`` objects and
+        passes them as a ``genai_types.Tool`` to ``generate_content``.
+        Function-call parts in the response are normalised into the same
+        ``LLMResponse.tool_calls`` format used by the OpenAI / Groq clients,
+        so the strategy layer needs no provider-specific logic.
+
+        ``tool_choice`` is accepted for interface compatibility but is not
+        forwarded to Gemini (the model always selects tools automatically).
+        """
+        try:
+            # Convert messages to Gemini format
+            prompt_parts = []
+            for msg in messages:
+                if msg.role == "system":
+                    prompt_parts.append(f"System: {msg.content}\n")
+                elif msg.role == "user":
+                    prompt_parts.append(f"User: {msg.content}\n")
+                elif msg.role == "assistant":
+                    prompt_parts.append(f"Assistant: {msg.content}\n")
+
+            prompt = "".join(prompt_parts)
+
+            from google.generativeai.types import generation_types
+
+            gen_config: generation_types.GenerationConfigDict = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+
+            # Build Gemini-native tools when OpenAI-format definitions are provided
+            gemini_tools: Optional[List[Any]] = None
+            if tools:
+                try:
+                    from google.generativeai import types as genai_types
+
+                    function_declarations = []
+                    for tool_def in tools:
+                        fn = tool_def.get("function", {})
+                        fn_name = fn.get("name", "")
+                        fn_desc = fn.get("description", "")
+                        fn_params = fn.get("parameters")  # JSON Schema dict or None
+                        # Gemini FunctionDeclaration accepts the raw JSON Schema dict
+                        # for `parameters`; clean it the same way we clean response schemas
+                        # so unsupported keys (title, default, …) don't cause SDK errors.
+                        cleaned_params: Optional[Dict[str, Any]] = None
+                        if isinstance(fn_params, dict):
+                            cleaned_params = cast(
+                                Dict[str, Any],
+                                GoogleGeminiClient._recursively_clean_schema(fn_params),
+                            )
+                        function_declarations.append(
+                            genai_types.FunctionDeclaration(
+                                name=fn_name,
+                                description=fn_desc,
+                                parameters=cleaned_params,
+                            )
+                        )
+                    if function_declarations:
+                        gemini_tools = [
+                            genai_types.Tool(function_declarations=function_declarations)
+                        ]
+                except Exception as tool_build_err:
+                    logging.getLogger("polaris.llm").warning(
+                        "GoogleGeminiClient: failed to build Gemini tools from native_tools "
+                        "definition — falling back to plain text response. Error: %s",
+                        tool_build_err,
+                    )
+                    gemini_tools = None
+
+            if response_schema and not gemini_tools:
+                # JSON structured output mode (only when not using tool calling)
+                gen_config["response_mime_type"] = "application/json"
+                gen_config["response_schema"] = self._clean_schema_for_gemini(response_schema)
+
+            loop = asyncio.get_running_loop()
+
+            if gemini_tools:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.generate_content(
+                        prompt, generation_config=gen_config, tools=gemini_tools
+                    ),
+                )
+            else:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.generate_content(prompt, generation_config=gen_config),
+                )
+
+            if not response.candidates:
+                raise ValueError(
+                    "Gemini API returned no candidates (possible safety block or empty response)"
+                )
+
+            candidate = response.candidates[0]
+
+            # Extract finish reason before touching .text
+            finish_reason = None
+            try:
+                finish_reason = candidate.finish_reason.name
+            except (AttributeError, IndexError):
+                finish_reason = "UNKNOWN"
+
+            # Check for safety/recitation blocks — these are not retryable
+            non_stop_reasons = {"SAFETY", "RECITATION", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT"}
+            if finish_reason in non_stop_reasons:
+                blocked_error = LLMBlockedResponseError(
+                    f"Gemini API blocked response: finish_reason={finish_reason}. "
+                    "This is not a transient error; do not retry."
+                )
+                blocked_error.code = f"gemini_{str(finish_reason).lower()}"
+                raise blocked_error
+
+            # --- Tool-call response path ---
+            # When tools were provided, check for function_call parts first.
+            # Gemini returns function calls as parts in the candidate content,
+            # not as a separate field like OpenAI does.
+            tool_calls_out: Optional[List[Dict[str, Any]]] = None
+            if gemini_tools:
+                try:
+                    parts = candidate.content.parts if candidate.content else []
+                    raw_calls = []
+                    for part in parts:
+                        fc = getattr(part, "function_call", None)
+                        if fc and getattr(fc, "name", None):
+                            # fc.args is a MapComposite (dict-like), not a JSON string
+                            raw_calls.append({"name": fc.name, "arguments": dict(fc.args)})
+                    if raw_calls:
+                        tool_calls_out = raw_calls
+                except Exception as extract_err:
+                    logging.getLogger("polaris.llm").warning(
+                        "GoogleGeminiClient: error extracting function_call parts: %s",
+                        extract_err,
+                    )
+
+            # --- Text response path ---
+            # Used when no tool calls were found (or tools weren't requested).
+            text = ""
+            if not tool_calls_out:
+                try:
+                    text = response.text
+                except ValueError as ve:
+                    raise ValueError(f"Gemini API response text unavailable: {ve}") from ve
+
+                if not text:
+                    raise ValueError("Empty response from Gemini API")
+
+            return LLMResponse(
+                content=text,
+                model=self.model,
+                finish_reason=finish_reason,
+                tool_calls=tool_calls_out,
+            )
+
+        except ImportError:
+            raise ImportError(
+                "google-generativeai package not installed. "
+                "Install with: pip install google-generativeai"
+            )
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"Gemini API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using Gemini native function-calling format."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+
+class OpenAIClient(LLMClient):
+    """OpenAI LLM client."""
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4"):
+        """Initialize OpenAI client with API key and model."""
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.model = model
+
+        if not self.api_key:
+            raise ValueError(
+                "OpenAI API key not provided. Set OPENAI_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
+
+        try:
+            import openai
+
+            self.client = openai.AsyncOpenAI(api_key=self.api_key)
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+
+    def capabilities(self) -> LLMProviderCapabilities:
+        """Return capabilities for OpenAI client."""
+        return get_provider_capabilities("openai")
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate response using OpenAI with error handling."""
+        try:
+            openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": openai_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+
+            if response_schema is not None:
+                logging.getLogger("polaris.llm").warning(
+                    "OpenAIClient.generate: response_schema was provided but is not yet "
+                    "implemented for OpenAI. The response will be unstructured text. "
+                    "Pass a JSON-mode system prompt or use the structured-outputs API manually."
+                )
+
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+
+            response = await self.client.chat.completions.create(**kwargs)
+            parsed = parse_openai_compat_response(response, "OpenAI")
+
+            return LLMResponse(
+                content=parsed["content"],
+                model=self.model,
+                tokens_used=parsed["tokens_used"],
+                finish_reason=parsed["finish_reason"],
+                tool_calls=parsed["tool_calls"],
+            )
+
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"OpenAI API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using OpenAI native tool-calling format."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+
+class OpenRouterClient(LLMClient):
+    """OpenRouter LLM client.
+
+    OpenRouter exposes an OpenAI-compatible Chat Completions API. Docs:
+    https://openrouter.ai/docs
+
+    Environment variables:
+    - OPENROUTER_API_KEY (required if api_key not passed)
+    - OPENROUTER_BASE_URL (optional, default: https://openrouter.ai/api/v1)
+    - OPENROUTER_SITE_URL (optional, sent as HTTP-Referer)
+    - OPENROUTER_APP_NAME (optional, sent as X-Title)
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "openai/gpt-4o-mini",
+        base_url: Optional[str] = None,
+        site_url: Optional[str] = None,
+        app_name: Optional[str] = None,
+    ) -> None:
+        """Initialize OpenRouter client with configuration."""
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        self.model = model
+        self.base_url = (
+            base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        )
+        self.site_url = site_url or os.getenv("OPENROUTER_SITE_URL")
+        self.app_name = app_name or os.getenv("OPENROUTER_APP_NAME")
+
+        if not self.api_key:
+            raise ValueError(
+                "OpenRouter API key not provided. Set OPENROUTER_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
+
+        try:
+            import openai
+
+            default_headers: Dict[str, str] = {}
+            # Optional OpenRouter attribution headers (recommended)
+            if self.site_url:
+                default_headers["HTTP-Referer"] = self.site_url
+            if self.app_name:
+                default_headers["X-Title"] = self.app_name
+
+            self.client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                default_headers=default_headers or None,
+            )
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+
+    def capabilities(self) -> LLMProviderCapabilities:
+        """Return capabilities for OpenRouter client."""
+        return get_provider_capabilities("openrouter")
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate response using OpenRouter (OpenAI-compatible) with error handling."""
+        try:
+            openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": openai_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+
+            if response_schema is not None:
+                logging.getLogger("polaris.llm").warning(
+                    "OpenRouterClient.generate: response_schema was provided but is not yet "
+                    "implemented. The response will be unstructured text."
+                )
+
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+
+            response = await self.client.chat.completions.create(**kwargs)
+            parsed = parse_openai_compat_response(response, "OpenRouter")
+
+            return LLMResponse(
+                content=parsed["content"],
+                model=self.model,
+                tokens_used=parsed["tokens_used"],
+                finish_reason=parsed["finish_reason"],
+                tool_calls=parsed["tool_calls"],
+            )
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"OpenRouter API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using OpenRouter native OpenAI-compatible tools."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+
+class OllamaClient(LLMClient):
+    """Ollama LLM client.
+
+    Ollama can expose an OpenAI-compatible Chat Completions API at:
+    - {base_url}/v1/chat/completions
+
+    Common defaults:
+    - base_url: http://10.10.16.46:11435
+    - model: llama3.1
+
+    Environment variables:
+    - OLLAMA_BASE_URL (optional)
+    - OLLAMA_MODEL (optional)
+
+    Note: Ollama typically runs locally and doesn't require an API key. If your
+    deployment uses a gateway that requires auth, you can pass api_key.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-oss:20b",
+        base_url: Optional[str] = None,
+        generate_mode: str = "openai_compat",
+        http_client: Optional[Any] = None,
+    ) -> None:
+        """Initialize Ollama client with optional overrides."""
+        self.api_key = api_key or os.getenv("OLLAMA_API_KEY")
+        self.model = model or os.getenv("OLLAMA_MODEL") or "gpt-oss:20b"
+        self.base_url = base_url or os.getenv("OLLAMA_BASE_URL") or "http://10.10.16.46:11435"
+
+        # Supported modes:
+        #  - openai_compat: uses /v1/chat/completions
+        #  - native: uses /api/generate (Ollama's JSON format)
+        self.generate_mode = (generate_mode or "openai_compat").strip().lower()
+        if self.generate_mode in ("openai", "openai-compatible", "openai_compatible"):
+            self.generate_mode = "openai_compat"
+
+        self._openai_client = None
+        self._http_client = http_client
+        if self.generate_mode == "openai_compat":
+            try:
+                import openai
+
+                # If api_key is None, openai client still requires a string; use a dummy.
+                effective_key = self.api_key or "ollama"
+
+                self._openai_client = openai.AsyncOpenAI(
+                    api_key=effective_key,
+                    base_url=self.base_url.rstrip("/") + "/v1",
+                )
+            except ImportError:
+                # Keep construction backward-compatible: allow client creation even
+                # when openai is missing, and fail lazily if openai_compat is used.
+                self._openai_client = None
+
+    def capabilities(self) -> LLMProviderCapabilities:
+        """Return capabilities for Ollama mode currently in use."""
+        return get_provider_capabilities("ollama", ollama_mode=self.generate_mode)
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate response using Ollama (OpenAI-compatible) with error handling."""
+        try:
+            if self.generate_mode == "native":
+                # Native Ollama endpoint: POST /api/generate
+                # Uses a single prompt string (we flatten chat into a readable prompt).
+                prompt = "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
+
+                payload: Dict[str, Any] = {
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    # map temperature into options so it behaves similarly
+                    "options": {"temperature": temperature},
+                }
+
+                if response_schema is not None:
+                    logging.getLogger("polaris.llm").warning(
+                        "OllamaClient.generate(native): response_schema was provided but is not "
+                        "supported by /api/generate. The response will be unstructured text."
+                    )
+
+                url = self.base_url.rstrip("/") + "/api/generate"
+
+                if self._http_client is not None:
+                    resp = await self._http_client.post(url, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                else:
+                    if httpx is None:
+                        raise ImportError(
+                            "httpx package not installed. Install with: pip install httpx"
+                        )
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post(url, json=payload)
+                        resp.raise_for_status()
+                        data = resp.json()
+
+                text = data.get("response")
+                if not text:
+                    raise ValueError("Empty response from Ollama /api/generate")
+
+                return LLMResponse(
+                    content=text,
+                    model=self.model,
+                    tokens_used=data.get("eval_count"),
+                    finish_reason="stop",
+                )
+
+            # Default: OpenAI-compatible endpoint
+            if self._openai_client is None:
+                raise RuntimeError(
+                    "OllamaClient is configured for openai_compat but OpenAI-compatible "
+                    "dependencies are not available. Install with: pip install openai"
+                )
+
+            openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": openai_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+
+            if response_schema is not None:
+                logging.getLogger("polaris.llm").warning(
+                    "OllamaClient.generate(openai_compat): response_schema was provided but is not yet "
+                    "implemented. The response will be unstructured text."
+                )
+
+            response = await self._openai_client.chat.completions.create(**kwargs)
+            parsed = parse_openai_compat_response(response, "Ollama")
+
+            return LLMResponse(
+                content=parsed["content"],
+                model=self.model,
+                tokens_used=parsed["tokens_used"],
+                finish_reason=parsed["finish_reason"],
+                tool_calls=parsed["tool_calls"],
+            )
+
+        except ImportError:
+            raise ImportError("openai package not installed. Install with: pip install openai")
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"Ollama API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response with tools when Ollama runs in OpenAI-compatible mode."""
+        if self.generate_mode != "openai_compat":
+            raise NotImplementedError(
+                "Ollama native /api/generate mode does not support unified tool calling"
+            )
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+
+class GroqClient(LLMClient):
+    """Groq LLM client."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "openai/gpt-oss-120b",
+    ):
+        """Initialize Groq client with API key and model."""
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self.model = model
+
+        if not self.api_key:
+            raise ValueError(
+                "Groq API key not provided. Set GROQ_API_KEY environment variable, "
+                "or pass api_key parameter."
+            )
+
+        try:
+            from groq import Groq
+
+            self.client = Groq(api_key=self.api_key)
+        except ImportError:
+            raise ImportError("groq package not installed. Install with: pip install groq")
+
+    def capabilities(self) -> LLMProviderCapabilities:
+        """Return capabilities for Groq client."""
+        return get_provider_capabilities("groq")
+
+    async def generate(
+        self,
+        messages: List[LLMMessage],
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        response_schema: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate response using Groq with error handling."""
+        try:
+            groq_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+            call_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": cast(Any, groq_messages),
+                "temperature": temperature,
+                "max_completion_tokens": max_tokens,
+                "top_p": 1,
+                "stream": False,
+                "stop": None,
+            }
+            if tools:
+                call_kwargs["tools"] = cast(Any, tools)
+                call_kwargs["tool_choice"] = tool_choice or "auto"
+
+            loop = asyncio.get_running_loop()
+            # Mypy cannot safely infer non-streaming mode return types in executor.
+            # Cast to Any for both messages and response to fix union-attr errors.
+            response: Any = await loop.run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(**call_kwargs),
+            )
+            parsed = parse_openai_compat_response(response, "Groq")
+
+            return LLMResponse(
+                content=parsed["content"],
+                model=self.model,
+                tokens_used=parsed["tokens_used"],
+                finish_reason=parsed["finish_reason"],
+                tool_calls=parsed["tool_calls"],
+            )
+
+        except ImportError:
+            raise ImportError("groq package not installed. Install with: pip install groq")
+        except Exception as e:
+            if isinstance(e, (RuntimeError, ValueError)):
+                raise
+            raise RuntimeError(f"Groq API error: {e}") from e
+
+    async def generate_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[str] = "auto",
+        temperature: float = 0.7,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResponse:
+        """Generate response using Groq native OpenAI-compatible tools."""
+        return await self.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )

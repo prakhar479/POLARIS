@@ -15,10 +15,9 @@ from polaris.core.factories import (
     registered_strategy_types,
 )
 from polaris.infrastructure.constants import MAX_PORT, MIN_PORT
+from polaris.infrastructure.llm.contracts import CANONICAL_LLM_PROVIDERS
 from polaris.strategies.utils import DEFAULT_ALLOWED_TOOLS
 from polaris.tools import registered_tool_types
-
-_SUPPORTED_LLM_PROVIDERS = {"google", "openai", "openrouter", "groq", "ollama"}
 
 
 class ActionTemplateConfig(BaseModel):
@@ -315,8 +314,8 @@ class StrategyConfig(BaseModel):
         """Validate common provider and temperature fields for LLM-backed strategies."""
         provider = params.get("provider")
         if provider is not None:
-            if not isinstance(provider, str) or provider not in _SUPPORTED_LLM_PROVIDERS:
-                supported = sorted(_SUPPORTED_LLM_PROVIDERS)
+            if not isinstance(provider, str) or provider not in CANONICAL_LLM_PROVIDERS:
+                supported = sorted(CANONICAL_LLM_PROVIDERS)
                 raise ValueError(f"{label} provider must be one of: {supported}")
 
         temperature = params.get("temperature")

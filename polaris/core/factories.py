@@ -358,7 +358,6 @@ def _register_default_strategy_factories() -> None:
         HybridStrategy,
         LLMReasoningStrategy,
         MultiAgentStrategy,
-        SuaveThresholdStrategy,
         ThreadAgenticStrategy,
         ThresholdReactiveStrategy,
     )
@@ -404,12 +403,7 @@ def _register_default_strategy_factories() -> None:
             raise ValueError("LLM strategy requires configuration params")
 
         llm_reasoning_cfg = params
-        provider = llm_reasoning_cfg.get("provider", "google")
-        resilience_cfg = llm_reasoning_cfg.get("resilience")
-        llm_kwargs = dict(llm_reasoning_cfg)
-        llm_kwargs.pop("provider", None)
-        llm_kwargs.pop("resilience", None)
-        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+        llm_client = _llm.create_llm_client_from_config(llm_reasoning_cfg)
 
         return LLMReasoningStrategy(
             llm_client=llm_client,
@@ -471,177 +465,6 @@ def _register_default_strategy_factories() -> None:
                 logger.error(f"Failed to build sub-strategy {s_type}: {exc}")
                 continue
 
-            if s_type == "threshold":
-                thresholds = None
-                cooldown = 60
-                if "threshold" in s and isinstance(s["threshold"], dict):
-                    th = s["threshold"]
-                    thresholds = th.get("thresholds")
-                    cooldown = th.get("cooldown_seconds", cooldown)
-
-                sub = ThresholdReactiveStrategy(
-                    thresholds=thresholds,
-                    cooldown_seconds=cooldown,
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub, priority))
-
-            elif s_type == "suave_threshold":
-                st_cfg = s.get("suave_threshold", {}) or {}
-
-                vis_metric_names = st_cfg.get("visibility_metric_names")
-                thr_metric_names = st_cfg.get("thruster_failure_metric_names")
-                perf_metric_names = st_cfg.get("performance_metric_names")
-
-                trigger_cfg = (
-                    st_cfg.get("trigger", {}) if isinstance(st_cfg.get("trigger"), dict) else {}
-                )
-                mode_cfg = st_cfg.get("modes", {}) if isinstance(st_cfg.get("modes"), dict) else {}
-                vis_mode_cfg = (
-                    mode_cfg.get("visibility", {})
-                    if isinstance(mode_cfg.get("visibility"), dict)
-                    else {}
-                )
-                motion_mode_cfg = (
-                    mode_cfg.get("maintain_motion", {})
-                    if isinstance(mode_cfg.get("maintain_motion"), dict)
-                    else {}
-                )
-
-                sub_suave = SuaveThresholdStrategy(
-                    visibility_metric_names=vis_metric_names,
-                    thruster_failure_metric_names=thr_metric_names,
-                    performance_metric_names=perf_metric_names,
-                    trigger_visibility_below=float(trigger_cfg.get("visibility_below", 1.0)),
-                    trigger_performance_at_or_above=float(
-                        trigger_cfg.get("performance_above_or_equal", 1.0)
-                    ),
-                    trigger_thruster_failure_at_or_above=float(
-                        trigger_cfg.get("thruster_failure_at_or_above", 0.5)
-                    ),
-                    visibility_medium_at_or_above=float(
-                        vis_mode_cfg.get("medium_at_or_above", 1.0)
-                    ),
-                    visibility_high_at_or_above=float(vis_mode_cfg.get("high_at_or_above", 2.0)),
-                    search_path_function_node=str(
-                        mode_cfg.get("search_path_function_node", "f_generate_search_path")
-                    ),
-                    maintain_motion_function_node=str(
-                        mode_cfg.get("maintain_motion_function_node", "f_maintain_motion")
-                    ),
-                    spiral_low_mode=str(vis_mode_cfg.get("low_mode", "fd_spiral_low")),
-                    spiral_medium_mode=str(vis_mode_cfg.get("medium_mode", "fd_spiral_medium")),
-                    spiral_high_mode=str(vis_mode_cfg.get("high_mode", "fd_spiral_high")),
-                    recover_thrusters_mode=str(
-                        motion_mode_cfg.get("failure_mode", "fd_recover_thrusters")
-                    ),
-                    all_thrusters_mode=str(motion_mode_cfg.get("healthy_mode", "fd_all_thrusters")),
-                    cooldown_seconds=int(st_cfg.get("cooldown_seconds", 0)),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_suave, priority))
-
-            elif s_type == "llm_reasoning":
-                llm_cfg = s.get("llm_reasoning", {}) or {}
-                provider = llm_cfg.get("provider", "google")
-                llm_client = _llm.create_llm_client(provider, resilience=llm_cfg.get("resilience"))
-                sub_llm = LLMReasoningStrategy(
-                    llm_client=llm_client,
-                    system_description=llm_cfg.get("system_description", "Managed system"),
-                    adaptation_goals=llm_cfg.get(
-                        "adaptation_goals", "Maintain optimal performance"
-                    ),
-                    temperature=llm_cfg.get("temperature", 0.1),
-                    system_prompt=llm_cfg.get("system_prompt"),
-                    per_system_prompts=llm_cfg.get("per_system_prompts"),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_llm, priority))
-
-            elif s_type == "agentic_llm":
-                agent_cfg = s.get("agentic_llm", {}) or {}
-                steps_limit = int(agent_cfg.get("steps_limit", 3))
-                temperature = float(agent_cfg.get("temperature", 0.1))
-                allowed_tools = None
-                tools_cfg = agent_cfg.get("tools")
-                if isinstance(tools_cfg, dict):
-                    allowed_tools = tools_cfg.get("enabled")
-
-                provider = agent_cfg.get("provider", "google")
-                llm_client = _llm.create_llm_client(
-                    provider, resilience=agent_cfg.get("resilience")
-                )
-
-                sub_agent = AgenticLLMStrategy(
-                    llm_client=llm_client,
-                    knowledge_store=knowledge_store,
-                    world_model=world_model,
-                    steps_limit=steps_limit,
-                    temperature=temperature,
-                    allowed_tools=allowed_tools,
-                    system_prompt=agent_cfg.get("system_prompt"),
-                    per_system_prompts=agent_cfg.get("per_system_prompts"),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_agent, priority))
-
-            elif s_type == "multi_agent":
-                from polaris.strategies.multi_agent import AgentConfig
-
-                ma_cfg = s.get("multi_agent", {}) or {}
-                ma_provider = ma_cfg.get("provider", "google")
-                ma_shared_llm = _llm.create_llm_client(
-                    ma_provider, resilience=ma_cfg.get("resilience")
-                )
-
-                def _build_agent_cfg_hybrid(
-                    role_cfg: Optional[dict], ma_provider: str = ma_provider
-                ) -> Optional[AgentConfig]:
-                    if not isinstance(role_cfg, dict) or not role_cfg:
-                        return None
-                    rp = role_cfg.get("provider")
-                    rr = role_cfg.get("resilience")
-                    rc = None
-                    if rp:
-                        rc = _llm.create_llm_client(rp, resilience=rr)
-                    elif rr:
-                        rc = _llm.create_llm_client(ma_provider, resilience=rr)
-                    return AgentConfig(
-                        llm_client=rc,
-                        temperature=role_cfg.get("temperature"),
-                        system_prompt=role_cfg.get("system_prompt"),
-                        max_tokens=role_cfg.get("max_tokens"),
-                        steps_limit=role_cfg.get("steps_limit"),
-                        allowed_tools=role_cfg.get("tools"),
-                    )
-
-                sub_ma = MultiAgentStrategy(
-                    llm_client=ma_shared_llm,
-                    knowledge_store=knowledge_store,
-                    world_model=world_model,
-                    temperature=float(ma_cfg.get("temperature", 0.1)),
-                    system_description=ma_cfg.get(
-                        "system_description", "A generic managed cloud system"
-                    ),
-                    steps_limit=int(ma_cfg.get("steps_limit", 3)),
-                    allowed_tools=ma_cfg.get("tools"),
-                    diagnostician_config=_build_agent_cfg_hybrid(ma_cfg.get("diagnostician")),
-                    planner_config=_build_agent_cfg_hybrid(ma_cfg.get("planner")),
-                    validator_config=_build_agent_cfg_hybrid(ma_cfg.get("validator")),
-                    logger=logger,
-                    metrics=metrics,
-                )
-                sub_strategies.append((sub_ma, priority))
-
-            else:
-                # Fallback to threshold for unknown types
-                sub = ThresholdReactiveStrategy(logger=logger, metrics=metrics)
-                sub_strategies.append((sub, priority))
-
         if not sub_strategies:
             raise ValueError("Hybrid strategy requires at least one valid sub-strategy")
 
@@ -684,14 +507,7 @@ def _register_default_strategy_factories() -> None:
         # Native tool calling: OpenAI-format function definitions (optional)
         native_tools = agent_conf.get("native_tools")  # list of dicts or None
 
-        provider = agent_conf.get("provider", "google")
-        resilience_cfg = agent_conf.get("resilience")
-        llm_kwargs = dict(agent_conf)
-        llm_kwargs.pop("provider", None)
-        llm_kwargs.pop("resilience", None)
-        # Strip keys not understood by create_llm_client
-        llm_kwargs.pop("native_tools", None)
-        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+        llm_client = _llm.create_llm_client_from_config(agent_conf)
 
         return AgenticLLMStrategy(
             llm_client=llm_client,
@@ -742,12 +558,7 @@ def _register_default_strategy_factories() -> None:
         elif isinstance(tools_cfg, dict):
             allowed_tools = tools_cfg.get("enabled")
 
-        provider = thread_conf.get("provider", "google")
-        resilience_cfg = thread_conf.get("resilience")
-        llm_kwargs = dict(thread_conf)
-        llm_kwargs.pop("provider", None)
-        llm_kwargs.pop("resilience", None)
-        llm_client = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+        llm_client = _llm.create_llm_client_from_config(thread_conf)
 
         return ThreadAgenticStrategy(
             llm_client=llm_client,
@@ -791,11 +602,7 @@ def _register_default_strategy_factories() -> None:
         max_tool_result_chars = int(agent_conf.get("max_tool_result_chars", 1200))
 
         provider = agent_conf.get("provider", "google")
-        resilience_cfg = agent_conf.get("resilience")
-        llm_kwargs = dict(agent_conf)
-        llm_kwargs.pop("provider", None)
-        llm_kwargs.pop("resilience", None)
-        shared_llm = _llm.create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+        shared_llm = _llm.create_llm_client_from_config(agent_conf)
 
         def _parse_tools_config(raw_tools: Any) -> Optional[List[str]]:
             if isinstance(raw_tools, list):
@@ -813,18 +620,15 @@ def _register_default_strategy_factories() -> None:
             role_resilience = role_cfg.get("resilience")
             role_client = None
             if role_provider:
-                role_kwargs = dict(role_cfg)
-                role_kwargs.pop("provider", None)
-                role_kwargs.pop("resilience", None)
-                role_client = _llm.create_llm_client(
-                    role_provider,
-                    resilience=role_resilience,
-                    **role_kwargs,
+                role_client = _llm.create_llm_client_from_config(
+                    role_cfg,
+                    default_provider=str(provider),
                 )
             elif role_resilience:
-                role_client = _llm.create_llm_client(
-                    provider, resilience=role_resilience, **llm_kwargs
-                )
+                role_llm_cfg = dict(agent_conf)
+                role_llm_cfg["provider"] = provider
+                role_llm_cfg["resilience"] = role_resilience
+                role_client = _llm.create_llm_client_from_config(role_llm_cfg)
             role_tools = _parse_tools_config(role_cfg.get("tools"))
             return AgentConfig(
                 llm_client=role_client,

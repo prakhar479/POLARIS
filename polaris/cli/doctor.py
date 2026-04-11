@@ -12,6 +12,11 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 import yaml
 
 from polaris.infrastructure.config import PolarisConfig
+from polaris.infrastructure.llm.contracts import (
+    get_provider_multi_key_env_var,
+    get_provider_required_modules,
+    get_provider_single_key_env_vars,
+)
 
 _LEGACY_STRATEGY_BLOCK_KEYS = (
     "threshold",
@@ -419,31 +424,11 @@ def _diagnose_dependencies(
         )
         return
 
-    module_requirements = {
-        "google": ["google.generativeai", "google.ai.generativelanguage_v1beta"],
-        "openai": ["openai"],
-        "openrouter": ["openai"],
-        "groq": ["groq"],
-        "ollama": ["openai"],
-    }
-    provider_single_key_env = {
-        "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-        "openai": ["OPENAI_API_KEY"],
-        "openrouter": ["OPENROUTER_API_KEY"],
-        "groq": ["GROQ_API_KEY"],
-    }
-    provider_multi_key_env = {
-        "google": "GEMINI_API_KEYS",
-        "openai": "OPENAI_API_KEYS",
-        "openrouter": "OPENROUTER_API_KEYS",
-        "groq": "GROQ_API_KEYS",
-    }
-
     for requirement in llm_requirements:
         provider = requirement["provider"]
         path = requirement["path"]
         resilience = requirement.get("resilience")
-        required_modules = module_requirements.get(provider, [])
+        required_modules = get_provider_required_modules(provider)
 
         if not required_modules:
             diagnostics.append(
@@ -489,8 +474,8 @@ def _diagnose_dependencies(
                 )
             )
         else:
-            env_candidates = list(provider_single_key_env.get(provider, []))
-            env_candidates.append(keys_env_var or provider_multi_key_env.get(provider, ""))
+            env_candidates = list(get_provider_single_key_env_vars(provider))
+            env_candidates.append(keys_env_var or get_provider_multi_key_env_var(provider) or "")
             env_candidates = [name for name in env_candidates if name]
 
             if any(_is_set(name) for name in env_candidates):

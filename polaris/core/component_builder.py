@@ -338,16 +338,11 @@ class ComponentBuilder:
 
         if meta_type == "llm":
             try:
-                from polaris.infrastructure.llm import create_llm_client
+                from polaris.infrastructure.llm import create_llm_client_from_config
                 from polaris.meta_learner.llm_based import LLMMetaLearner
 
                 llm_cfg = meta_config.get("llm", {}) or {}
-                provider = llm_cfg.get("provider", "google")
-                resilience_cfg = llm_cfg.get("resilience")
-                llm_kwargs = dict(llm_cfg)
-                llm_kwargs.pop("provider", None)
-                llm_kwargs.pop("resilience", None)
-                llm_client = create_llm_client(provider, resilience=resilience_cfg, **llm_kwargs)
+                llm_client = create_llm_client_from_config(llm_cfg)
 
                 return LLMMetaLearner(
                     llm_client=llm_client,

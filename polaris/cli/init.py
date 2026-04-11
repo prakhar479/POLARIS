@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from polaris.core.factories import registered_connector_types, registered_strategy_types
+from polaris.infrastructure.llm.contracts import ordered_canonical_llm_providers
 
 
 def _prompt_choice(prompt: str, allowed: list[str], default: str, attempts: int = 3) -> str:
@@ -152,7 +153,7 @@ def run_init_cli(args: list[str]) -> int:
         "hybrid",
     }
     if llm_needed:
-        provider_types = ["google", "openai", "openrouter", "groq", "ollama"]
+        provider_types = list(ordered_canonical_llm_providers())
         default_provider = "openai"
         try:
             llm_connector = _prompt_choice(
