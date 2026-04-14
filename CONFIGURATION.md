@@ -1034,7 +1034,7 @@ observability:
 
 ### Before Starting ✓
 
-- [ ] Python 3.10+
+- [ ] Python 3.11+
 - [ ] `pyyaml` package installed
 - [ ] Configuration file created or `config/default.yaml` available
 - [ ] API credentials set (if using LLM strategies)

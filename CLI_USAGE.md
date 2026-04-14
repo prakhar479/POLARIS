@@ -188,7 +188,7 @@ python -m polaris.cli doctor --config config/default.yaml
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `rich` library (for dashboard and interactive CLI)
 - Valid YAML configuration file
 

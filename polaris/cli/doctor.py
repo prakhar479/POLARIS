@@ -617,12 +617,12 @@ def run_doctor(config_path: str) -> List[Diagnostic]:
     """Run all doctor diagnostics and return findings."""
     diagnostics: List[Diagnostic] = []
 
-    if sys.version_info < (3, 10):
+    if sys.version_info < (3, 11):
         diagnostics.append(
             Diagnostic(
                 "FAIL",
                 "runtime",
-                f"Unsupported Python version: {sys.version.split()[0]} (requires >= 3.10)",
+                f"Unsupported Python version: {sys.version.split()[0]} (requires >= 3.11)",
             )
         )
     else:

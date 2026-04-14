@@ -16,8 +16,8 @@ fi
 PYTHON_BIN="python"
 if [ -x ".venv/bin/python" ]; then
     PYTHON_BIN=".venv/bin/python"
-elif command -v python3.10 >/dev/null 2>&1; then
-    PYTHON_BIN="python3.10"
+elif command -v python3.11 >/dev/null 2>&1; then
+    PYTHON_BIN="python3.11"
 fi
 
 echo "Using Python interpreter: $PYTHON_BIN"
@@ -26,8 +26,8 @@ PYTHON_VERSION="$($PYTHON_BIN -c 'import sys; print("{}.{}".format(sys.version_i
 PYTHON_MAJOR="${PYTHON_VERSION%%.*}"
 PYTHON_MINOR="${PYTHON_VERSION#*.}"
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]; }; then
-    echo "ERROR: Python 3.10 or newer is required, but found $PYTHON_VERSION"
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]; }; then
+    echo "ERROR: Python 3.11 or newer is required, but found $PYTHON_VERSION"
     exit 1
 fi
 
