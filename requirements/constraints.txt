@@ -1,0 +1,40 @@
+# Shared dependency constraints for local development, CI, and Docker builds.
+# Keep this file aligned with pyproject.toml direct dependencies.
+
+# Core runtime
+nats-py>=2.0.0,<3.0.0
+pydantic>=2.0.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+jsonschema>=4.0.0,<5.0.0
+PyYAML>=6.0,<7.0.0
+grpcio>=1.50.0,<2.0.0
+scipy>=1.9.0,<2.0.0
+numpy>=1.21.0,<2.0.0
+
+# Optional runtime features
+openai>=1.0.0,<2.0.0
+google-generativeai>=0.7.2,<1.0.0
+groq>=0.4.1,<1.0.0
+httpx>=0.24.0,<1.0.0
+rich>=13.0.0,<15.0.0
+redis>=4.5.0,<6.0.0
+kubernetes>=28.1.0,<32.0.0
+roslibpy>=1.8.1,<2.0.0
+
+# Development tooling
+pytest>=7.0.0,<9.0.0
+pytest-asyncio>=0.21.0,<2.0.0
+pytest-cov>=4.0.0,<7.0.0
+black==26.3.1
+isort>=5.12.0,<7.0.0
+mypy>=1.19.1,<2.0.0
+flake8>=6.0.0,<8.0.0
+flake8-docstrings>=1.7.0,<2.0.0
+flake8-bugbear>=24.0.0,<25.0.0
+flake8-comprehensions>=3.14.0,<4.0.0
+radon>=6.0.0,<7.0.0
+pytest-benchmark>=4.0.0,<6.0.0
+pre-commit>=3.0.0,<5.0.0
+types-PyYAML>=6.0.12,<7.0.0
+build>=0.10.0,<2.0.0
+twine>=4.0.0,<7.0.0

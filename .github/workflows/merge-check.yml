@@ -24,7 +24,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[dev]
+        pip install -c requirements/constraints.txt -e .[dev]
 
     - name: Run full test suite
       run: |
@@ -113,9 +113,9 @@ jobs:
         # Check if pyproject.toml is valid
         python -c "
         try:
-            import toml
+        import tomllib
             with open('pyproject.toml', 'r') as f:
-                config = toml.load(f)
+          config = tomllib.loads(f.read())
             print('✓ pyproject.toml is valid')
         except Exception as e:
             print(f'ERROR: Invalid pyproject.toml: {e}')

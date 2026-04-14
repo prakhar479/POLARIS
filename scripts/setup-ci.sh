@@ -33,7 +33,7 @@ fi
 
 # Install dependencies
 echo "Installing dependencies..."
-"$PYTHON_BIN" -m pip install -e .[dev]
+"$PYTHON_BIN" -m pip install -c requirements/constraints.txt -e .[dev]
 
 # Setup pre-commit hooks
 echo "Setting up pre-commit hooks..."

@@ -9,39 +9,55 @@ description = "POLARIS - Proactive Optimization & Learning Architecture for Resi
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "nats-py>=2.0.0",
-    "pydantic>=2.0.0",
-    "python-dotenv",
-    "jsonschema",
-    "PyYAML",
-    "httpx>=0.24.0",
-    "grpcio>=1.50.0",
-    "scipy>=1.9.0",
+    "nats-py>=2.0.0,<3.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "jsonschema>=4.0.0,<5.0.0",
+    "PyYAML>=6.0,<7.0.0",
+    "grpcio>=1.50.0,<2.0.0",
+    "scipy>=1.9.0,<2.0.0",
     "numpy>=1.21.0,<2.0.0",
-    "redis>=4.5.0",
-    "kubernetes>=28.1.0",
-    "openai>=1.0.0",
-    "google-generativeai>=0.7.2",
-    "rich>=13.0.0",
-    "groq>=0.4.1",
 ]
+
+[project.scripts]
+polaris = "polaris.cli.main:main"
 
 [project.optional-dependencies]
 llm = [
-    "openai>=1.0.0",
-    "google-generativeai>=0.7.2",
-    "groq>=0.4.1",
+    "openai>=1.0.0,<2.0.0",
+    "google-generativeai>=0.7.2,<1.0.0",
+    "groq>=0.4.1,<1.0.0",
+    "httpx>=0.24.0,<1.0.0",
 ]
 dashboard = [
-    "rich>=13.0.0",
+    "rich>=13.0.0,<15.0.0",
+]
+connectors = [
+    "httpx>=0.24.0,<1.0.0",
+    "redis>=4.5.0,<6.0.0",
+    "kubernetes>=28.1.0,<32.0.0",
+]
+suave = [
+    "roslibpy>=1.8.1,<2.0.0",
 ]
 all = [
-    "openai>=1.0.0",
-    "google-generativeai>=0.7.2",
-    "rich>=13.0.0",
-    "groq>=0.4.1",
+    "openai>=1.0.0,<2.0.0",
+    "google-generativeai>=0.7.2,<1.0.0",
+    "groq>=0.4.1,<1.0.0",
+    "httpx>=0.24.0,<1.0.0",
+    "rich>=13.0.0,<15.0.0",
+    "redis>=4.5.0,<6.0.0",
+    "kubernetes>=28.1.0,<32.0.0",
+    "roslibpy>=1.8.1,<2.0.0",
 ]
 dev = [
+    "openai>=1.0.0,<2.0.0",
+    "google-generativeai>=0.7.2,<1.0.0",
+    "groq>=0.4.1,<1.0.0",
+    "httpx>=0.24.0,<1.0.0",
+    "rich>=13.0.0,<15.0.0",
+    "redis>=4.5.0,<6.0.0",
+    "kubernetes>=28.1.0,<32.0.0",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov",
@@ -59,6 +75,10 @@ dev = [
     "build>=0.10.0",
     "twine>=4.0.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["polaris*"]
+exclude = ["tests*", "docs*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

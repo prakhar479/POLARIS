@@ -1,7 +1,9 @@
-.PHONY: help install install-dev test test-verbose test-all format format-check lint type-check dependency-check pre-commit-check ci clean install-hooks run-hooks build docs
+.PHONY: help install install-dev test test-verbose test-all format format-check lint type-check dependency-check dependency-policy-check pre-commit-check ci clean install-hooks run-hooks build docs docker-build-core docker-build-full docker-build-ci docker-smoke
 
 LINE_LENGTH ?= 100
 PYTHON ?= python
+PIP_CONSTRAINTS ?= requirements/constraints.txt
+PIP_CONSTRAINT_ARGS := $(if $(wildcard $(PIP_CONSTRAINTS)),-c $(PIP_CONSTRAINTS),)
 BLACK_ARGS := --line-length=$(LINE_LENGTH)
 ISORT_ARGS := --profile=black --line-length=$(LINE_LENGTH)
 MYPY_ARGS := --ignore-missing-imports
@@ -19,18 +21,23 @@ help:
 	@echo "  format-check     Check if code is formatted"
 	@echo "  lint             Run linting checks"
 	@echo "  type-check       Run mypy type checking"
+	@echo "  dependency-policy-check  Validate dependency metadata consistency"
 	@echo "  clean            Clean build artifacts"
 	@echo "  install-hooks    Install pre-commit hooks"
 	@echo "  run-hooks        Run pre-commit hooks manually"
 	@echo "  build            Build package for distribution"
 	@echo "  docs             Build documentation"
+	@echo "  docker-build-core Build core runtime image"
+	@echo "  docker-build-full Build full-feature runtime image"
+	@echo "  docker-build-ci  Build CI image"
+	@echo "  docker-smoke     Run Docker smoke checks"
 
 # Installation
 install:
-	$(PYTHON) -m pip install -e .
+	$(PYTHON) -m pip install $(PIP_CONSTRAINT_ARGS) -e .
 
 install-dev:
-	$(PYTHON) -m pip install -e .[dev]
+	$(PYTHON) -m pip install $(PIP_CONSTRAINT_ARGS) -e .[dev]
 
 # Testing
 test:
@@ -61,6 +68,9 @@ type-check:
 dependency-check:
 	$(PYTHON) -m pip check
 
+dependency-policy-check:
+	$(PYTHON) scripts/check_dependency_standardization.py
+
 # Development workflow
 install-hooks:
 	pre-commit install
@@ -86,11 +96,25 @@ clean:
 build: clean
 	$(PYTHON) -m build --wheel --sdist .
 
+# Docker
+docker-build-core:
+	docker build --target core -t polaris:core .
+
+docker-build-full:
+	docker build --target full-feature -t polaris:full-feature .
+
+docker-build-ci:
+	docker build --target ci -t polaris:ci .
+
+docker-smoke: docker-build-core
+	docker run --rm polaris:core --version
+	docker run --rm polaris:core doctor --config /app/config/default.yaml
+
 # Pre-commit-aligned local check
-pre-commit-check: format-check lint type-check test dependency-check
+pre-commit-check: dependency-policy-check format-check lint type-check test dependency-check
 
 # Full CI pipeline locally
-ci: format-check lint type-check test-all dependency-check
+ci: dependency-policy-check format-check lint type-check test-all dependency-check
 	@echo "All CI checks passed!"
 
 # Quick check before commit

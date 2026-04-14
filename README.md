@@ -10,7 +10,26 @@
 
 ```bash
 cd polaris
-pip install -e .
+pip install -c requirements/constraints.txt -e .
+```
+
+### Dependency and Version Standardization
+
+Polaris now treats `pyproject.toml` as the single source of truth for package
+metadata and uses shared constraints for local dev, CI, and Docker builds.
+
+```bash
+# Core runtime install
+pip install -c requirements/constraints.txt -e .
+
+# Development install (includes optional LLM/dashboard/connector deps used in CI)
+pip install -c requirements/constraints.txt -e .[dev]
+
+# Full-feature runtime install (all optional connectors/providers)
+pip install -c requirements/constraints.txt -e .[all]
+
+# Verify dependency policy guard
+make dependency-policy-check
 ```
 
 ### Simple Usage (2 lines!)
@@ -262,6 +281,140 @@ For `hybrid`, each sub-strategy config lives under `strategy.params.strategies[]
 The `agentic_llm` tools use the built-in Knowledge Store and World Model, plus a connector-aware tool `list_supported_actions` that prefers the active Connector's `get_supported_actions()` if available, and falls back to historical inference.
 Tool names configured under `strategy.params.tools` are validated against the registered tool factory names.
 When `strategy.params.native_tools` references a Polaris tool name, that tool must also be enabled in `strategy.params.tools`.
+
+## Docker
+
+Polaris ships with a root multi-target Dockerfile and a compose file for common
+runtime profiles.
+
+### 1) Prerequisites
+
+- Docker Engine / Docker Desktop
+- Docker Compose v2 (`docker compose` command)
+- A Polaris config file (for example `config/default.yaml`)
+
+Prepare host folders used as bind mounts:
+
+```bash
+mkdir -p logs metrics data
+```
+
+### 2) Image Targets
+
+- `core`: lean runtime image for threshold/basic deployments
+- `full-feature`: runtime image with all optional Polaris extras (`.[all]`)
+- `ci`: development/test image with `.[dev]`
+
+Build examples:
+
+```bash
+docker build --target core -t polaris:core .
+docker build --target full-feature -t polaris:full-feature .
+docker build --target ci -t polaris:ci .
+```
+
+### 3) Quick Start (Core Image)
+
+Run Polaris in dry-run mode with mounted config and outputs:
+
+```bash
+docker run --rm \
+  -v "$(pwd)/config:/app/config:ro" \
+  -v "$(pwd)/logs:/app/logs" \
+  -v "$(pwd)/metrics:/app/metrics" \
+  -v "$(pwd)/data:/app/data" \
+  polaris:core --config /app/config/default.yaml --dry-run
+```
+
+Useful smoke checks:
+
+```bash
+docker run --rm polaris:core --version
+docker run --rm polaris:core doctor --config /app/config/default.yaml
+```
+
+### 4) Compose Profiles
+
+The repository includes `docker-compose.yml` with these profiles:
+
+- Default (`polaris`): core image runtime
+- `full` (`polaris-full`): full-feature runtime
+- `redis` (`redis`): Redis sidecar for distributed event bus setups
+- `ollama` (`ollama`): local Ollama service for local-model workflows
+
+Examples:
+
+```bash
+# Core runtime
+docker compose up polaris
+
+# Core runtime + Redis
+docker compose --profile redis up polaris redis
+
+# Full-feature runtime
+docker compose --profile full up polaris-full
+
+# Full-feature runtime + Ollama service
+docker compose --profile full --profile ollama up polaris-full ollama
+```
+
+### 5) Environment Variables
+
+For LLM-backed strategies/meta-learning, pass provider credentials at runtime.
+
+Common examples:
+
+- `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+- `OPENAI_API_KEY`
+- `GROQ_API_KEY`
+- `OPENROUTER_API_KEY`
+
+Example:
+
+```bash
+docker run --rm \
+  -e OPENAI_API_KEY="<your-key>" \
+  -v "$(pwd)/config:/app/config:ro" \
+  -v "$(pwd)/logs:/app/logs" \
+  -v "$(pwd)/metrics:/app/metrics" \
+  -v "$(pwd)/data:/app/data" \
+  polaris:full-feature --config /app/config/default.yaml
+```
+
+### 6) Health and Readiness
+
+Container images use Polaris Doctor as the image healthcheck command:
+
+```bash
+polaris doctor --config ${POLARIS_CONFIG:-/app/config/default.yaml}
+```
+
+This healthcheck fails on true config/runtime failures and allows optional-feature
+warnings (for example, `rich` absent in `core`) so healthy minimal deployments are
+not marked unhealthy.
+
+### 7) Running Dashboard and Interactive Modes
+
+Dashboard or combined interactive modes require a TTY:
+
+```bash
+docker run -it --rm \
+  -v "$(pwd)/config:/app/config:ro" \
+  -v "$(pwd)/logs:/app/logs" \
+  -v "$(pwd)/metrics:/app/metrics" \
+  -v "$(pwd)/data:/app/data" \
+  polaris:full-feature --config /app/config/default.yaml --both
+```
+
+For non-interactive production deployments, prefer standard mode without `-it`.
+
+### 8) Troubleshooting
+
+- `Config file not found`: confirm mount path and `--config` path inside container (`/app/config/...`).
+- `Missing credentials`: export required env vars for your selected LLM provider.
+- `Permission denied` writing logs/metrics/data: ensure host directories exist and are writable.
+- `Redis bus unreachable`: when using compose, use `redis://redis:6379` (service name), not localhost.
+- `Ollama unreachable`: when using compose, use `http://ollama:11434` from Polaris config.
 
 ## Architecture
 

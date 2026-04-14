@@ -23,7 +23,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[dev]
+        pip install -c requirements/constraints.txt -e .[dev]
 
     - name: Code Quality Analysis
       run: |
@@ -44,7 +44,7 @@ jobs:
 
     - name: Complexity Analysis
       run: |
-        pip install radon
+        pip install -c requirements/constraints.txt radon
         echo "=== Cyclomatic Complexity ==="
         radon cc polaris/ --min B
 
@@ -96,7 +96,7 @@ jobs:
     - name: Performance Baseline
       run: |
         if [ -f "benchmarks/run_benchmarks.py" ]; then
-          pip install pytest-benchmark
+          pip install -c requirements/constraints.txt pytest-benchmark
           echo "=== Running Performance Benchmarks ==="
           pytest benchmarks/ --benchmark-only --benchmark-json=benchmark.json
 

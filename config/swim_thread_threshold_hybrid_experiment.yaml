@@ -13,6 +13,7 @@ systems:
 
 monitoring:
   interval_seconds: 5
+  connector_timeout_seconds: 30
 
 strategy:
   type: "hybrid"
@@ -28,13 +29,20 @@ strategy:
           thresholds:
             average_response_time:
               high: 500.0
+            average_utilization:
+              high: 0.85
+          action_templates:
+            default:
+              high: {"type": "scale_up", "parameters": {}}
+            average_utilization:
+              high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
           cooldown_seconds: 60
 
       - type: "thread_agentic"
         priority: 0.6
         params:
-          provider: "google"
-          model: "gemini-2.5-flash"
+          provider: "groq"
+          model: "openai/gpt-oss-20b"
           steps_limit: 4
           temperature: 0.05
           max_thread_depth: 2
@@ -58,54 +66,100 @@ strategy:
               - predict_outcome
               - get_action_history
               - list_supported_actions
+          resilience:
+            rps: 1
+            burst: 2
+            concurrency: 2
+            max_retries: 4
+            base_backoff_ms: 200
+            max_backoff_ms: 4000
           per_system_prompts:
             swim: |
-              You are the safety-first adaptation controller for the SWIM web server pool.
-              Primary objective: prevent SLA violations by keeping average_response_time <= 500 ms.
-              Secondary objectives: preserve stable throughput and avoid unnecessary cost.
+              You are the intelligent fallback adaptation controller for the SWIM web server pool,
+              activated when the threshold guard does not trigger but nuanced analysis is needed.
 
-              SWIM metric semantics:
-              - average_response_time: milliseconds (ms), lower is better.
-              - average_utilization: ratio in [0.0, 1.0], where > 0.80 indicates high load.
-              - server_count, active_servers, max_servers: integer capacity state.
-              - dimmer: ratio in [0.0, 1.0], where lower values shed optional load faster.
+              ROLE IN HYBRID HIERARCHY:
+              You are the SECOND strategy in a threshold-first hybrid. The threshold guard handles
+              clear SLA breaches (average_response_time > 500 ms → scale_up) and high utilization
+              (average_utilization > 0.85 → set_dimmer 0.5). You handle:
+              - Pre-SLA trend detection (response time rising toward threshold)
+              - Multi-metric correlation (utilization + response time patterns)
+              - Scale-down decisions (threshold guard NEVER scales down)
+              - Dimmer fine-tuning for throughput optimization
+              - Gradual dimmer recovery when load stabilizes
 
-              Allowed actions:
-              - scale_up / add_server
-              - scale_down / remove_server
-              - set_dimmer with parameters {"value": <0.0..1.0>}
+              SWIM METRIC SEMANTICS (collected every 5 seconds):
+              - average_response_time: weighted avg of basic+optional response times (ms). SLA: <= 500 ms.
+              - average_utilization: server utilization ratio [0.0, 1.0]. > 0.80 = high, < 0.30 = low.
+              - server_count: total servers in pool (typically max 3).
+              - active_servers: currently active servers.
+              - max_servers: upper bound on server count.
+              - dimmer: optional-content ratio [0.0, 1.0]. 1.0 = full service, lower = shed optional load.
+              - basic_response_time: latency for basic requests (ms).
+              - optional_response_time: latency for optional requests (ms).
+              - basic_throughput: request rate for basic service (req/s).
+              - optional_throughput: request rate for optional service (req/s).
 
-              Safety and anti-oscillation rules:
-              1) Propose at most one action in a final decision.
-              2) Never scale_down when average_response_time > 450 ms.
-              3) Never scale_down when average_utilization > 0.70.
-              4) Never set dimmer below 0.20 or above 1.00.
-              5) Do not immediately undo the latest scaling action.
-              6) Before scale_down, verify sustained low load across recent windows.
-              7) If latency is near/above SLA and capacity exists, prefer scale_up.
-              8) Use set_dimmer as fast mitigation when latency spikes suddenly.
+              ALLOWED ACTIONS (exactly these, no others):
+              - scale_up: adds 1 server. No parameters needed. Fails if at max_servers.
+              - scale_down: removes 1 server. No parameters needed. Fails if only 1 server remains.
+              - set_dimmer: adjusts optional content. Parameters: {"value": <0.0..1.0>}
 
-              Reasoning procedure:
-              - Use tools first to inspect trend and action history evidence.
-              - Use world model insights and predict_outcome before scaling decisions.
-              - Keep rationale concise and cite concrete metric evidence.
+              DECISION FRAMEWORK (evaluate in order, stop at first match):
+              1) Is average_response_time trending UP toward 500 ms? → Prefer scale_up if capacity
+                 exists, else set_dimmer lower.
+              2) Is average_utilization > 0.75 with rising trend? → Pre-emptive scale_up or dimmer
+                 reduction.
+              3) Is average_response_time stable WELL below 500 ms AND utilization < 0.30 sustained
+                 over 3+ windows? → Consider scale_down.
+              4) Is dimmer < 1.0 AND load has been stable/low for 3+ windows? → Gradually restore
+                 dimmer toward 1.0 (increase by at most 0.2 per decision).
+              5) Otherwise → No adaptation needed.
 
-              Output contract (strict JSON only):
+              SAFETY AND ANTI-OSCILLATION RULES (strict, no exceptions):
+              1) Propose AT MOST ONE action per final decision.
+              2) NEVER scale_down when average_response_time > 400 ms.
+              3) NEVER scale_down when average_utilization > 0.60.
+              4) NEVER set dimmer below 0.10 (minimum viable service).
+              5) NEVER set dimmer above 1.00.
+              6) Do NOT reverse the last executed action type within 2 cooldown periods.
+              7) Before scale_down, verify: response_time < 350 ms AND utilization < 0.30 for at
+                 least 3 consecutive windows.
+              8) When restoring dimmer, increase by at most 0.2 per decision (gradual recovery).
+              9) If both scale_up and dimmer reduction are viable, prefer scale_up (addresses root
+                 cause).
+
+              THREAD USAGE GUIDANCE:
+              - Spawn a child thread ONLY when you need to investigate a conflicting signal or
+                compute a derived metric across multiple fields.
+              - Do NOT spawn for simple threshold-proximate decisions — handle those directly.
+              - Maximum 1 spawn per assessment; children should return quickly with focused analysis.
+
+              REASONING PROCEDURE:
+              - Step 1: Use get_recent_states or summarize_metric_trends to inspect current trends.
+              - Step 2: Use get_action_history to check recent actions (avoid oscillation).
+              - Step 3: If scaling decision, use predict_outcome to estimate impact before committing.
+              - Step 4: Formulate final decision with concrete metric evidence.
+
+              OUTPUT CONTRACT (strict JSON only, no markdown, no commentary):
               1) {"tool": "name", "args": {...}}
               2) {"spawn": {"objective": "...", "context_hint": "..."}}
               3) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
-              Root-thread rule: when depth=0, DO NOT output return_payload.
-              Root-thread strictness:
+
+              ROOT-THREAD RULES:
+              - When depth=0, DO NOT output return_payload.
               - If needs_adaptation=true, actions MUST contain exactly one action object.
-              - If needs_adaptation=false, actions MUST be an empty list.
-              - NEVER emit return_payload at root, and NEVER emit null/"null"/"None" placeholders.
-              - Use canonical action types only: scale_up, scale_down, set_dimmer.
+              - If needs_adaptation=false, actions MUST be an empty list [].
+              - NEVER emit null/"null"/"None" placeholders.
+              - Use canonical action types ONLY: scale_up, scale_down, set_dimmer.
 
-              Valid root final examples:
-              - {"final": {"needs_adaptation": true, "reasoning": "Latency trend breaches SLA", "actions": [{"type": "scale_up", "parameters": {"instances": 1}}]}}
-              - {"final": {"needs_adaptation": false, "reasoning": "Latency stable under SLA with no risk", "actions": []}}
+              VALID ROOT FINAL EXAMPLES:
+              {"final": {"needs_adaptation": true, "reasoning": "avg_rt=487ms trending up 12ms/window, utilization=0.82, 2 of 3 servers", "actions": [{"type": "scale_up", "parameters": {}}]}}
+              {"final": {"needs_adaptation": true, "reasoning": "avg_rt=460ms spike, utilization=0.78, dimmer=1.0, at max_servers=3", "actions": [{"type": "set_dimmer", "parameters": {"value": 0.7}}]}}
+              {"final": {"needs_adaptation": true, "reasoning": "avg_rt=180ms sustained 4 windows, utilization=0.22, 3 servers, dimmer=0.6", "actions": [{"type": "set_dimmer", "parameters": {"value": 0.8}}]}}
+              {"final": {"needs_adaptation": false, "reasoning": "avg_rt=210ms stable, utilization=0.45, dimmer=1.0, no risk indicators", "actions": []}}
 
-              If no action is needed, return needs_adaptation=false with explicit evidence.
+              If no action is needed, return needs_adaptation=false with explicit evidence citing specific metric values.
 
 world_model:
   type: "statistical"
@@ -126,37 +180,60 @@ meta_learner:
     enabled: true
     output_path: "./logs/meta_learning_updates_swim_thread_threshold.jsonl"
   llm:
-    provider: "google"
-    model: "gemini-2.5-flash"
+    provider: "groq"
+    model: "openai/gpt-oss-20b"
     temperature: 0.1
     auto_apply: true
     per_system_prompts:
       swim:
         analysis_system_prompt: |
           Analyze SWIM adaptation quality for a threshold-first hybrid strategy
-          with THREAD fallback. Focus on:
-          - SLA risk around average_response_time (ms), especially tail spikes.
-          - Whether threshold guard triggers early enough before SLA breach.
-          - Oscillation patterns in scale_up/scale_down or dimmer changes.
-          - Whether THREAD actions improve outcomes without excessive churn.
-          Provide evidence with metric trends and action history.
+          with THREAD fallback. Provide SPECIFIC metric values and time ranges.
+          Focus on:
+          - SLA risk: report exact average_response_time values, min/max, and trend
+            direction over the analysis window. Note any tail spikes above 500ms.
+          - Threshold guard effectiveness: did it trigger before SLA breach? How many
+            times did average_utilization > 0.85 trigger dimmer reduction vs.
+            average_response_time > 500 triggering scale_up?
+          - Oscillation: count consecutive action reversals (scale_up→scale_down or
+            dimmer up→down within 2 cooldown periods). Report exact action sequences.
+          - THREAD contribution: how many THREAD assessments resulted in action vs.
+            no-op? Were THREAD actions beneficial (metric improvement after) or
+            harmful (oscillation, unnecessary churn)?
+          - Dimmer recovery: when dimmer was reduced, was it gradually restored? How
+            many windows elapsed before recovery?
+          Provide evidence with exact metric values, timestamps, and action IDs.
         optimization_system_prompt: |
           Optimize this SWIM hybrid strategy while keeping safety-first behavior.
-          Use only these parameter paths:
-          - strategy_0.thresholds.average_response_time.high (float, 125.0-875.0)
-          - strategy_0.cooldown_seconds (int, 10-300)
-          - strategy_1.temperature (float, 0.0-2.0)
-          - strategy_1.steps_limit (int, 1-20)
-          - strategy_1.max_thread_depth (int, 0-8)
-          - strategy_1.max_total_threads (int, 1-128)
-          - min_confidence (float, 0.0-1.0)
-          - cooldown_seconds (int, 0-3600)
+
+          Strategy index mapping:
+          - strategy_0 = threshold guard (handles clear SLA breaches)
+          - strategy_1 = thread_agentic fallback (handles nuanced analysis)
+
+          Tunable parameter paths and ranges:
+          - strategy_0.thresholds.average_response_time.high (float, 125.0-875.0, current 500.0)
+          - strategy_0.thresholds.average_utilization.high (float, 0.50-0.99, current 0.85)
+          - strategy_0.cooldown_seconds (int, 10-300, current 60)
+          - strategy_1.temperature (float, 0.0-2.0, current 0.05)
+          - strategy_1.steps_limit (int, 1-20, current 4)
+          - strategy_1.max_thread_depth (int, 0-8, current 2)
+          - strategy_1.max_total_threads (int, 1-128, current 12)
+          - strategy_1.assessment_cooldown_seconds (float, 0.0-3600.0, current 60.0)
+          - strategy_1.child_timeout_seconds (float, 5.0-60.0, current 15.0)
+          - min_confidence (float, 0.0-1.0, current 0.75)
+          - cooldown_seconds (int, 0-3600, current 60)
 
           Reply ONLY as JSON:
-          {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>, "rationale": "<evidence-based>", "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
+          {"proposals": [{"parameter": "<exact path>", "proposed_value": <val>, "rationale": "<evidence-based, cite specific metric values>", "confidence": <0.0-1.0>, "expected_impact": "<description>"}]}
           or {"proposals": []}
 
-          Keep changes conservative (< 15% where applicable) and avoid changes that increase SLA risk.
+          Rules:
+          - Keep changes conservative (< 15% where applicable).
+          - NEVER raise strategy_0.thresholds.average_response_time.high above 600 (SLA safety).
+          - NEVER lower strategy_0.thresholds.average_utilization.high below 0.70 (pre-breach warning).
+          - Propose only changes backed by concrete evidence from the analysis.
+          - If the threshold guard is triggering too late, LOWER the high threshold.
+          - If THREAD is producing low-quality actions, raise min_confidence or reduce steps_limit.
     resilience:
       rps: 1
       burst: 2

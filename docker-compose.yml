@@ -1,0 +1,54 @@
+services:
+  polaris:
+    build:
+      context: .
+      target: core
+      args:
+        PYTHON_VERSION: "3.12"
+    image: polaris:core
+    command: ["--config", "/app/config/default.yaml"]
+    environment:
+      POLARIS_CONFIG: /app/config/default.yaml
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./metrics:/app/metrics
+      - ./data:/app/data
+    restart: unless-stopped
+
+  polaris-full:
+    profiles: ["full"]
+    build:
+      context: .
+      target: full-feature
+      args:
+        PYTHON_VERSION: "3.12"
+    image: polaris:full-feature
+    command: ["--config", "/app/config/default.yaml"]
+    environment:
+      POLARIS_CONFIG: /app/config/default.yaml
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./metrics:/app/metrics
+      - ./data:/app/data
+    restart: unless-stopped
+
+  redis:
+    profiles: ["redis"]
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

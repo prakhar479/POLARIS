@@ -4,6 +4,8 @@ Real-time terminal UI showing system state, summarized metrics, and recent event
 in a minimal, developer-friendly layout.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
