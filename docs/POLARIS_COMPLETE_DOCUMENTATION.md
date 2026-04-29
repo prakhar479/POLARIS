@@ -615,8 +615,19 @@ strategy:
     thresholds:
       average_response_time:
         high: 800.0
+      average_utilization:
+        high: 0.85
+        low: 0.30
+    action_templates:
+      default:
+        high: {"type": "scale_up",   "parameters": {}}
+        low:  {"type": "scale_down", "parameters": {}}
+      average_utilization:
+        high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
     cooldown_seconds: 60
 ```
+
+> **`action_templates` is required.** The threshold strategy raises a `ValueError` at the first threshold crossing if this block is absent. Add either a per-metric entry or a `default` fallback.
 
 For a full SWIM operating workflow (doctor -> run modes -> troubleshooting), see:
 

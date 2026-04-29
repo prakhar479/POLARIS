@@ -43,6 +43,8 @@ systems:
     connection:
       host: "localhost"
       port: 4242
+    monitoring:
+      collection_interval: 5
 
 monitoring:
   interval_seconds: 30
@@ -52,8 +54,14 @@ strategy:
   type: "threshold"
   params:
     thresholds:
-      cpu_usage: { high: 80.0, low: 20.0 }
-      memory_usage: { high: 85.0, low: 25.0 }
+      average_response_time: { high: 800.0 }   # ms — primary SWIM SLA metric
+      average_utilization:   { high: 0.85, low: 0.30 }
+    action_templates:
+      default:
+        high: {"type": "scale_up",   "parameters": {}}
+        low:  {"type": "scale_down", "parameters": {}}
+      average_utilization:
+        high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
     cooldown_seconds: 60
 
 observability:
@@ -61,6 +69,8 @@ observability:
     type: "human"
     level: "INFO"
 ```
+
+> **Note on `action_templates`:** The threshold strategy requires this block to translate a breached threshold into an executable action. The `default` key is a fallback for any metric without its own entry. Omitting this causes a `ValueError` at the first threshold crossing.
 
 ### Production Configuration (LLM-based)
 
@@ -914,7 +924,14 @@ strategy:
   type: "threshold"
   params:
     thresholds:
-      cpu_usage: { high: 80.0, low: 20.0 }
+      average_response_time: { high: 800.0 }   # ms — SWIM SLA metric
+      average_utilization:   { high: 0.85, low: 0.30 }
+    action_templates:
+      default:
+        high: {"type": "scale_up",   "parameters": {}}
+        low:  {"type": "scale_down", "parameters": {}}
+      average_utilization:
+        high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
     cooldown_seconds: 60
 
 observability:
