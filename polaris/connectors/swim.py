@@ -160,7 +160,8 @@ class SWIMConnector(Connector):
 
             # Try to get response time metrics (optional)
             try:
-                basic_rt = float(await self._send_command("get_basic_rt"))
+                # SWIM returns response time in seconds; convert to ms
+                basic_rt = float(await self._send_command("get_basic_rt")) * 1000.0
                 metrics["basic_response_time"] = MetricValue(
                     name="basic_response_time",
                     value=basic_rt,
@@ -184,7 +185,8 @@ class SWIMConnector(Connector):
                 pass
 
             try:
-                opt_rt = float(await self._send_command("get_opt_rt"))
+                # SWIM returns response time in seconds; convert to ms
+                opt_rt = float(await self._send_command("get_opt_rt")) * 1000.0
                 metrics["optional_response_time"] = MetricValue(
                     name="optional_response_time",
                     value=opt_rt,

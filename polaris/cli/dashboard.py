@@ -18,14 +18,17 @@ from typing import Any, Deque, Dict, List, Optional, cast
 
 from polaris.infrastructure.constants import DEFAULT_JSON_INDENT
 
+Live: Any = None
+
 try:
     from rich.console import Console
     from rich.layout import Layout
-    from rich.live import Live
+    from rich.live import Live as _Live
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
 
+    Live = _Live
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -58,7 +61,9 @@ class _EmbeddedInteractiveCLI:
     def _print_table(self, table: Any) -> None:
         if RICH_AVAILABLE:
             buffer = StringIO()
-            console = Console(file=buffer, force_terminal=False, color_system=None, width=120)
+            cli_console = getattr(self._cli, "console", None)
+            width = cli_console.width if cli_console is not None else None
+            console = Console(file=buffer, force_terminal=False, color_system=None, width=width)
             console.print(table)
             self._append(buffer.getvalue())
         else:
@@ -107,8 +112,8 @@ class Dashboard:
         self._started_at = datetime.now()
 
         # Event tracking
-        self.recent_events: Deque[Dict[str, Any]] = deque(maxlen=10)
-        self.max_events = 10  # kept for public interface compatibility
+        self.recent_events: Deque[Dict[str, Any]] = deque()
+        self.max_events = 10
         self.metric_history: Dict[str, List[Any]] = defaultdict(list)
         self.max_history = 50
         self._cached_perf_metrics: Dict[str, Any] = {}
@@ -139,9 +144,9 @@ class Dashboard:
         class _DashboardLogHandler(logging.Handler):
             def __init__(self, buffer: Deque[Dict[str, str]]):
                 # Use WARNING as the default floor so the handler only
-                # captures meaningful operational messages by default.  Callers
-                # that need DEBUG-level dashboard output can lower this via the
-                # standard logging.setLevel() API on the "polaris" logger.
+                # captures meaningful operational messages by default.
+                # To see DEBUG logs in the dashboard, call:
+                # dashboard._log_handler.setLevel(logging.DEBUG)
                 super().__init__(level=logging.WARNING)
                 self._buffer = buffer
 
@@ -177,12 +182,13 @@ class Dashboard:
                     -self.max_history :
                 ]
 
+    def _prune_recent_events(self) -> None:
+        """Prune recent_events to max_events size."""
+        while len(self.recent_events) > self.max_events:
+            self.recent_events.popleft()
+
     def _on_adaptation(self, event: Any) -> None:
         """Handle adaptation events."""
-        # Update deque maxlen if max_events changed
-        if self.recent_events.maxlen != self.max_events:
-            self.recent_events = deque(self.recent_events, maxlen=self.max_events)
-
         self.recent_events.append(
             {
                 "time": event.timestamp,
@@ -192,6 +198,7 @@ class Dashboard:
                 "system": event.action.target_system,
             }
         )
+        self._prune_recent_events()
 
     def _build_layout(self) -> Layout:
         """Build dashboard layout."""
@@ -593,8 +600,16 @@ class Dashboard:
                 fcntl.fcntl(stderr_fd, fcntl.F_SETFL, old_stderr_flags)
 
     @contextmanager
-    def _live_display_safe(self, renderable: Any, refresh_per_second: int) -> Any:
-        """Safely create and manage a Rich Live display context."""
+    def _live_display_safe(
+        self, renderable: Any, refresh_per_second: int = 60, **kwargs: Any
+    ) -> Any:
+        """Safely create and manage a Rich Live display context.
+
+        Args:
+            renderable: The Rich renderable to display
+            refresh_per_second: Refresh rate in Hz
+            **kwargs: Additional keyword arguments to pass to Live constructor
+        """
         live = None
         try:
             try:
@@ -604,7 +619,10 @@ class Dashboard:
                     renderable,
                     console=self.console,
                     auto_refresh=False,
+                    screen=True,
+                    vertical_overflow="crop",
                     refresh_per_second=refresh_per_second,
+                    **kwargs,
                 )
                 live.start(refresh=True)
             except BlockingIOError:
@@ -625,7 +643,10 @@ class Dashboard:
                     renderable,
                     console=self.console,
                     auto_refresh=False,
+                    screen=True,
+                    vertical_overflow="crop",
                     refresh_per_second=refresh_per_second,
+                    **kwargs,
                 )
                 live.start(refresh=True)
             yield live
@@ -647,12 +668,12 @@ class Dashboard:
         """Safely update Live display, handling BlockingIOError gracefully."""
         for attempt in range(max_retries):
             try:
-                try:
+                import inspect
+
+                sig = inspect.signature(live.update)
+                if "refresh" in sig.parameters:
                     live.update(renderable, refresh=True)
-                except TypeError as exc:
-                    # Some test doubles / Live-like wrappers may not accept refresh.
-                    if "refresh" not in str(exc):
-                        raise
+                else:
                     live.update(renderable)
                 return
             except BlockingIOError:
@@ -676,7 +697,7 @@ class Dashboard:
                     pass
                 return
 
-    def _read_key_nonblocking(self) -> Optional[str]:
+    async def _read_key_nonblocking(self) -> Optional[str]:
         """Read one key from stdin without blocking.
 
         Returns None if no key is available or on error.
@@ -713,11 +734,11 @@ class Dashboard:
             return None
 
         if ch == "\x1b":
-            bracket = self._read_nonblocking_byte_with_retry()
+            bracket = await self._read_nonblocking_byte_with_retry()
             if bracket is None:
                 return None  # Lone ESC — discard
 
-            code_str = self._read_nonblocking_byte_with_retry()
+            code_str = await self._read_nonblocking_byte_with_retry()
             if code_str is None:
                 return None
 
@@ -733,9 +754,8 @@ class Dashboard:
 
         return ch
 
-    @staticmethod
-    def _read_nonblocking_byte_with_retry(
-        max_attempts: int = 20, sleep_s: float = 0.001
+    async def _read_nonblocking_byte_with_retry(
+        self, max_attempts: int = 20, sleep_s: float = 0.001
     ) -> Optional[str]:
         """Read exactly one byte from non-blocking stdin, retrying briefly.
 
@@ -744,7 +764,7 @@ class Dashboard:
 
         Returns the character, or None if it did not arrive within the retry window.
         """
-        import time
+        import asyncio
 
         for _ in range(max_attempts):
             try:
@@ -753,7 +773,7 @@ class Dashboard:
                     return byte
             except OSError:
                 pass
-            time.sleep(sleep_s)
+            await asyncio.sleep(sleep_s)
         return None
 
     def _render_with_interactive(
@@ -782,7 +802,7 @@ class Dashboard:
 
         root = Layout()
         root.split_column(
-            Layout(name="dashboard", ratio=5),
+            Layout(name="dashboard", ratio=1),
             Layout(name="interactive", size=12),
         )
         root["dashboard"].update(base)
@@ -835,16 +855,30 @@ class Dashboard:
         self.running = True
         metrics_task = asyncio.create_task(self._update_metrics_cache())
 
-        with self._live_display_safe(
-            self._render(), refresh_per_second=int(1 / refresh_rate)
-        ) as live:
+        import signal
+
+        _resize_pending = False
+
+        def _handle_sigwinch(signum: int, frame: Any) -> None:
+            nonlocal _resize_pending
+            _resize_pending = True
+
+        old_handler = None
+        if hasattr(signal, "SIGWINCH"):
+            old_handler = signal.signal(signal.SIGWINCH, _handle_sigwinch)
+
+        with self._live_display_safe(self._render()) as live:
             try:
                 while self.running and self.polaris.is_running():
                     await asyncio.sleep(refresh_rate)
+                    if _resize_pending:
+                        _resize_pending = False
                     self._safe_live_update(live, self._render())
             except KeyboardInterrupt:
                 pass
             finally:
+                if hasattr(signal, "SIGWINCH") and old_handler is not None:
+                    signal.signal(signal.SIGWINCH, old_handler)
                 self.running = False
                 metrics_task.cancel()
                 try:
@@ -866,6 +900,18 @@ class Dashboard:
         command_history: List[str] = []
         history_cursor = 0
 
+        import signal
+
+        _resize_pending = False
+
+        def _handle_sigwinch(signum: int, frame: Any) -> None:
+            nonlocal _resize_pending
+            _resize_pending = True
+
+        old_handler = None
+        if hasattr(signal, "SIGWINCH"):
+            old_handler = signal.signal(signal.SIGWINCH, _handle_sigwinch)
+
         output_lines.append("Split mode active.")
         output_lines.append("Type a command and press Enter (help, status, systems, metrics, ...).")
 
@@ -875,11 +921,13 @@ class Dashboard:
                     input_buffer=input_buffer,
                     output_lines=output_lines,
                     command_running=False,
-                ),
-                refresh_per_second=max(1, int(1.0 / refresh_rate)),
+                )
             ) as live:
                 try:
                     while self.running and self.polaris.is_running():
+                        if _resize_pending:
+                            _resize_pending = False
+
                         if command_task is not None and command_task.done():
                             should_exit = False
                             try:
@@ -894,7 +942,7 @@ class Dashboard:
                                 break
 
                         while True:
-                            ch = self._read_key_nonblocking()
+                            ch = await self._read_key_nonblocking()
                             if ch is None:
                                 break
 
@@ -962,6 +1010,8 @@ class Dashboard:
                 except KeyboardInterrupt:
                     pass
                 finally:
+                    if hasattr(signal, "SIGWINCH") and old_handler is not None:
+                        signal.signal(signal.SIGWINCH, old_handler)
                     self.running = False
                     metrics_task.cancel()
                     try:
@@ -971,5 +1021,9 @@ class Dashboard:
 
                     if command_task is not None and not command_task.done():
                         command_task.cancel()
+                        try:
+                            await asyncio.wait_for(asyncio.shield(command_task), timeout=2.0)
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
 
                     self._detach_log_handler()

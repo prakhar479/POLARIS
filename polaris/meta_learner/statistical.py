@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -68,6 +68,22 @@ class StatisticalMetaLearner(MetaLearner):
         self, system_id: str, time_window_hours: float = 24.0
     ) -> PerformanceAnalysis:
         """Analyze system performance over time window."""
+        if not self.knowledge_store:
+            fallback_insights: Dict[str, Any] = {
+                "total_states": 0,
+                "total_adaptations": 0,
+                "success_rate": 0.0,
+                "time_window_hours": time_window_hours,
+                "error": "knowledge_store_unavailable",
+            }
+            return PerformanceAnalysis(
+                system_id=system_id,
+                time_window_hours=time_window_hours,
+                success_rate=0.0,
+                insights=fallback_insights,
+                recommendations=["Configure a knowledge store for historical analysis"],
+            )
+
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=time_window_hours)
 
@@ -145,6 +161,14 @@ class StatisticalMetaLearner(MetaLearner):
         tunable_params = strategy.get_tunable_parameters()
         if not tunable_params:
             return []
+
+        try:
+            strategy_metrics = await strategy.get_performance_metrics()
+            if isinstance(strategy_metrics, dict):
+                analysis.insights.setdefault("strategy_metrics", strategy_metrics)
+        except Exception:
+            if self.logger:
+                self.logger.debug("Unable to collect strategy performance metrics")
 
         # Try Bayesian optimization first if enabled
         if self.enable_bayesian_optimization:
@@ -352,19 +376,21 @@ class StatisticalMetaLearner(MetaLearner):
                     continue
 
                 if param_type == ParameterType.CONTINUOUS:
+                    min_value, max_value = self._resolve_numeric_bounds(spec, is_discrete=False)
                     param_space = ParameterSpace(
                         name=param_path,
                         param_type=param_type,
-                        min_value=spec.min_value or (spec.current_value * 0.5),
-                        max_value=spec.max_value or (spec.current_value * 2.0),
+                        min_value=min_value,
+                        max_value=max_value,
                         current_value=spec.current_value,
                     )
                 elif param_type == ParameterType.DISCRETE:
+                    min_value, max_value = self._resolve_numeric_bounds(spec, is_discrete=True)
                     param_space = ParameterSpace(
                         name=param_path,
                         param_type=param_type,
-                        min_value=spec.min_value or int(spec.current_value * 0.5),
-                        max_value=spec.max_value or int(spec.current_value * 2),
+                        min_value=min_value,
+                        max_value=max_value,
                         current_value=spec.current_value,
                     )
                 else:  # CATEGORICAL
@@ -386,6 +412,38 @@ class StatisticalMetaLearner(MetaLearner):
             )
 
         return self._optimizers[system_id]
+
+    def _resolve_numeric_bounds(
+        self, spec: ParameterSpec, *, is_discrete: bool
+    ) -> tuple[Union[int, float, None], Union[int, float, None]]:
+        """Resolve safe numeric bounds for Bayesian optimization."""
+        min_value = spec.min_value
+        max_value = spec.max_value
+        current_value = spec.current_value
+
+        if isinstance(current_value, (int, float)):
+            if min_value is None:
+                min_value = current_value * 0.5 if current_value != 0 else 0
+            if max_value is None:
+                max_value = current_value * 2.0 if current_value != 0 else 1
+
+            if min_value == max_value:
+                if is_discrete:
+                    max_value = min_value + 1
+                else:
+                    max_value = min_value + max(abs(float(current_value)) * 0.5, 1.0)
+
+        if is_discrete:
+            if min_value is not None:
+                min_value = int(min_value)
+            if max_value is not None:
+                max_value = int(max_value)
+
+            if min_value == max_value:
+                base_value = min_value if min_value is not None else 0
+                max_value = base_value + 1
+
+        return min_value, max_value
 
     def _determine_parameter_type(self, spec: ParameterSpec) -> ParameterType:
         """Determine parameter type from specification."""
@@ -422,6 +480,9 @@ class StatisticalMetaLearner(MetaLearner):
         # Query historical actions and their outcomes
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=168)  # Last 7 days
+
+        if not self.knowledge_store:
+            return []
 
         try:
             actions = await self.knowledge_store.query_actions(system_id, start_time, end_time)

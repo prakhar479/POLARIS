@@ -53,7 +53,33 @@ def parse_strict_json(content: str, error_class: type) -> Dict[str, Any]:
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise error_class(f"Strategy response is not valid JSON: {exc}") from exc
+        # Fallback for concatenated JSON objects (JSON-L-like output)
+        import re
+
+        objects = []
+        # Find individual JSON objects by scanning brackets
+        decoder = json.JSONDecoder()
+        idx = 0
+        while idx < len(payload):
+            # Skip whitespace explicitly
+            match = re.search(r"\S", payload[idx:])
+            if not match:
+                break
+            idx += match.start()
+
+            try:
+                obj, new_idx = decoder.raw_decode(payload[idx:])
+                if isinstance(obj, dict):
+                    objects.append(obj)
+                idx += new_idx
+            except json.JSONDecodeError:
+                idx += 1
+
+        if not objects:
+            raise error_class(f"Strategy response is not valid JSON: {exc}") from exc
+
+        # Prioritize 'final' payload if any, else take first
+        parsed = next((obj for obj in objects if "final" in obj), objects[0])
 
     if not isinstance(parsed, dict):
         raise error_class("Strategy response must be a JSON object")

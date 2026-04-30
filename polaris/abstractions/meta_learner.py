@@ -112,12 +112,29 @@ class MetaLearner(ABC):
         """Apply approved parameter updates to strategy.
 
         Default implementation uses strategy's tuning interface.
+        Handles exceptions gracefully to prevent entire cycle failure.
         """
         results = []
         for proposal in proposals:
             if proposal.status == ProposalStatus.APPROVED:
-                success = await strategy.update_parameter(
-                    proposal.parameter_path, proposal.proposed_value
+                try:
+                    success = await strategy.update_parameter(
+                        proposal.parameter_path, proposal.proposed_value
+                    )
+                    error_message = (
+                        None
+                        if success
+                        else f"Parameter update returned False for {proposal.parameter_path}"
+                    )
+                except Exception as e:
+                    success = False
+                    error_message = f"Exception during parameter update: {str(e)}"
+
+                results.append(
+                    AppliedUpdate(
+                        proposal_id=proposal.proposal_id,
+                        success=success,
+                        error_message=error_message,
+                    )
                 )
-                results.append(AppliedUpdate(proposal_id=proposal.proposal_id, success=success))
         return results
