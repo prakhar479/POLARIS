@@ -21,6 +21,7 @@ from polaris.strategies.action_resolution import (
     require_supported_action_contract,
     resolve_strict_action_payload,
 )
+from polaris.strategies.utils import compact_for_llm
 
 
 class LLMReasoningStrategy(AdaptationStrategy):
@@ -301,8 +302,9 @@ Be conservative - only adapt when there's a clear need. Consider:
         # Get world model insights if available
         insights_str = ""
         if context.world_model_insights:
+            compacted_insights = compact_for_llm(context.world_model_insights)
             insights_str = "\nWorld Model Insights:\n" + json.dumps(
-                context.world_model_insights, indent=DEFAULT_JSON_INDENT
+                compacted_insights, indent=DEFAULT_JSON_INDENT
             )
 
         return f"""Current System State:

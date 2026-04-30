@@ -462,11 +462,46 @@ Start with small adjustments."""
 **Recent Adaptations:**
 {self._format_recent_actions(actions[-10:])}
 
-**Performance Trends:**
+**Rolling Window Metrics (Last {min(5, len(states))} intervals):**
+{self._analyze_rolling_metrics(states)}
+
+**Overall Trends:**
 {self._analyze_metric_trends(states)}
 
 Provide a comprehensive analysis and recommendations for optimization.
 """
+
+    def _analyze_rolling_metrics(self, states: list, num_windows: int = 5) -> str:
+        """Analyze metrics over discrete rolling windows to provide rich, compact context."""
+        if not states:
+            return "No state data available."
+
+        # Group states into temporal windows (simplified by dividing the array)
+        window_size = max(1, len(states) // num_windows)
+        windows = [states[i : i + window_size] for i in range(0, len(states), window_size)][
+            -num_windows:
+        ]
+
+        summary = []
+        for i, window in enumerate(windows):
+            window_metrics: dict[str, list[float]] = {}
+            for state in window:
+                try:
+                    metrics = (
+                        getattr(state, "metrics", state) if not isinstance(state, dict) else state
+                    )
+                    for k, v in (metrics.items() if isinstance(metrics, dict) else {}):
+                        if isinstance(v, (int, float)):
+                            window_metrics.setdefault(k, []).append(v)
+                except Exception:
+                    continue
+
+            if window_metrics:
+                avgs = {k: sum(v) / len(v) for k, v in window_metrics.items()}
+                metrics_str = ", ".join(f"{k}: {v:.2f}" for k, v in avgs.items() if k)
+                summary.append(f"Window {i+1}: {metrics_str}")
+
+        return "\n".join(summary) if summary else "Insufficient numeric data for rolling metrics."
 
     def _build_optimization_prompt(
         self, analysis: PerformanceAnalysis, tunable_params: Dict
@@ -479,18 +514,42 @@ Provide a comprehensive analysis and recommendations for optimization.
             ]
         )
 
-        return f"""Based on this performance analysis:
+        compact_metrics = self._compact_strategy_metrics(
+            analysis.insights.get("strategy_metrics", {})
+        )
 
+        return f"""Analysis:
 **Success Rate:** {analysis.success_rate: .1%}
-**Recommendations:** {', '.join(analysis.recommendations)}
-**Insights:** {analysis.insights.get('llm_analysis', 'No analysis available')}
-    **Strategy Metrics:** {analysis.insights.get('strategy_metrics', {})}
+
+**Recommendations:** {', '.join(analysis.recommendations) if analysis.recommendations else 'None'}
+**Insights:** {analysis.insights.get('llm_analysis', 'None')}
+**Strategy Metrics:** {compact_metrics}
 
 **Tunable Parameters:**
 {params_desc}
 
-Propose specific parameter changes to improve system performance.
+Propose optimization changes based on the above.
 """
+
+    def _compact_strategy_metrics(self, metrics: dict) -> str:
+        """Provide a concise summary of strategy metrics to prevent prompt bloating."""
+        if not metrics:
+            return "{}"
+        summary = []
+        for k, v in metrics.items():
+            if isinstance(v, list) and v:
+                nums = [x for x in v if isinstance(x, (int, float))]
+                if nums:
+                    summary.append(
+                        f"{k}: avg={sum(nums)/len(nums):.2f}, latest={nums[-1]:.2f} (n={len(v)})"
+                    )
+                else:
+                    summary.append(f"{k}: {len(v)} items")
+            elif isinstance(v, dict):
+                summary.append(f"{k}: {list(v.keys())}")
+            else:
+                summary.append(f"{k}: {v}")
+        return " | ".join(summary)
 
     def _format_recent_actions(self, actions: list) -> str:
         """Format recent actions for prompt."""

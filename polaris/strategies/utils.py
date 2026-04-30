@@ -105,26 +105,30 @@ def extract_connector_from_context(context: "AdaptationContext") -> Any:
 
 def compact_json(value: Any, max_chars: int) -> str:
     """Serialize payload to JSON and truncate to avoid context bloat."""
+    # First attempt organic compaction to retain structured validity
+    compacted_value = compact_for_llm(value, max_list_items=5)
     try:
-        text = json.dumps(value, ensure_ascii=True, default=str)
+        text = json.dumps(compacted_value, ensure_ascii=True, default=str)
     except Exception:
-        text = str(value)
+        text = str(compacted_value)
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + "..."
+    return text[:max_chars] + "...[TRUNCATED_JSON]"
 
 
 def bounded_tool_data(tool_result: Dict[str, Any], max_chars: int) -> Any:
     """Return tool payload unchanged or as a truncated preview object."""
+    # First try gracefully structure compaction
+    compacted_result = compact_for_llm(tool_result, max_list_items=5)
     try:
-        full_text = json.dumps(tool_result, ensure_ascii=True, default=str)
+        full_text = json.dumps(compacted_result, ensure_ascii=True, default=str)
     except Exception:
-        full_text = str(tool_result)
+        full_text = str(compacted_result)
 
     if len(full_text) <= max_chars:
-        return tool_result
+        return compacted_result
 
-    serialized = full_text[:max_chars] + "..."
+    serialized = full_text[:max_chars] + "...[TRUNCATED_JSON]"
     return {
         "_truncated": True,
         "preview": serialized,
@@ -212,6 +216,40 @@ def create_tool_registry(metrics: Any, allowed_tools: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def compact_for_llm(data: Any, max_list_items: int = 5) -> Any:
+    """Recursively compact large data structures to prevent prompt bloating."""
+    if isinstance(data, dict):
+        return {k: compact_for_llm(v, max_list_items) for k, v in data.items()}
+    elif isinstance(data, list):
+        if not data:
+            return []
+
+        # Feature: Calculate statistical summary if mostly numbers
+        nums = [x for x in data if isinstance(x, (int, float))]
+        if len(nums) == len(data) and len(data) > max_list_items:
+            return {
+                "_summary": "numeric_series",
+                "n": len(data),
+                "avg": round(sum(data) / len(data), 2),
+                "min": round(min(data), 2),
+                "max": round(max(data), 2),
+                "latest": round(data[-1], 2),
+            }
+
+        # Feature: Truncate generic lists
+        if len(data) > max_list_items:
+            compacted = [compact_for_llm(x, max_list_items) for x in data[:max_list_items]]
+            compacted.append(f"... {len(data) - max_list_items} more items omitted")
+            return compacted
+
+        return [compact_for_llm(x, max_list_items) for x in data]
+    else:
+        # Prevent huge string values
+        if isinstance(data, str) and len(data) > 2000:
+            return data[:2000] + "... [truncated]"
+        return data
+
+
 def format_system_state_for_llm(
     state: "SystemState",
     context: "AdaptationContext",
@@ -245,7 +283,7 @@ def format_system_state_for_llm(
         "system_id": state.system_id,
         "health": getattr(state.health_status, "value", "unknown"),
         "timestamp": state.timestamp.isoformat(),
-        "metrics": metrics,
-        "world_model_insights": context.world_model_insights or {},
+        "metrics": compact_for_llm(metrics),
+        "world_model_insights": compact_for_llm(context.world_model_insights or {}),
     }
     return json.dumps(data)

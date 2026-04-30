@@ -9,10 +9,10 @@ systems:
       host: "localhost"
       port: 4242
     monitoring:
-      collection_interval: 5
+      collection_interval: 10
 
 monitoring:
-  interval_seconds: 5
+  interval_seconds: 10
   connector_timeout_seconds: 30
 
 strategy:
@@ -35,9 +35,9 @@ strategy:
             average_utilization:
               high: 0.82         # Tighter: proactive before resource exhaustion
               low: 0.35          # Low: safe to scale_down or restore dimmer
-            basic_response_time:  # Direct indicator of core service health
-              high: 450.0        # Critical for basic requests
-              low: 200.0
+            # basic_response_time:  # Direct indicator of core service health
+            #   high: 450.0        # Critical for basic requests
+            #   low: 200.0
             optional_response_time:  # Shedding point for dimmer
               high: 600.0
               low: 300.0
@@ -54,10 +54,10 @@ strategy:
               high: {"type": "set_dimmer", "parameters": {"value": 0.5}}  # Aggressive shedding
               low: {"type": "set_dimmer", "parameters": {"value": 0.95}}  # Recovery dimmer
 
-            # Basic response time: prioritize scaling (core service)
-            basic_response_time:
-              high: {"type": "scale_up", "parameters": {}}
-              low: {"type": "scale_down", "parameters": {}}
+            # # Basic response time: prioritize scaling (core service)
+            # basic_response_time:
+            #   high: {"type": "scale_up", "parameters": {}}
+            #   low: {"type": "scale_down", "parameters": {}}
 
             # Optional response time: dimmer tuning
             optional_response_time:
@@ -208,13 +208,13 @@ knowledge_store:
 meta_learner:
   enabled: true
   type: "llm"
-  analysis_interval_hours: 0.25
+  analysis_interval_hours: 0.2
   transparency:
     enabled: true
     output_path: "./logs/meta_learning_updates_swim_thread_threshold.jsonl"
   llm:
     provider: "groq"
-    model: "openai/gpt-oss-20b"
+    model: "groq/compound"
     temperature: 0.1
     auto_apply: true
     per_system_prompts:
