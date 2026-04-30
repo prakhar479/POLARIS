@@ -126,7 +126,7 @@ jobs:
     - name: Run Docker smoke checks
       run: |
         docker run --rm polaris:core --version
-        docker run --rm polaris:core doctor --config /app/config/default.yaml
+        docker run --rm -e GOOGLE_API_KEY="dummy-key-for-smoke-test" polaris:core doctor --config /app/config/default.yaml
 
   quality-check:
     runs-on: ubuntu-latest

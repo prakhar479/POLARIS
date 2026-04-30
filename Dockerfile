@@ -24,7 +24,7 @@ RUN python -m pip install --upgrade pip
 RUN mkdir -p /app/logs /app/metrics /app/data && chown -R polaris:polaris /app
 
 FROM runtime-base AS core
-RUN python -m pip install -c requirements/constraints.txt .
+RUN python -m pip install -c requirements/constraints.txt .[llm,dashboard]
 
 USER polaris
 

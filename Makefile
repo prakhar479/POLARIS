@@ -108,7 +108,7 @@ docker-build-ci:
 
 docker-smoke: docker-build-core
 	docker run --rm polaris:core --version
-	docker run --rm polaris:core doctor --config /app/config/default.yaml
+	docker run --rm -e GOOGLE_API_KEY="test-key-for-smoke-test" polaris:core doctor --config /app/config/default.yaml
 
 # Pre-commit-aligned local check
 pre-commit-check: dependency-policy-check format-check lint type-check test dependency-check
