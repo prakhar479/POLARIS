@@ -21,22 +21,50 @@ strategy:
     selection_mode: "first"
     min_confidence: 0.75
     # Applies to cooldown-restricted sub-strategies (THREAD/agentic).
-    cooldown_seconds: 60
+    cooldown_seconds: 300 # every 5 min
     strategies:
       - type: "threshold"
         priority: 1.0
         params:
+          # Multi-level thresholds for SLA protection and graceful adaptation
+          # NOTE: Strategy only supports high/low. medium threshold documented for THREAD fallback.
           thresholds:
             average_response_time:
-              high: 500.0
+              high: 480.0        # Critical: immediate scale_up (within 20ms of 500ms SLA)
+              low: 250.0         # Recovery threshold: safe to scale_down or restore dimmer
             average_utilization:
-              high: 0.85
+              high: 0.82         # Tighter: proactive before resource exhaustion
+              low: 0.35          # Low: safe to scale_down or restore dimmer
+            basic_response_time:  # Direct indicator of core service health
+              high: 450.0        # Critical for basic requests
+              low: 200.0
+            optional_response_time:  # Shedding point for dimmer
+              high: 600.0
+              low: 300.0
+
+          # Action templates: metric → threshold direction → action
           action_templates:
+            # Default: response_time driven scaling
             default:
               high: {"type": "scale_up", "parameters": {}}
+              low: {"type": "scale_down", "parameters": {}}
+
+            # Utilization: dimmer first, then scaling
             average_utilization:
-              high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
-          cooldown_seconds: 60
+              high: {"type": "set_dimmer", "parameters": {"value": 0.5}}  # Aggressive shedding
+              low: {"type": "set_dimmer", "parameters": {"value": 0.95}}  # Recovery dimmer
+
+            # Basic response time: prioritize scaling (core service)
+            basic_response_time:
+              high: {"type": "scale_up", "parameters": {}}
+              low: {"type": "scale_down", "parameters": {}}
+
+            # Optional response time: dimmer tuning
+            optional_response_time:
+              high: {"type": "set_dimmer", "parameters": {"value": 0.4}}
+              low: {"type": "set_dimmer", "parameters": {"value": 0.9}}
+
+          cooldown_seconds: 120
 
       - type: "thread_agentic"
         priority: 0.6
@@ -146,6 +174,11 @@ strategy:
               2) {"spawn": {"objective": "...", "context_hint": "..."}}
               3) {"final": {"needs_adaptation": true|false, "reasoning": "...", "actions": [{"type": "...", "parameters": {...}}]}}
 
+              CRITICAL DELIVERY RULES:
+              - Output EXACTLY ONE JSON object per response. Stop immediately after producing the JSON.
+              - If you need multiple steps, take ONE step per cycle. Let the framework process the tool/spawn before deciding the next step.
+              - NEVER issue the exact same tool or spawn objective consecutively. Process the results provided!
+
               ROOT-THREAD RULES:
               - When depth=0, DO NOT output return_payload.
               - If needs_adaptation=true, actions MUST contain exactly one action object.
@@ -175,7 +208,7 @@ knowledge_store:
 meta_learner:
   enabled: true
   type: "llm"
-  analysis_interval_hours: 0.5
+  analysis_interval_hours: 0.25
   transparency:
     enabled: true
     output_path: "./logs/meta_learning_updates_swim_thread_threshold.jsonl"

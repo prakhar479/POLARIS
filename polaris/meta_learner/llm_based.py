@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -84,7 +85,7 @@ class LLMMetaLearner(MetaLearner):
             return PerformanceAnalysis(
                 system_id=system_id,
                 time_window_hours=time_window_hours,
-                success_rate=1.0,  # Assume success without data
+                success_rate=0.0,
                 insights={
                     "error": "knowledge_store_unavailable",
                     "message": "Knowledge store not configured",
@@ -192,6 +193,13 @@ class LLMMetaLearner(MetaLearner):
             )
             return []
 
+        try:
+            strategy_metrics = await strategy.get_performance_metrics()
+            if isinstance(strategy_metrics, dict):
+                analysis.insights.setdefault("strategy_metrics", strategy_metrics)
+        except Exception:
+            self.logger.debug("Unable to collect strategy performance metrics")
+
         # Build prompt for parameter optimization
         prompt = self._build_optimization_prompt(analysis, tunable_params)
 
@@ -261,12 +269,13 @@ class LLMMetaLearner(MetaLearner):
         approved = 0
         rejected = 0
 
-        for proposal in proposals:
+        for index, proposal in enumerate(proposals):
             # Calculate comprehensive validation score
             validation_score = self._calculate_validation_score(proposal, system_state)
 
             # Update proposal confidence with validation score
-            proposal.confidence = validation_score
+            proposal = replace(proposal, confidence=validation_score)
+            proposals[index] = proposal
 
             # Apply configurable threshold
             approval_threshold = 0.7  # Could be configurable
@@ -475,6 +484,7 @@ Provide a comprehensive analysis and recommendations for optimization.
 **Success Rate:** {analysis.success_rate: .1%}
 **Recommendations:** {', '.join(analysis.recommendations)}
 **Insights:** {analysis.insights.get('llm_analysis', 'No analysis available')}
+    **Strategy Metrics:** {analysis.insights.get('strategy_metrics', {})}
 
 **Tunable Parameters:**
 {params_desc}
@@ -503,20 +513,22 @@ Propose specific parameter changes to improve system performance.
             # Extract common metrics from states
             metric_trends = {}
 
-            # Get all metric keys from the first state
-            if not states[0]:
-                return "No valid state data available for trend analysis"
+            # Gather all observed metric keys
+            all_metric_keys = set()
+            for state in states:
+                try:
+                    if hasattr(state, "metrics"):
+                        all_metric_keys.update(state.metrics.keys())
+                    elif isinstance(state, dict):
+                        all_metric_keys.update(state.keys())
+                except (AttributeError, TypeError, KeyError):
+                    pass
 
-            first_state = states[0]
-            if hasattr(first_state, "metrics"):
-                metrics_dict = first_state.metrics
-            elif isinstance(first_state, dict):
-                metrics_dict = first_state
-            else:
+            if not all_metric_keys:
                 return "Unable to extract metrics from state data"
 
             # Analyze each metric trend
-            for metric_key in metrics_dict.keys():
+            for metric_key in all_metric_keys:
                 values = []
                 for state in states:
                     try:
@@ -656,20 +668,22 @@ Propose specific parameter changes to improve system performance.
     def _validate_proposal(self, spec: ParameterSpec, proposed_value: Any) -> bool:
         """Validate proposed value against parameter spec."""
         try:
+            # Handle categorical values first so string comparisons do not fall through
+            if spec.allowed_values:
+                return proposed_value in spec.allowed_values
+
             # Check type
             if spec.type == float:
                 proposed_value = float(proposed_value)
             elif spec.type == int:
                 proposed_value = int(proposed_value)
+            elif spec.type == str:
+                proposed_value = str(proposed_value)
 
             # Check bounds
             if spec.min_value is not None and proposed_value < spec.min_value:
                 return False
             if spec.max_value is not None and proposed_value > spec.max_value:
-                return False
-
-            # Check allowed values
-            if spec.allowed_values and proposed_value not in spec.allowed_values:
                 return False
 
             return True

@@ -223,13 +223,14 @@ def test_dashboard_value_and_trend_helpers(dashboard_fixture):
     assert dash._calculate_trend([(datetime.now(timezone.utc), "bad")]) == "—"
 
 
-def test_dashboard_uptime_and_non_tty_key_read(dashboard_fixture, monkeypatch):
+@pytest.mark.asyncio
+async def test_dashboard_uptime_and_non_tty_key_read(dashboard_fixture, monkeypatch):
     dash, _ = dashboard_fixture
     dash._started_at = datetime.now() - timedelta(seconds=65)
     assert dash._format_uptime() == "1m 5s"
 
     monkeypatch.setattr(dashboard_module.sys.stdin, "isatty", lambda: False)
-    assert dash._read_key_nonblocking() is None
+    assert await dash._read_key_nonblocking() is None
 
 
 @pytest.mark.asyncio
@@ -317,7 +318,11 @@ async def test_run_with_interactive_cli_handles_ctrl_d_exit(dashboard_fixture, m
     monkeypatch.setattr(dashboard_module, "_EmbeddedInteractiveCLI", _FakeRunner)
 
     keys = iter(["\x04", None, None])
-    monkeypatch.setattr(dash, "_read_key_nonblocking", lambda: next(keys, None))
+
+    async def mock_read_key():
+        return next(keys, None)
+
+    monkeypatch.setattr(dash, "_read_key_nonblocking", mock_read_key)
     monkeypatch.setattr(dash, "_render_with_interactive", lambda **_kwargs: Layout(name="root"))
 
     async def fast_update_cache():

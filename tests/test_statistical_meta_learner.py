@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from polaris.abstractions.meta_learner import PerformanceAnalysis
+from polaris.abstractions.meta_learner import ParameterProposal, PerformanceAnalysis, ProposalStatus
 from polaris.abstractions.strategy import AdaptationStrategy
 from polaris.meta_learner.statistical import StatisticalMetaLearner
 
@@ -40,6 +40,15 @@ class DummyStrategy(AdaptationStrategy):
 
     async def on_action_executed(self, action, result) -> None:
         pass
+
+
+class ZeroSpec:
+    def __init__(self) -> None:
+        self.current_value = 0.0
+        self.min_value = None
+        self.max_value = None
+        self.allowed_values = None
+        self.type = float
 
 
 @pytest.mark.asyncio
@@ -261,6 +270,17 @@ async def test_conservative_constraints():
 
 
 @pytest.mark.asyncio
+async def test_resolve_numeric_bounds_handles_zero_values():
+    """Zero-valued numeric parameters should still produce a valid range."""
+    meta = StatisticalMetaLearner(knowledge_store=AsyncMock())
+
+    min_value, max_value = meta._resolve_numeric_bounds(ZeroSpec(), is_discrete=False)
+
+    assert min_value == 0
+    assert max_value == 1
+
+
+@pytest.mark.asyncio
 async def test_validate_proposals():
     """Test validating proposals."""
     from polaris.abstractions.meta_learner import ParameterProposal, ProposalStatus
@@ -278,3 +298,46 @@ async def test_validate_proposals():
     assert validated[1].proposal_id == "3"
     assert validated[0].status == ProposalStatus.APPROVED
     assert p2.status == ProposalStatus.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_apply_proposals_handles_exceptions():
+    """Test that apply_proposals gracefully handles exceptions from update_parameter."""
+    from polaris.abstractions.meta_learner import AppliedUpdate
+
+    meta = StatisticalMetaLearner(knowledge_store=AsyncMock())
+
+    # Create a strategy that throws on one parameter but succeeds on another
+    class FailingStrategy(AdaptationStrategy):
+        async def assess(self, state, context):
+            return []
+
+        async def on_action_executed(self, action, result):
+            pass
+
+        def get_tunable_parameters(self):
+            return {}
+
+        async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
+            if "fail" in parameter_path:
+                raise ValueError("Simulated failure in update_parameter")
+            return True
+
+    strategy = FailingStrategy()
+
+    proposals = [
+        ParameterProposal("1", "safe_param", 1, 2, "r", 0.9, "e", status=ProposalStatus.APPROVED),
+        ParameterProposal("2", "fail_param", 1, 2, "r", 0.9, "e", status=ProposalStatus.APPROVED),
+    ]
+
+    results = await meta.apply_proposals(strategy, proposals)
+
+    # Should have results for both, but second should be marked as failure
+    assert len(results) == 2
+    assert results[0].success is True
+    assert results[0].error_message is None
+    assert results[1].success is False
+    assert "Exception during parameter update" in results[1].error_message
+
+    # Verify the exception didn't halt processing
+    assert any(r.success for r in results)
