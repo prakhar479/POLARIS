@@ -18,18 +18,20 @@ from typing import Any, Deque, Dict, List, Optional, cast
 
 from polaris.infrastructure.constants import DEFAULT_JSON_INDENT
 
+Live: Any = None
+
 try:
     from rich.console import Console
     from rich.layout import Layout
-    from rich.live import Live
+    from rich.live import Live as _Live
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
 
+    Live = _Live
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
-    Live = None
 
 
 class _EmbeddedInteractiveCLI:
