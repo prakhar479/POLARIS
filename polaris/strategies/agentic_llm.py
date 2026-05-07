@@ -882,7 +882,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 except (KeyError, IndexError, ValueError):
                     base = override
                 if self._system_prompt_suffix:
-                    return base.rstrip() + "\n\n## Meta-learner observations\n" + self._system_prompt_suffix
+                    return (
+                        base.rstrip()
+                        + "\n\n## Meta-learner observations\n"
+                        + self._system_prompt_suffix
+                    )
                 return base
 
         tools = ", ".join(self.allowed_tools)
@@ -898,7 +902,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
             except (KeyError, IndexError, ValueError):
                 base = self._system_prompt_template
             if self._system_prompt_suffix:
-                return base.rstrip() + "\n\n## Meta-learner observations\n" + self._system_prompt_suffix
+                return (
+                    base.rstrip()
+                    + "\n\n## Meta-learner observations\n"
+                    + self._system_prompt_suffix
+                )
             return base
 
         tool_descriptions = self._get_tool_descriptions()
