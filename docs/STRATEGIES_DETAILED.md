@@ -156,6 +156,11 @@ strategy:
     temperature: 0.1
     steps_limit: 3
     decision_cooldown_seconds: 60
+    # JSON-text mode: prompt instructs the LLM to reply in strict JSON.
+    per_system_prompts:
+      swim: |
+        You are controlling SWIM. Use only supported actions.
+        Reply in strict JSON only.
     tools:
       enabled:
         - get_recent_states
@@ -166,6 +171,23 @@ strategy:
         - predict_outcome
         - get_action_history
         - list_supported_actions
+
+    # Native tool calling mode (recommended over JSON-text mode).
+    # When native_tools is present, system_prompt replaces per_system_prompts
+    # and the LLM must respond by calling a declared function.
+    system_prompt: |
+      Use the provided functions to respond. Do not emit free-form JSON.
+    native_tools:
+      - type: "function"
+        function:
+          name: "get_recent_states"
+          description: "Query recent system states."
+          parameters:
+            type: "object"
+            properties:
+              window_seconds:
+                type: "integer"
+    native_tools_unsupported_policy: skip_cycle   # skip_cycle | json_fallback | strict_fail
 ```
 
 ## 5.3 Built-in tools and purpose
@@ -191,6 +213,133 @@ When `native_tools` is provided in config:
   - `skip_cycle` (default)
   - `json_fallback`
   - `strict_fail`
+
+### Prompt key: `system_prompt` vs `per_system_prompts`
+
+| Mode | Prompt key | LLM response expected |
+|---|---|---|
+| JSON-text (default) | `per_system_prompts.<system_id>` | Strict JSON object |
+| Native tool calling | `system_prompt` | Function call(s) |
+
+When `native_tools` is present, use `system_prompt`. The prompt should instruct the LLM
+to use the declared functions rather than emit JSON text.
+
+### Native tool groups
+
+Native tool entries serve two distinct roles:
+
+1. **Polaris analysis tools** — must also be listed in `tools.enabled`.
+   Examples: `get_recent_states`, `summarize_metric_trends`, `get_action_history`.
+2. **Adaptation action functions** — connector-specific actions declared only in
+   `native_tools` (not in `tools.enabled`).
+   Examples for SWIM: `scale_up`, `scale_down`, `set_dimmer`, `no_adaptation`.
+
+Polaris validates at startup that every name in `tools.enabled` has a matching entry in
+`native_tools`. Missing entries cause startup failure; run `polaris doctor` to check.
+
+### SWIM example — minimal native_tools block
+
+```yaml
+strategy:
+  type: "agentic_llm"
+  params:
+    provider: "groq"
+    temperature: 0.05
+    steps_limit: 3
+    native_tools_unsupported_policy: skip_cycle
+    system_prompt: |
+      Use the provided functions to respond.
+      Call get_recent_states or get_action_history first, then decide.
+      NEVER scale_down when average_response_time > 400 ms.
+    tools:
+      enabled:
+        - get_recent_states
+        - get_action_history
+    native_tools:
+      # ── Analysis tools (must mirror tools.enabled) ──────────────────
+      - type: "function"
+        function:
+          name: "get_recent_states"
+          description: "Query recent system states."
+          parameters:
+            type: "object"
+            properties:
+              window_seconds:
+                type: "integer"
+                minimum: 1
+                maximum: 3600
+                description: "Lookback window in seconds."
+      - type: "function"
+        function:
+          name: "get_action_history"
+          description: "Query historical adaptation actions."
+          parameters:
+            type: "object"
+            properties:
+              window_seconds:
+                type: "integer"
+                minimum: 1
+                maximum: 2592000
+                description: "Lookback window in seconds."
+      # ── Adaptation actions (SWIM-specific) ───────────────────────────
+      - type: "function"
+        function:
+          name: "scale_up"
+          description: "Add one server to the SWIM pool."
+          parameters:
+            type: "object"
+            properties:
+              reasoning:
+                type: "string"
+                description: "Why scaling up is needed."
+            required:
+              - "reasoning"
+      - type: "function"
+        function:
+          name: "scale_down"
+          description: "Remove one server (only when load is sustainably low)."
+          parameters:
+            type: "object"
+            properties:
+              reasoning:
+                type: "string"
+                description: "Why scaling down is safe."
+            required:
+              - "reasoning"
+      - type: "function"
+        function:
+          name: "set_dimmer"
+          description: "Set optional-content ratio [0.10, 1.0]."
+          parameters:
+            type: "object"
+            properties:
+              value:
+                type: "number"
+                minimum: 0.10
+                maximum: 1.0
+                description: "Target dimmer value."
+              reasoning:
+                type: "string"
+                description: "Why this value is appropriate."
+            required:
+              - "value"
+              - "reasoning"
+      - type: "function"
+        function:
+          name: "no_adaptation"
+          description: "Signal that no adaptation is needed this cycle."
+          parameters:
+            type: "object"
+            properties:
+              reasoning:
+                type: "string"
+                description: "Why no changes are needed."
+            required:
+              - "reasoning"
+```
+
+A complete, ready-to-run SWIM native-tool-calling config is available at
+[config/swim.yaml](../config/swim.yaml).
 
 ## 5.5 Reliability controls
 

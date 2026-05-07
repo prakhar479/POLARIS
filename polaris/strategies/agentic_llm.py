@@ -168,6 +168,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self._adaptation_count = 0
         self._success_count = 0
         self._last_decision_time: Optional[datetime] = None
+        # Meta-learner injectable suffix — appended to the resolved system prompt each cycle.
+        # The meta-learner writes to this via update_parameter("system_prompt_suffix", ...).
+        self._system_prompt_suffix: str = ""
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
@@ -708,7 +711,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 type=float,
                 min_value=0.0,
                 max_value=2.0,
-                description="",
+                description="LLM sampling temperature",
                 kind="llm_temperature",
             ),
             "steps_limit": ParameterSpec(
@@ -716,7 +719,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 type=int,
                 min_value=1,
                 max_value=10,
-                description="",
+                description="Maximum tool-use steps per cycle",
                 kind="agent_steps_limit",
             ),
             "decision_cooldown_seconds": ParameterSpec(
@@ -724,8 +727,18 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 type=float,
                 min_value=0.0,
                 max_value=3600.0,
-                description="",
+                description="Minimum seconds between consecutive LLM decisions",
                 kind="cooldown",
+            ),
+            "system_prompt_suffix": ParameterSpec(
+                current_value=self._system_prompt_suffix,
+                type=str,
+                description=(
+                    "Learnings appended to the system prompt each cycle. "
+                    "Set by the meta-learner to inject observed patterns without "
+                    "overwriting the base prompt."
+                ),
+                kind="system_prompt_suffix",
             ),
         }
 
@@ -747,6 +760,15 @@ class AgenticLLMStrategy(AdaptationStrategy):
             return True
         if parameter_path == "decision_cooldown_seconds":
             self.decision_cooldown_seconds = max(0.0, float(new_value))
+            return True
+        if parameter_path == "system_prompt_suffix":
+            # Strip and store; an empty string clears any previous learnings.
+            self._system_prompt_suffix = str(new_value).strip()
+            if self.logger:
+                self.logger.info(
+                    "AgenticLLMStrategy system_prompt_suffix updated by meta-learner",
+                    suffix_length=len(self._system_prompt_suffix),
+                )
             return True
         return False
 
@@ -852,26 +874,32 @@ class AgenticLLMStrategy(AdaptationStrategy):
             override = self._per_system_prompts.get(system_id)
             if override:
                 try:
-                    return override.format(
+                    base = override.format(
                         system_id=system_id,
                         allowed_tools=", ".join(self.allowed_tools),
                         supported_actions=supported_actions_text,
                     )
                 except (KeyError, IndexError, ValueError):
-                    return override
+                    base = override
+                if self._system_prompt_suffix:
+                    return base.rstrip() + "\n\n## Meta-learner observations\n" + self._system_prompt_suffix
+                return base
 
         tools = ", ".join(self.allowed_tools)
 
         # Global template override, optionally formatted
         if self._system_prompt_template:
             try:
-                return self._system_prompt_template.format(
+                base = self._system_prompt_template.format(
                     system_id=system_id or "",
                     allowed_tools=tools,
                     supported_actions=supported_actions_text,
                 )
             except (KeyError, IndexError, ValueError):
-                return self._system_prompt_template
+                base = self._system_prompt_template
+            if self._system_prompt_suffix:
+                return base.rstrip() + "\n\n## Meta-learner observations\n" + self._system_prompt_suffix
+            return base
 
         tool_descriptions = self._get_tool_descriptions()
 

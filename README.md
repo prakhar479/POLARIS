@@ -73,6 +73,7 @@ polaris = Polaris(
 Polaris includes built-in connectors for common exemplar systems:
 
 - **SWIM**: Connects to SWIM (Simulated Web Infrastructure Manager) via TCP.
+  Reference config with native tool calling: [config/swim.yaml](./config/swim.yaml)
 - **Wildfire**: Connects to the WildFire multi-UAV fire suppression simulation via REST API.
 - **Kubernetes**: Connects to Kubernetes clusters (natively or via kubeconfig) to monitor pods and scale deployments. Requires `pip install kubernetes`.
 
@@ -227,7 +228,7 @@ strategy:
       max_retries: 4
 ```
 
-Example (agentic LLM strategy):
+Example (agentic LLM strategy with native tool calling):
 
 ```yaml
 strategy:
@@ -238,14 +239,61 @@ strategy:
     temperature: 0.1
     max_tool_result_chars: 1200
     native_tools_unsupported_policy: skip_cycle   # skip_cycle | json_fallback | strict_fail
+    # When native_tools is present, use system_prompt instead of per_system_prompts.
+    system_prompt: |
+      Use the provided functions to respond. Do not emit free-form JSON.
+      Call analysis tools first, then call an adaptation action.
     tools:
       enabled:
         - get_recent_states
         - summarize_metric_trends
-        - get_world_model_insights
-        - predict_outcome
         - get_action_history
-        - list_supported_actions
+    # Every tool in tools.enabled must also appear here.
+    # Adaptation action functions (connector-specific) go here only.
+    native_tools:
+      - type: "function"
+        function:
+          name: "get_recent_states"
+          description: "Query recent system states from Polaris knowledge store."
+          parameters:
+            type: "object"
+            properties:
+              window_seconds:
+                type: "integer"
+                minimum: 1
+                maximum: 3600
+                description: "Lookback window in seconds."
+      - type: "function"
+        function:
+          name: "summarize_metric_trends"
+          description: "Summarize recent trends for one metric."
+          parameters:
+            type: "object"
+            properties:
+              metric:
+                type: "string"
+                description: "Metric name to summarize."
+              window_seconds:
+                type: "integer"
+                minimum: 1
+                maximum: 3600
+                description: "Lookback window in seconds."
+            required:
+              - "metric"
+      - type: "function"
+        function:
+          name: "get_action_history"
+          description: "Query historical adaptation actions."
+          parameters:
+            type: "object"
+            properties:
+              window_seconds:
+                type: "integer"
+                minimum: 1
+                maximum: 2592000
+                description: "Lookback window in seconds."
+      # Add connector-specific adaptation action functions here.
+      # See config/swim.yaml for a complete SWIM example.
     resilience:
       rps: 2
       burst: 4
@@ -254,6 +302,15 @@ strategy:
       base_backoff_ms: 200
       max_backoff_ms: 4000
 ```
+
+> **Native tool calling vs JSON-text mode:**
+> When `native_tools` is present, the provider API enforces the function schema before the
+> response reaches Polaris — the LLM must call one of the declared functions, eliminating
+> free-form hallucination of action names or parameters.  Use `system_prompt` (not
+> `per_system_prompts`) when native tool calling is active.
+>
+> A complete, ready-to-run example for SWIM is available at [config/swim.yaml](./config/swim.yaml).
+> The SUAVE example is at [config/suave.yaml](./config/suave.yaml).
 
 Example (THREAD recursive strategy):
 

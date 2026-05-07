@@ -32,6 +32,7 @@ Default SWIM connection expected by Polaris:
 Reference config files:
 
 - Minimal baseline: [config/default.yaml](../config/default.yaml)
+- SWIM native-tool-calling config: [config/swim.yaml](../config/swim.yaml)
 - Full hybrid experiment: [config/swim_thread_threshold_hybrid_experiment.yaml](../config/swim_thread_threshold_hybrid_experiment.yaml)
 
 ---
@@ -109,10 +110,11 @@ The configuration file must include:
    - A **hybrid strategy** combining:
      - A **threshold stage** — fast, deterministic; fires immediately when thresholds are clearly breached
      - An **agentic LLM stage** — intelligent, trend-aware; handles nuance the threshold misses (pre-emptive scale-up, scale-down decisions, dimmer recovery)
-   - For the agentic stage, include a `per_system_prompts.swim` block instructing the LLM on:
-     - What metrics to watch
-     - What actions are available and when to use them
-     - Safety constraints (e.g. don't scale down when response time is still high)
+   - For the agentic stage:
+     - Include a `system_prompt` instructing the LLM on metrics, available actions, and safety constraints
+     - Enable **native tool calling** via a `native_tools` block that defines all SWIM adaptation
+       actions and Polaris analysis tools as OpenAI-format function schemas
+     - Enable the corresponding Polaris built-in tools in `tools.enabled`
 4. **Observability** — human-readable logging and metrics export enabled
 5. *(Optional bonus)* **World model** and/or **meta-learner** configuration
 
@@ -121,6 +123,7 @@ The configuration file must include:
 - Use **only** SWIM-supported metrics in thresholds (see table above)
 - Use **only** the canonical SWIM actions: `scale_up`, `scale_down`, `set_dimmer`
 - For the agentic LLM stage, choose any supported provider with available credentials (`google`, `openai`, `openrouter`, `groq`, `ollama`)
+- The `native_tools` block must include every Polaris tool listed in `tools.enabled`
 - The config must pass `polaris doctor --config <config_file.yaml>` without errors
 
 ### Scoring
@@ -130,9 +133,9 @@ The configuration file must include:
 | Config loads without errors (`polaris doctor`) | 20 |
 | SWIM connection correctly configured | 10 |
 | Threshold stage uses SWIM-appropriate metrics with correct `action_templates` | 20 |
-| Agentic LLM stage present and structurally valid | 20 |
-| Agentic prompt (`per_system_prompts.swim`) captures SWIM domain semantics | 15 |
-| Safety constraints in the prompt (anti-oscillation, bounds checking) | 10 |
+| Agentic LLM stage present and structurally valid | 15 |
+| `native_tools` block present with correct function schemas | 15 |
+| Safety constraints in `system_prompt` (anti-oscillation, bounds checking) | 15 |
 | Observability configured (logging + metrics export) | 5 |
 
 **Bonus (up to 10 extra points):** world model block, meta-learner block, well-justified
@@ -262,11 +265,15 @@ Resolution order when a threshold fires:
 
 ---
 
-### 6.2 Recommended: Hybrid Threshold + Agentic LLM 
+### 6.2 Recommended: Hybrid Threshold + Agentic LLM with Native Tool Calling
 
 This is the recommended configuration for SWIM experiments. The threshold guard handles
-clear SLA breaches immediately; the agentic branch handles pre-emptive trend detection,
-scale-down, and dimmer recovery.
+clear SLA breaches immediately; the agentic branch uses **native tool calling** to make
+precise, structured decisions — the LLM calls predefined functions instead of emitting
+free-form JSON text, which improves reliability and schema compliance.
+
+The full ready-to-run version is available at [config/swim.yaml](../config/swim.yaml).
+The abbreviated form below shows the key structural differences from a plain agentic config.
 
 ```yaml
 systems:
@@ -304,51 +311,179 @@ strategy:
               high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
           cooldown_seconds: 45
 
-      # Stage 2: agentic LLM — handles nuance the threshold misses
+      # Stage 2: agentic LLM with native tool calling
       - type: "agentic_llm"
         priority: 0.6
         params:
-          provider: "google"          # or "openai", "openrouter", "groq", "ollama"
-          temperature: 0.1
+          provider: "groq"          # or "openai", "google", "openrouter", "ollama"
+          temperature: 0.05
           steps_limit: 3
-          per_system_prompts:
-            swim: |
-              You are an intelligent adaptation controller for the SWIM web server pool.
+          decision_cooldown_seconds: 20
+          native_tools_unsupported_policy: skip_cycle
 
-              SWIM metrics (collected every 5 s):
-              - average_response_time: weighted avg response time (ms). SLA target: <= 750 ms.
-              - average_utilization: server utilization [0.0, 1.0]. > 0.80 = high, < 0.30 = low.
-              - server_count: total servers (max 3).
-              - dimmer: optional-content ratio [0.0, 1.0]. 1.0 = full service.
+          system_prompt: |
+            You are the adaptation controller for SWIM, a simulated web server pool.
 
-              Available actions: scale_up, scale_down, set_dimmer (params: {"value": 0.0–1.0}).
+            ## Metrics available each cycle
+            - average_response_time: weighted average latency (ms). SLA target: <= 750 ms.
+            - average_utilization: server load ratio [0.0, 1.0].
+                > 0.80 = stressed; < 0.30 = idle / safe to scale down.
+            - server_count: total servers (1–3).
+            - dimmer: optional-content ratio [0.0, 1.0]. 1.0 = full service.
 
-              Role (the threshold guard handles clear SLA breaches):
-              - Detect pre-SLA trends (response time rising toward 750 ms).
-              - Handle scale-down when load is sustainably low (utilization < 0.30 for 3+ windows).
-              - Restore dimmer gradually (increase by at most 0.2 per step) when load stabilises.
+            ## Safety rules (hard constraints)
+            - NEVER scale_down when average_response_time > 400 ms.
+            - NEVER scale_down when average_utilization > 0.60.
+            - NEVER set dimmer below 0.10.
+            - NEVER scale_up when server_count is already 3.
+            - NEVER scale_down when server_count is already 1.
+            - Propose at most ONE action per cycle.
 
-              Safety rules:
-              - NEVER scale_down when average_response_time > 400 ms.
-              - NEVER scale_down when average_utilization > 0.60.
-              - NEVER set dimmer below 0.10.
-              - Propose at most ONE action per decision.
+            ## Response instructions
+            Use the provided functions to respond. Call get_recent_states,
+            summarize_metric_trends, or get_action_history to gather evidence first.
+            Then call scale_up, scale_down, set_dimmer, or no_adaptation.
 
-              Use tools to inspect trends before deciding. Reply in strict JSON only.
+          # Polaris built-in analysis tools — must also appear in native_tools
           tools:
             enabled:
               - get_recent_states
               - summarize_metric_trends
-              - get_world_model_insights
-              - predict_outcome
               - get_action_history
-              - list_supported_actions
+
+          # Native tool calling (OpenAI function-calling format).
+          # The LLM receives these function definitions and must respond by
+          # calling one of them.  Providers convert this format internally;
+          # strategy logic stays provider-agnostic.
+          native_tools:
+            - type: "function"
+              function:
+                name: "get_recent_states"
+                description: >
+                  Query recent system states from the Polaris knowledge store.
+                parameters:
+                  type: "object"
+                  properties:
+                    window_seconds:
+                      type: "integer"
+                      minimum: 1
+                      maximum: 3600
+                      description: "Lookback window in seconds."
+                    limit:
+                      type: "integer"
+                      minimum: 1
+                      maximum: 200
+                      description: "Maximum number of recent states to return."
+
+            - type: "function"
+              function:
+                name: "summarize_metric_trends"
+                description: >
+                  Summarize recent trends for one metric.
+                parameters:
+                  type: "object"
+                  properties:
+                    metric:
+                      type: "string"
+                      description: "Metric name to summarize."
+                    window_seconds:
+                      type: "integer"
+                      minimum: 1
+                      maximum: 3600
+                      description: "Lookback window in seconds."
+                  required:
+                    - "metric"
+
+            - type: "function"
+              function:
+                name: "get_action_history"
+                description: >
+                  Query historical adaptation actions from the Polaris knowledge store.
+                parameters:
+                  type: "object"
+                  properties:
+                    window_seconds:
+                      type: "integer"
+                      minimum: 1
+                      maximum: 2592000
+                      description: "Lookback window in seconds."
+                    limit:
+                      type: "integer"
+                      minimum: 1
+                      maximum: 500
+                      description: "Maximum number of actions to return."
+
+            - type: "function"
+              function:
+                name: "scale_up"
+                description: >
+                  Add one server to the SWIM pool. Use when response time is rising
+                  toward 750 ms or utilization is high.
+                parameters:
+                  type: "object"
+                  properties:
+                    reasoning:
+                      type: "string"
+                      description: "Why scaling up is needed."
+                  required:
+                    - "reasoning"
+
+            - type: "function"
+              function:
+                name: "scale_down"
+                description: >
+                  Remove one server. Only when utilization < 0.30 and
+                  response time < 400 ms (sustained).
+                parameters:
+                  type: "object"
+                  properties:
+                    reasoning:
+                      type: "string"
+                      description: "Why scaling down is safe."
+                  required:
+                    - "reasoning"
+
+            - type: "function"
+              function:
+                name: "set_dimmer"
+                description: >
+                  Set the optional-content ratio. Reduce to shed load;
+                  restore gradually (max +0.2 per step). Never below 0.10.
+                parameters:
+                  type: "object"
+                  properties:
+                    value:
+                      type: "number"
+                      minimum: 0.10
+                      maximum: 1.0
+                      description: "Target dimmer value [0.10, 1.0]."
+                    reasoning:
+                      type: "string"
+                      description: "Why this dimmer value is appropriate."
+                  required:
+                    - "value"
+                    - "reasoning"
+
+            - type: "function"
+              function:
+                name: "no_adaptation"
+                description: >
+                  Signal that no adaptation is needed this cycle.
+                parameters:
+                  type: "object"
+                  properties:
+                    reasoning:
+                      type: "string"
+                      description: "Why no changes are needed."
+                  required:
+                    - "reasoning"
+
           resilience:
-            rps: 2
+            rps: 1
             burst: 4
-            max_retries: 4
+            max_retries: 3
             base_backoff_ms: 200
-            max_backoff_ms: 4000
+            max_backoff_ms: 3000
 
 world_model:
   type: "statistical"
@@ -374,17 +509,39 @@ observability:
     export:
       enabled: true
       formats: ["json", "csv"]
-      output_dir: "./metrics"
+      output_dir: "./metrics/swim"
       auto_export_interval_minutes: 5
 ```
 
-**Required env var for the `google` provider:**
+**Required env var for the `groq` provider:**
 
 ```bash
-export GOOGLE_API_KEY="your-key-here"
+export GROQ_API_KEY="your-key-here"
 ```
 
-For other providers: `OPENAI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`.
+For other providers: `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`.
+
+> **Why native tool calling?**
+> In JSON-text mode the LLM must produce a correctly-formatted JSON object that Polaris
+> then parses. Schema errors cause the cycle to fail.  With native tool calling, the
+> provider API enforces the schema before the response reaches Polaris — the LLM must
+> call one of the declared functions, which eliminates free-form hallucination of action
+> names and parameters.
+>
+> **Fallback policy:** `native_tools_unsupported_policy: skip_cycle` means that if the
+> chosen provider does not support function calling, the agentic stage is silently skipped
+> for that cycle and the threshold guard continues protecting the system.
+
+---
+
+### 6.2.1 Native Tool Calling — Key Rules
+
+| Rule | Detail |
+|---|---|
+| Every tool in `tools.enabled` must also appear in `native_tools` | Polaris validates this at startup |
+| Adaptation functions (`scale_up`, `scale_down`, `set_dimmer`, `no_adaptation`) are **not** in `tools.enabled` | They are SWIM-specific and go directly in `native_tools` only |
+| `system_prompt` replaces `per_system_prompts` in native-tool-calling configs | The prompt instructs the LLM to use the declared functions rather than emit JSON text |
+| `native_tools_unsupported_policy` | Controls fallback when provider lacks function-calling support: `skip_cycle` (default), `json_fallback`, or `strict_fail` |
 
 ---
 
@@ -530,8 +687,26 @@ doesn't) or `selection_mode: confidence` for weighted selection.
 
 ### Missing `tools.enabled` in the agentic stage
 
-Without this, the agent cannot call any tools. Add at least `list_supported_actions`
-and `get_recent_states`.
+Without this, the agent cannot call any tools. Add at least `get_recent_states`
+and `get_action_history`.
+
+### `native_tools` entry missing for a tool in `tools.enabled`
+
+**Error:** Polaris validates at startup that every name in `tools.enabled` also has a
+corresponding entry in `native_tools`. If you add `summarize_metric_trends` to
+`tools.enabled` but forget to add its function schema in `native_tools`, the strategy
+will refuse to start.
+
+**Fix:** Keep both lists in sync. The quickest check:
+```bash
+polaris doctor --config config/swim.yaml
+```
+
+### Using `per_system_prompts` instead of `system_prompt` in native-tool-calling configs
+
+When `native_tools` is present, use the top-level `system_prompt` key (as in
+`config/swim.yaml`). The `per_system_prompts.swim` key is for JSON-text-mode agentic
+configs; mixing them can lead to the wrong prompt being used.
 
 ### SWIM unreachable
 
@@ -541,7 +716,7 @@ Verify host/port in config. Verify the SWIM process is running and listening. Ru
 ### Too many adaptations
 
 Increase `cooldown_seconds`. Narrow threshold ranges. Add explicit anti-oscillation
-constraints to the agentic strategy's `per_system_prompts`.
+constraints to the agentic strategy's `system_prompt` or `per_system_prompts`.
 
 ---
 
