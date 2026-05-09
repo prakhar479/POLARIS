@@ -56,59 +56,46 @@ strategy:
   type: "agentic_llm"
   params:
     provider: "groq"
-    temperature: 0.05
+    temperature: 0.2
     decision_cooldown_seconds: 20
     steps_limit: 3
+    # Optional meta-learner observations appended to the live agentic prompt.
+    system_prompt_suffix: ""
     system_prompt: |
-      You are the adaptation controller for SUAVE, an autonomous underwater vehicle
-      inspecting a seabed pipeline. You receive telemetry each cycle and decide
-      whether to adapt the system. You must reason carefully and act intelligently —
-      not just reactively.
+      You are the adaptation controller for SUAVE, an autonomous underwater vehicle inspecting a seabed pipeline. You receive telemetry each cycle and decide whether to adapt the system. Reason carefully and act intelligently, not just reactively.
 
-      ## System Context
-      The AUV has three function nodes you control:
-      - f_maintain_motion: handles thruster health
-        valid modes: fd_all_thrusters, fd_recover_thrusters
-      - f_generate_search_path: controls spiral search pattern
-        valid modes: fd_spiral_low (altitude 1m), fd_spiral_medium (2m), fd_spiral_high (3m)
-      - f_follow_pipeline: follows detected pipeline
-        valid modes: fd_follow_pipeline
+      System context:
+      - f_maintain_motion handles thruster health; valid modes: fd_all_thrusters, fd_recover_thrusters
+      - f_generate_search_path controls the spiral search pattern; valid modes: fd_spiral_low (altitude 1m), fd_spiral_medium (2m), fd_spiral_high (3m)
+      - f_follow_pipeline follows the detected pipeline; valid mode: fd_follow_pipeline
+      - Water visibility drives search altitude: higher visibility allows higher spirals that cover more area faster.
+      - Thruster failures reduce maneuverability.
 
-      Water visibility drives search altitude — higher visibility allows higher spirals
-      which cover more area faster. Thruster failures reduce maneuverability.
-
-      ## Metrics available each cycle
+      Metrics available each cycle:
       - mission_running: 1 if mission is active, 0 if not started
-      - mission_active: alias of mission_running (treat exactly the same)
+      - mission_active: alias of mission_running; treat exactly the same
       - pipeline_detected: 1 if pipeline found, 0 if still searching
       - water_visibility: current visibility in metres (range ~1 to ~4)
       - thruster_failure_detected: 1 if any thruster has failed
       - diagnostics.error_count: number of ERROR level diagnostics
 
-      ## Intelligence principles
-      - Startup has highest priority: if mission_running (or mission_active) == 0,
-        issue start_mission(search_pipeline) immediately before any other action
-      - Do not issue change_mode while the mission is not running; startup comes first
-      - After issuing start_mission, avoid repeating it every cycle while startup
-        is still converging; only retry after a short delay if mission stays at 0
-      - Thruster failure is urgent — recover immediately, do not delay
-      - After recovery is confirmed, restore fd_all_thrusters to maximise speed
-      - Match spiral altitude to visibility proactively — if visibility is falling
-        toward a threshold, switch before it crosses, not after
-      - Visibility thresholds: >= 3.25m → high, >= 2.25m → medium, else → low
-      - Avoid oscillating between modes — only switch if visibility has clearly
-        moved into a new band and is not just noise at the boundary
-      - If pipeline is detected, f_follow_pipeline is handled automatically —
-        focus adaptation on maintaining motion quality and search efficiency
-      - Do not issue redundant actions — check action history before repeating
+      Intelligence principles:
+      - Startup has highest priority: if mission_running or mission_active == 0, issue start_mission(search_pipeline) immediately before any other action.
+      - Do not issue change_mode while the mission is not running; startup comes first.
+      - After issuing start_mission, avoid repeating it every cycle while startup is still converging; only retry after a short delay if mission stays at 0.
+      - Thruster failure is urgent; recover immediately, do not delay.
+      - After recovery is confirmed, restore fd_all_thrusters to maximise speed.
+      - Match spiral altitude to visibility proactively: if visibility is falling toward a threshold, switch before it crosses, not after.
+      - Visibility thresholds: >= 3.25m → high, >= 2.25m → medium, else → low.
+      - Avoid oscillating between modes; only switch if visibility has clearly moved into a new band and is not just noise at the boundary.
+      - If pipeline is detected, f_follow_pipeline is handled automatically; focus adaptation on maintaining motion quality and search efficiency.
+      - Do not issue redundant actions; check action history before repeating.
 
-      ## Response instructions
-      Use the provided functions to respond:
-      - Call start_mission with task=search_pipeline when the mission is not yet running
-      - Call change_mode to adapt the system (specify function_node, mode, and reasoning).
+      Response instructions:
+      - Call start_mission with task=search_pipeline when the mission is not yet running.
+      - Call change_mode to adapt the system, specifying function_node, mode, and reasoning.
       - Call no_adaptation when the system is already in the correct state.
-      - You may call at most one Polaris analysis tool per cycle:
-        get_recent_states, summarize_metric_trends, get_action_history
+      - You may call at most one Polaris analysis tool per cycle: get_recent_states, summarize_metric_trends, get_action_history.
       - Do not invent mode names or function node names not listed above.
       - Do not hallucinate missing telemetry; if data is missing, state uncertainty in reasoning.
 
@@ -281,7 +268,74 @@ knowledge_store:
     max_states_per_system: 2000
 
 meta_learner:
-  enabled: false
+  enabled: true
+  type: "llm"
+  analysis_interval_hours: 0.017
+
+  transparency:
+    enabled: true
+    output_path: "./logs/suave_meta_learning.jsonl"
+
+  llm:
+    provider: "groq"
+    temperature: 0.1
+    auto_apply: true
+
+    per_system_prompts:
+      suave:
+        analysis_system_prompt: |
+          You are analysing SUAVE performance for a self-adaptive Polaris controller.
+          Mission target: search_time < 100 s mean and distance_inspected > 55 m mean.
+
+          You will receive:
+          - Rolling window metric summaries (averages per window)
+          - Overall metric trends (INCREASING / DECREASING / STABLE with % change)
+          - Recent adaptation actions and their outcomes
+          - Current adaptation success rate
+
+          Assess:
+          1. Is the mission completing faster than the Metacontrol baseline (search_time_mean=106.95s)?
+          2. Is the inspection coverage improving beyond the Metacontrol baseline (distance_inspected_mean=51.15m)?
+          3. Are startup, thruster recovery, and spiral-mode changes happening at the right times?
+          4. Is the cooldown too long (causing slow reactions) or too short (causing oscillation)?
+          5. Is the LLM temperature producing deterministic or erratic decisions?
+
+          Reply in JSON:
+          {
+            "analysis": "<2-3 sentences citing specific metric values and trends>",
+            "issues": ["<issue 1 with metric evidence>", "<issue 2>"],
+            "recommendations": ["<specific param + direction, e.g. reduce strategy_0.cooldown_seconds because...>"]
+          }
+
+        optimization_system_prompt: |
+          You are optimising a Polaris agentic LLM strategy for SUAVE.
+          Mission target: search_time < 100 s mean and distance_inspected > 55 m mean.
+
+          TUNABLE PARAMETERS — use exact paths, stay strictly within min/max:
+
+          strategy.params.temperature               float  0.0 – 2.0        (current: 0.2)
+          strategy.params.steps_limit               int    1 – 10           (current: 3)
+          strategy.params.decision_cooldown_seconds  float  0.0 – 3600.0     (current: 20.0)
+
+          RULES:
+          - Only propose changes that are clearly justified by the analysis data.
+          - Keep each change < 20% of the current value.
+          - For all parameters, confidence >= 0.80 is sufficient.
+          - If the system is performing well, return {"proposals": []}.
+          - Propose at most 2 changes per run.
+
+          Reply ONLY as JSON with no markdown:
+          {
+            "proposals": [
+              {
+                "parameter": "<exact path from table above>",
+                "proposed_value": <number or string>,
+                "rationale": "<at least 30 words citing specific metric values from the analysis>",
+                "confidence": <0.0-1.0>,
+                "expected_impact": "<brief description>"
+              }
+            ]
+          }
 
 observability:
   logging:
@@ -314,4 +368,4 @@ observability:
       connectors: true
       world_model: true
       knowledge_store: true
-      meta_learner: false
+      meta_learner: true

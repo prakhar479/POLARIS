@@ -112,6 +112,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         decision_cooldown_seconds: float = 60.0,
         allowed_tools: Optional[List[str]] = None,
         system_prompt: Optional[str] = None,
+        system_prompt_suffix: Optional[str] = None,
         per_system_prompts: Optional[Dict[str, str]] = None,
         native_tools: Optional[List[Dict[str, Any]]] = None,
         max_tool_result_chars: int = 1200,
@@ -131,6 +132,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 adaptation decisions (default: 60.0)
             allowed_tools: List of permitted Polaris built-in tools for the LLM
             system_prompt: Optional custom system prompt template
+            system_prompt_suffix: Optional meta-learner observations appended to the prompt
             per_system_prompts: Optional per-system prompt overrides keyed by system_id
             native_tools: Optional list of OpenAI-format function definitions. When
                 provided, the strategy uses native provider tool calling instead of
@@ -170,7 +172,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self._last_decision_time: Optional[datetime] = None
         # Meta-learner injectable suffix — appended to the resolved system prompt each cycle.
         # The meta-learner writes to this via update_parameter("system_prompt_suffix", ...).
-        self._system_prompt_suffix: str = ""
+        self._system_prompt_suffix: str = (
+            str(system_prompt_suffix).strip() if system_prompt_suffix else ""
+        )
 
     async def assess(
         self, state: SystemState, context: AdaptationContext
@@ -795,6 +799,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
 
         if "system_prompt" in config:
             self._system_prompt_template = config["system_prompt"]
+        if "system_prompt_suffix" in config:
+            await self.update_parameter("system_prompt_suffix", config["system_prompt_suffix"])
         if "per_system_prompts" in config and isinstance(config["per_system_prompts"], dict):
             self._per_system_prompts = config["per_system_prompts"]
 
@@ -882,7 +888,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 except (KeyError, IndexError, ValueError):
                     base = override
                 if self._system_prompt_suffix:
-                    return base.rstrip() + "\n\n## Meta-learner observations\n" + self._system_prompt_suffix
+                    return (
+                        base.rstrip()
+                        + "\n\n## Meta-learner observations\n"
+                        + self._system_prompt_suffix
+                    )
                 return base
 
         tools = ", ".join(self.allowed_tools)
@@ -898,7 +908,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
             except (KeyError, IndexError, ValueError):
                 base = self._system_prompt_template
             if self._system_prompt_suffix:
-                return base.rstrip() + "\n\n## Meta-learner observations\n" + self._system_prompt_suffix
+                return (
+                    base.rstrip()
+                    + "\n\n## Meta-learner observations\n"
+                    + self._system_prompt_suffix
+                )
             return base
 
         tool_descriptions = self._get_tool_descriptions()

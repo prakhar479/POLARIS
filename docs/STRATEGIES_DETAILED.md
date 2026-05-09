@@ -177,6 +177,8 @@ strategy:
     # and the LLM must respond by calling a declared function.
     system_prompt: |
       Use the provided functions to respond. Do not emit free-form JSON.
+    # Optional: meta-learner observations can be appended here at runtime via
+    # system_prompt_suffix, which is rendered into the live prompt.
     native_tools:
       - type: "function"
         function:
@@ -187,7 +189,7 @@ strategy:
             properties:
               window_seconds:
                 type: "integer"
-    native_tools_unsupported_policy: skip_cycle   # skip_cycle | json_fallback | strict_fail
+    native_tools_unsupported_policy: skip_cycle # skip_cycle | json_fallback | strict_fail
 ```
 
 ## 5.3 Built-in tools and purpose
@@ -216,10 +218,10 @@ When `native_tools` is provided in config:
 
 ### Prompt key: `system_prompt` vs `per_system_prompts`
 
-| Mode | Prompt key | LLM response expected |
-|---|---|---|
-| JSON-text (default) | `per_system_prompts.<system_id>` | Strict JSON object |
-| Native tool calling | `system_prompt` | Function call(s) |
+| Mode                | Prompt key                       | LLM response expected |
+| ------------------- | -------------------------------- | --------------------- |
+| JSON-text (default) | `per_system_prompts.<system_id>` | Strict JSON object    |
+| Native tool calling | `system_prompt`                  | Function call(s)      |
 
 When `native_tools` is present, use `system_prompt`. The prompt should instruct the LLM
 to use the declared functions rather than emit JSON text.

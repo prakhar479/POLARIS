@@ -465,6 +465,7 @@ LLM meta-learner supports:
 - periodic performance analysis and proposal generation
 - optional `auto_apply`
 - global and per-system prompt overrides
+- optional `system_prompt_suffix` on agentic strategies for appending meta-learner observations into the live system prompt
 
 Hot-reload support includes selected LLM meta-learner fields (for example `auto_apply`, `temperature`, prompts) when type remains unchanged.
 
@@ -620,10 +621,10 @@ strategy:
         low: 0.30
     action_templates:
       default:
-        high: {"type": "scale_up",   "parameters": {}}
-        low:  {"type": "scale_down", "parameters": {}}
+        high: { "type": "scale_up", "parameters": {} }
+        low: { "type": "scale_down", "parameters": {} }
       average_utilization:
-        high: {"type": "set_dimmer", "parameters": {"value": 0.5}}
+        high: { "type": "set_dimmer", "parameters": { "value": 0.5 } }
     cooldown_seconds: 60
 ```
 

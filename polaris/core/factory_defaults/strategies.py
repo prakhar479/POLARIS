@@ -200,6 +200,7 @@ def register_default_strategy_factories(
             decision_cooldown_seconds=decision_cooldown_seconds,
             allowed_tools=allowed_tools,
             system_prompt=agent_conf.get("system_prompt"),
+            system_prompt_suffix=agent_conf.get("system_prompt_suffix"),
             per_system_prompts=agent_conf.get("per_system_prompts"),
             native_tools=native_tools,
             max_tool_result_chars=max_tool_result_chars,
