@@ -103,7 +103,7 @@ strategy:
           provider: "groq" # or "openai", "google", "openrouter", "ollama"
           temperature: 0.05
           decision_cooldown_seconds: 20
-          steps_limit: 3
+          steps_limit: 6
           native_tools_unsupported_policy: skip_cycle
 
           system_prompt: |
@@ -310,7 +310,7 @@ knowledge_store:
 meta_learner:
   enabled: true
   type: "llm"
-  analysis_interval_hours: 0.5 # run every 30 min; tune down once stable
+  analysis_interval_hours: 0.05 # run every 3 min; tune down once stable
 
   transparency:
     enabled: true
