@@ -21,8 +21,8 @@ def test_default_connector_registrations_are_complete():
         register_connector_validator,
     )
 
-    assert set(connector_factories) == {"swim", "wildfire", "suave", "kubernetes"}
-    assert set(connector_validators) == {"swim", "wildfire", "kubernetes"}
+    assert set(connector_factories) == {"swim", "wildfire", "suave", "kubernetes", "http", "rest"}
+    assert set(connector_validators) == {"swim", "wildfire", "kubernetes", "http", "rest"}
 
 
 def test_default_strategy_registrations_are_complete():

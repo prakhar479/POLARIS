@@ -24,6 +24,7 @@ def register_default_connector_factories(
 ) -> None:
     """Register factories and validators for built-in connector types."""
     from polaris.connectors import (
+        HttpConnector,
         KubernetesConnector,
         SUAVEConnector,
         SWIMConnector,
@@ -148,3 +149,33 @@ def register_default_connector_factories(
 
     register_connector_factory("kubernetes", _kubernetes_factory)
     register_connector_config_validator("kubernetes", _validate_kubernetes_connection)
+
+    def _validate_http_connection(connection: Dict[str, Any]) -> None:
+        if not isinstance(connection, dict):
+            raise ValueError("HTTP connection config must be a dictionary")
+        base_url = connection.get("base_url")
+        if base_url is not None and not isinstance(base_url, str):
+            raise ValueError("HTTP connection base_url must be a string")
+
+    def _http_factory(
+        system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
+    ) -> "Connector":
+        base_url = system_cfg.connection.get("base_url", "http://localhost:8080")
+        return HttpConnector(
+            base_url=base_url,
+            system_id=system_cfg.id,
+            telemetry_endpoint=system_cfg.connection.get("telemetry_endpoint", "/metrics"),
+            actions_endpoint=system_cfg.connection.get("actions_endpoint", "/actions"),
+            health_endpoint=system_cfg.connection.get("health_endpoint", "/health"),
+            headers=system_cfg.connection.get("headers"),
+            timeout=system_cfg.connection.get("timeout", DEFAULT_CONNECTOR_TIMEOUT),
+            supported_actions=system_cfg.connection.get("supported_actions"),
+            dependencies=getattr(system_cfg, "dependencies", None),
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_connector_factory("http", _http_factory)
+    register_connector_factory("rest", _http_factory)
+    register_connector_config_validator("http", _validate_http_connection)
+    register_connector_config_validator("rest", _validate_http_connection)
