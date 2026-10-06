@@ -23,6 +23,9 @@ class MockSubStrategy:
     async def assess(self, state, context):
         return self.actions
 
+    def get_tunable_parameters(self):
+        return {}
+
 
 @pytest.fixture
 def context():
@@ -462,3 +465,84 @@ async def test_hybrid_strategy_estimate_confidence_bad_metrics(state):
     action = AdaptationAction(action_id="1", action_type="a", target_system="sys")
     conf = await hybrid._estimate_confidence(strat, action, state)
     assert conf == 0.7
+
+
+@pytest.mark.asyncio
+async def test_hybrid_strategy_pareto_selection_high_load(context):
+    """Under high load, Pareto selection prioritizes SLA protection (scale_up)."""
+    from polaris.core.models import HealthStatus, MetricValue, SystemState
+
+    stressed_state = SystemState(
+        system_id="web-sys",
+        timestamp=datetime.now(timezone.utc),
+        metrics={
+            "cpu_usage": MetricValue("cpu_usage", 92.0, "percent"),
+            "average_response_time": MetricValue("average_response_time", 950.0, "ms"),
+        },
+        health_status=HealthStatus.WARNING,
+    )
+    scale_up_act = AdaptationAction(action_id="1", action_type="scale_up", target_system="web-sys")
+    scale_down_act = AdaptationAction(
+        action_id="2", action_type="scale_down", target_system="web-sys"
+    )
+
+    strat_scale_up = MockSubStrategy(actions=[scale_up_act])
+    strat_scale_down = MockSubStrategy(actions=[scale_down_act])
+
+    hybrid = HybridStrategy(
+        strategies=[(strat_scale_down, 10.0), (strat_scale_up, 5.0)],
+        selection_mode="pareto",
+        objective_weights={"performance": 0.6, "cost": 0.2, "qos": 0.2},
+    )
+
+    actions = await hybrid.assess(stressed_state, context)
+    assert len(actions) == 1
+    # scale_up should win under high load despite strat_scale_down having higher priority
+    assert actions[0].action_type == "scale_up"
+
+
+@pytest.mark.asyncio
+async def test_hybrid_strategy_pareto_selection_low_load(context):
+    """Under low load, Pareto selection prioritizes cost reduction (scale_down)."""
+    from polaris.core.models import HealthStatus, MetricValue, SystemState
+
+    idle_state = SystemState(
+        system_id="web-sys",
+        timestamp=datetime.now(timezone.utc),
+        metrics={
+            "cpu_usage": MetricValue("cpu_usage", 18.0, "percent"),
+            "average_response_time": MetricValue("average_response_time", 120.0, "ms"),
+        },
+        health_status=HealthStatus.HEALTHY,
+    )
+    scale_up_act = AdaptationAction(action_id="1", action_type="scale_up", target_system="web-sys")
+    scale_down_act = AdaptationAction(
+        action_id="2", action_type="scale_down", target_system="web-sys"
+    )
+
+    strat_scale_up = MockSubStrategy(actions=[scale_up_act])
+    strat_scale_down = MockSubStrategy(actions=[scale_down_act])
+
+    hybrid = HybridStrategy(
+        strategies=[(strat_scale_up, 10.0), (strat_scale_down, 5.0)],
+        selection_mode="pareto",
+        objective_weights={"performance": 0.3, "cost": 0.5, "qos": 0.2},
+    )
+
+    actions = await hybrid.assess(idle_state, context)
+    assert len(actions) == 1
+    # scale_down should win under idle load to optimize cost
+    assert actions[0].action_type == "scale_down"
+
+
+@pytest.mark.asyncio
+async def test_hybrid_strategy_pareto_parameter_update():
+    """Verify that selection_mode can be updated to pareto via update_parameter."""
+    strat = MockSubStrategy()
+    hybrid = HybridStrategy(strategies=[(strat, 1.0)], selection_mode="first")
+    assert hybrid.selection_mode == "first"
+
+    updated = await hybrid.update_parameter("selection_mode", "pareto")
+    assert updated is True
+    assert hybrid.selection_mode == "pareto"
+    assert "pareto" in hybrid.get_tunable_parameters()["selection_mode"].allowed_values

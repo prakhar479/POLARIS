@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
-from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.core.models import AdaptationAction, ExecutionResult, HealthStatus, SystemState
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
@@ -24,6 +24,7 @@ class HybridStrategy(AdaptationStrategy):
         selection_mode: str = "confidence",
         min_confidence: float = 0.7,
         cooldown_seconds: int = 0,
+        objective_weights: Optional[Dict[str, float]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -33,11 +34,14 @@ class HybridStrategy(AdaptationStrategy):
             strategies: List of (strategy, priority) tuples
             selection_mode: How to select among proposals - 'first': Use first strategy
                 that proposes action - 'priority': Use highest priority strategy -
-                'confidence': Use highest confidence action
+                'confidence': Use highest confidence action - 'pareto': Multi-objective
+                Pareto utility ranking
             min_confidence: Minimum confidence threshold
             cooldown_seconds: Minimum seconds between cooldown-restricted selected
                 actions (typically agentic/LLM-backed). Cooldown-exempt strategies
                 continue to run while cooldown is active. Default 0 means no cooldown.
+            objective_weights: Optional dictionary of weights for Pareto selection
+                (defaults: performance: 0.5, cost: 0.3, qos: 0.2)
             logger: Optional logger for observability
             metrics: Optional metrics collector
         """
@@ -45,6 +49,11 @@ class HybridStrategy(AdaptationStrategy):
         self.selection_mode = selection_mode
         self.min_confidence = min_confidence
         self.cooldown_seconds = cooldown_seconds
+        self.objective_weights = objective_weights or {
+            "performance": 0.5,
+            "cost": 0.3,
+            "qos": 0.2,
+        }
         self._last_action_time: Optional[datetime] = None
         self._adaptation_count = 0
         self._success_count = 0
@@ -238,6 +247,17 @@ class HybridStrategy(AdaptationStrategy):
             if valid:
                 selected, _, _, selected_idx = max(valid, key=lambda x: x[1])
 
+        elif self.selection_mode in ("pareto", "multi_objective"):
+            # Multi-objective Pareto utility selection
+            valid = [(al, c, p, i) for al, c, p, i in proposals if c >= self.min_confidence]
+            if valid:
+                scored = []
+                for al, c, p, i in valid:
+                    act = al[0]
+                    score = self._calculate_pareto_utility(act, c, state)
+                    scored.append((al, score, p, i))
+                selected, _, _, selected_idx = max(scored, key=lambda x: x[1])
+
         # Track which strategy was used.
         # Only update cooldown timestamp when a cooldown-restricted strategy fires.
         if selected and selected_idx is not None:
@@ -293,6 +313,98 @@ class HybridStrategy(AdaptationStrategy):
         except Exception:
             return base
 
+    def _calculate_pareto_utility(
+        self,
+        action: AdaptationAction,
+        confidence: float,
+        state: SystemState,
+    ) -> float:
+        """Calculate multi-objective utility score for a candidate action.
+
+        Balancing:
+        - Performance / SLA risk mitigation (higher is better)
+        - Cost efficiency (higher is cheaper / less resource consumption)
+        - Quality of Service (QoS) preservation
+        """
+        action_type = (action.action_type or "").lower()
+
+        # Check current system load/stress indicators
+        high_load = getattr(state, "health_status", None) in (
+            HealthStatus.WARNING,
+            HealthStatus.CRITICAL,
+        )
+        if not high_load:
+            for m_name in ("average_utilization", "cpu_usage", "utilization"):
+                mv = state.metrics.get(m_name)
+                if mv is not None:
+                    try:
+                        if float(mv.value) > 75.0:
+                            high_load = True
+                            break
+                    except (TypeError, ValueError):
+                        pass
+
+        if not high_load:
+            for m_name in ("average_response_time", "response_time", "latency"):
+                mv = state.metrics.get(m_name)
+                if mv is not None:
+                    try:
+                        val = float(mv.value)
+                        if val > 500.0 or (0.75 < val < 10.0):
+                            high_load = True
+                            break
+                    except (TypeError, ValueError):
+                        pass
+
+        # 1. Performance utility
+        if "scale_up" in action_type:
+            u_perf = 1.0 if high_load else 0.6
+        elif "scale_down" in action_type:
+            u_perf = 0.1 if high_load else 0.7
+        elif "dimmer" in action_type:
+            u_perf = 0.85 if high_load else 0.5
+        else:
+            u_perf = 0.5
+
+        # 2. Cost utility (higher score = lower monetary / server footprint)
+        if "scale_down" in action_type:
+            u_cost = 1.0
+        elif "dimmer" in action_type:
+            u_cost = 0.85
+        elif "scale_up" in action_type:
+            u_cost = 0.3
+        else:
+            u_cost = 0.7
+
+        # 3. QoS utility (preservation of content quality)
+        if "scale_up" in action_type:
+            u_qos = 1.0
+        elif "dimmer" in action_type:
+            dimmer_val = 1.0
+            if action.parameters and "dimmer" in action.parameters:
+                try:
+                    dimmer_val = float(action.parameters["dimmer"])
+                except (TypeError, ValueError):
+                    pass
+            u_qos = max(0.2, min(1.0, dimmer_val))
+        elif "scale_down" in action_type:
+            u_qos = 0.5 if high_load else 0.8
+        else:
+            u_qos = 0.8
+
+        w_perf = self.objective_weights.get("performance", 0.5)
+        w_cost = self.objective_weights.get("cost", 0.3)
+        w_qos = self.objective_weights.get("qos", 0.2)
+
+        total_weight = w_perf + w_cost + w_qos
+        if total_weight <= 0:
+            total_weight = 1.0
+
+        composite = ((w_perf * u_perf) + (w_cost * u_cost) + (w_qos * u_qos)) / total_weight
+
+        # Weight composite utility with confidence
+        return composite * max(0.1, min(1.0, confidence))
+
     async def on_action_executed(self, action: AdaptationAction, result: ExecutionResult) -> None:
         """Track adaptation success."""
         self._adaptation_count += 1
@@ -317,7 +429,7 @@ class HybridStrategy(AdaptationStrategy):
         params["selection_mode"] = ParameterSpec(
             current_value=self.selection_mode,
             type=str,
-            allowed_values=["first", "priority", "confidence"],
+            allowed_values=["first", "priority", "confidence", "pareto"],
             description="How to select between multiple strategy proposals",
             kind="selection_mode",
         )
@@ -357,7 +469,7 @@ class HybridStrategy(AdaptationStrategy):
                 return await self.strategies[strategy_idx][0].update_parameter(sub_path, new_value)
 
         elif parameter_path == "selection_mode":
-            if new_value in ["first", "priority", "confidence"]:
+            if new_value in ["first", "priority", "confidence", "pareto", "multi_objective"]:
                 self.selection_mode = new_value
                 return True
 
