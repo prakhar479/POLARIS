@@ -54,3 +54,11 @@ class WorldModel(ABC):
             Dict with model insights (trends, patterns, etc.)
         """
         pass
+
+    def is_stressed(self, system_id: str) -> bool:
+        """Check if the specified system is experiencing behavioral stress or an anomalous regime.
+
+        Override in concrete implementations to provide domain-specific or
+        statistical regime detection. Default implementation returns False.
+        """
+        return False

@@ -246,10 +246,17 @@ class MonitoringLoop:
             if health in (HealthStatus.WARNING, HealthStatus.CRITICAL):
                 return True
 
-        if self._world_model and hasattr(self._world_model, "_regime_probs"):
-            regime_probs = getattr(self._world_model, "_regime_probs", {}).get(system_id, {})
-            if isinstance(regime_probs, dict) and regime_probs.get("high", 0.0) > 0.5:
-                return True
+        if self._world_model is not None:
+            if hasattr(self._world_model, "is_stressed"):
+                try:
+                    if self._world_model.is_stressed(system_id):
+                        return True
+                except Exception:
+                    pass
+            elif hasattr(self._world_model, "_regime_probs"):
+                regime_probs = getattr(self._world_model, "_regime_probs", {}).get(system_id, {})
+                if isinstance(regime_probs, dict) and regime_probs.get("high", 0.0) > 0.5:
+                    return True
 
         return False
 

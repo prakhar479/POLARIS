@@ -363,3 +363,8 @@ class StatisticalWorldModel(WorldModel):
                 len(insights),
             )
         return insights
+
+    def is_stressed(self, system_id: str) -> bool:
+        """Check if system is in high regime based on statistical regime probabilities."""
+        regime_probs = self._regime_probs.get(system_id, {})
+        return bool(regime_probs.get("high", 0.0) > 0.5)
