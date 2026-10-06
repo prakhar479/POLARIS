@@ -254,7 +254,7 @@ class HybridStrategy(AdaptationStrategy):
                 scored = []
                 for al, c, p, i in valid:
                     act = al[0]
-                    score = self._calculate_pareto_utility(act, c, state)
+                    score = self._calculate_pareto_utility(act, c, state, context)
                     scored.append((al, score, p, i))
                 selected, _, _, selected_idx = max(scored, key=lambda x: x[1])
 
@@ -318,6 +318,7 @@ class HybridStrategy(AdaptationStrategy):
         action: AdaptationAction,
         confidence: float,
         state: SystemState,
+        context: Optional[AdaptationContext] = None,
     ) -> float:
         """Calculate multi-objective utility score for a candidate action.
 
@@ -325,6 +326,9 @@ class HybridStrategy(AdaptationStrategy):
         - Performance / SLA risk mitigation (higher is better)
         - Cost efficiency (higher is cheaper / less resource consumption)
         - Quality of Service (QoS) preservation
+
+        Supports contract-driven ActionSchema impact hints and SLO contracts,
+        with fallback to heuristic pattern matching for legacy exemplars.
         """
         action_type = (action.action_type or "").lower()
 
@@ -333,6 +337,25 @@ class HybridStrategy(AdaptationStrategy):
             HealthStatus.WARNING,
             HealthStatus.CRITICAL,
         )
+
+        # 1. Contract-driven SLO violations check
+        contract = getattr(context, "system_contract", None) if context else None
+        schema = None
+        if contract is not None:
+            if hasattr(contract, "get_action_schema"):
+                schema = contract.get_action_schema(action.action_type)
+            if not high_load and getattr(contract, "slos", None):
+                for slo in contract.slos:
+                    mv = state.metrics.get(slo.metric_name)
+                    if mv is not None:
+                        try:
+                            if slo.is_violated(float(mv.value)):
+                                high_load = True
+                                break
+                        except (TypeError, ValueError):
+                            pass
+
+        # 2. Heuristic metric fallback checks if high_load not already triggered
         if not high_load:
             for m_name in ("average_utilization", "cpu_usage", "utilization"):
                 mv = state.metrics.get(m_name)
@@ -357,7 +380,12 @@ class HybridStrategy(AdaptationStrategy):
                         pass
 
         # 1. Performance utility
-        if "scale_up" in action_type:
+        if schema and getattr(schema, "performance_impact", "neutral") != "neutral":
+            if schema.performance_impact == "positive":
+                u_perf = 1.0 if high_load else 0.6
+            else:
+                u_perf = 0.1 if high_load else 0.7
+        elif "scale_up" in action_type:
             u_perf = 1.0 if high_load else 0.6
         elif "scale_down" in action_type:
             u_perf = 0.1 if high_load else 0.7
@@ -367,7 +395,12 @@ class HybridStrategy(AdaptationStrategy):
             u_perf = 0.5
 
         # 2. Cost utility (higher score = lower monetary / server footprint)
-        if "scale_down" in action_type:
+        if schema and getattr(schema, "cost_impact", "neutral") != "neutral":
+            if schema.cost_impact == "positive":
+                u_cost = 1.0
+            else:
+                u_cost = 0.3
+        elif "scale_down" in action_type:
             u_cost = 1.0
         elif "dimmer" in action_type:
             u_cost = 0.85
@@ -377,7 +410,12 @@ class HybridStrategy(AdaptationStrategy):
             u_cost = 0.7
 
         # 3. QoS utility (preservation of content quality)
-        if "scale_up" in action_type:
+        if schema and getattr(schema, "qos_impact", "neutral") != "neutral":
+            if schema.qos_impact == "positive":
+                u_qos = 1.0
+            else:
+                u_qos = 0.5 if high_load else 0.8
+        elif "scale_up" in action_type:
             u_qos = 1.0
         elif "dimmer" in action_type:
             dimmer_val = 1.0
