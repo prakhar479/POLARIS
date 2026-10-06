@@ -92,6 +92,26 @@ class SystemConfig(BaseModel):
                     "systems[].monitoring.connector_timeout_seconds must be a number > 0"
                 )
 
+        adaptive = self.monitoring.get("adaptive_cadence")
+        if adaptive is not None and not isinstance(adaptive, bool):
+            raise ValueError("systems[].monitoring.adaptive_cadence must be a boolean")
+
+        multiplier = self.monitoring.get("stress_multiplier")
+        if multiplier is not None:
+            if (
+                not isinstance(multiplier, (int, float))
+                or float(multiplier) <= 0
+                or float(multiplier) > 1.0
+            ):
+                raise ValueError(
+                    "systems[].monitoring.stress_multiplier must be a number in (0, 1.0]"
+                )
+
+        min_interval = self.monitoring.get("min_adaptive_interval")
+        if min_interval is not None:
+            if not isinstance(min_interval, (int, float)) or float(min_interval) <= 0:
+                raise ValueError("systems[].monitoring.min_adaptive_interval must be a number > 0")
+
         validator = get_connector_config_validator(self.connector_type)
         if validator is not None:
             connection = self.connection if isinstance(self.connection, dict) else {}
@@ -557,6 +577,24 @@ class PolarisConfig(BaseModel):
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or float(timeout) <= 0:
                 raise ValueError("monitoring.connector_timeout_seconds must be a number > 0")
+
+        adaptive = self.monitoring.get("adaptive_cadence")
+        if adaptive is not None and not isinstance(adaptive, bool):
+            raise ValueError("monitoring.adaptive_cadence must be a boolean")
+
+        multiplier = self.monitoring.get("stress_multiplier")
+        if multiplier is not None:
+            if (
+                not isinstance(multiplier, (int, float))
+                or float(multiplier) <= 0
+                or float(multiplier) > 1.0
+            ):
+                raise ValueError("monitoring.stress_multiplier must be a number in (0, 1.0]")
+
+        min_interval = self.monitoring.get("min_adaptive_interval")
+        if min_interval is not None:
+            if not isinstance(min_interval, (int, float)) or float(min_interval) <= 0:
+                raise ValueError("monitoring.min_adaptive_interval must be a number > 0")
 
         return self
 

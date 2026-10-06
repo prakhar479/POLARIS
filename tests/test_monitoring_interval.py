@@ -298,3 +298,90 @@ async def test_process_system_pipeline_timeout_keeps_telemetry_processed(mock_lo
         call[0] == "increment" and call[1] == "polaris.monitoring.timeouts"
         for call in mock_metrics.metrics
     )
+
+
+def test_stress_adaptive_cadence_on_health_warning_or_critical(mock_logger, mock_metrics):
+    """When adaptive_cadence is enabled, WARNING/CRITICAL health accelerates polling."""
+    cfg = PolarisConfig.from_dict(
+        {
+            "monitoring": {
+                "interval_seconds": 10,
+                "adaptive_cadence": True,
+                "stress_multiplier": 0.5,
+                "min_adaptive_interval": 2.0,
+            },
+            "systems": [
+                {
+                    "id": "stressed-sys",
+                    "connector_type": "unknown",
+                    "monitoring": {"collection_interval": 10},
+                }
+            ],
+        }
+    )
+    loop = _build_monitoring_loop(cfg, mock_logger, mock_metrics, interval_seconds=10.0)
+
+    # Initial healthy state -> normal interval (10.0s)
+    loop._latest_system_health["stressed-sys"] = HealthStatus.HEALTHY
+    assert loop._resolve_system_collection_interval("stressed-sys") == 10.0
+
+    # Stressed WARNING state -> accelerated interval (10.0 * 0.5 = 5.0s)
+    loop._latest_system_health["stressed-sys"] = HealthStatus.WARNING
+    assert loop._resolve_system_collection_interval("stressed-sys") == 5.0
+
+    # Stressed CRITICAL state -> accelerated interval (5.0s)
+    loop._latest_system_health["stressed-sys"] = HealthStatus.CRITICAL
+    assert loop._resolve_system_collection_interval("stressed-sys") == 5.0
+
+    # Back to HEALTHY -> relaxes back to 10.0s
+    loop._latest_system_health["stressed-sys"] = HealthStatus.HEALTHY
+    assert loop._resolve_system_collection_interval("stressed-sys") == 10.0
+
+
+def test_stress_adaptive_cadence_on_high_regime(mock_logger, mock_metrics):
+    """When world model high regime probability > 0.5, adaptive cadence accelerates polling."""
+    cfg = PolarisConfig.from_dict(
+        {
+            "monitoring": {
+                "interval_seconds": 20,
+                "adaptive_cadence": True,
+                "stress_multiplier": 0.25,
+                "min_adaptive_interval": 3.0,
+            },
+            "systems": [
+                {
+                    "id": "regime-sys",
+                    "connector_type": "unknown",
+                    "monitoring": {"collection_interval": 20},
+                }
+            ],
+        }
+    )
+    loop = _build_monitoring_loop(cfg, mock_logger, mock_metrics, interval_seconds=20.0)
+    mock_world_model = Mock()
+    mock_world_model._regime_probs = {"regime-sys": {"low": 0.1, "normal": 0.2, "high": 0.7}}
+    loop._world_model = mock_world_model
+
+    # High regime triggers acceleration (20.0 * 0.25 = 5.0s)
+    assert loop._resolve_system_collection_interval("regime-sys") == 5.0
+
+    # Minimum adaptive floor test (e.g. min_adaptive_interval = 8.0)
+    cfg_floor = PolarisConfig.from_dict(
+        {
+            "monitoring": {
+                "interval_seconds": 10,
+                "adaptive_cadence": True,
+                "stress_multiplier": 0.2,  # 10 * 0.2 = 2.0, but min is 6.0
+                "min_adaptive_interval": 6.0,
+            },
+            "systems": [
+                {
+                    "id": "regime-sys",
+                    "connector_type": "unknown",
+                }
+            ],
+        }
+    )
+    loop_floor = _build_monitoring_loop(cfg_floor, mock_logger, mock_metrics, interval_seconds=10.0)
+    loop_floor._world_model = mock_world_model
+    assert loop_floor._resolve_system_collection_interval("regime-sys") == 6.0

@@ -6,7 +6,7 @@ the per-cycle logic can be tested independently of the Polaris orchestrator.
 
 import asyncio
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from polaris.abstractions import Connector, KnowledgeStore, Logger, MetricsCollector, WorldModel
@@ -55,6 +55,7 @@ class MonitoringLoop:
         self._config = config
         self._running = False
         self._last_collection_at: Dict[str, datetime] = {}
+        self._latest_system_health: Dict[str, Any] = {}
         self._default_connector_timeout_seconds = 30.0
 
     async def run(self) -> None:
@@ -119,7 +120,12 @@ class MonitoringLoop:
                 error_backoff = 5.0  # reset on success
 
                 loop_duration = (datetime.now(timezone.utc) - loop_start).total_seconds()
-                sleep_for = max(0.0, float(self._interval) - loop_duration)
+                cadence_target = float(self._interval)
+                for system_id, _ in due_connectors:
+                    sys_int = self._resolve_system_collection_interval(system_id)
+                    if sys_int < cadence_target:
+                        cadence_target = sys_int
+                sleep_for = max(0.0, cadence_target - loop_duration)
                 await asyncio.sleep(sleep_for)
 
             except asyncio.CancelledError:
@@ -150,6 +156,7 @@ class MonitoringLoop:
             state = await asyncio.wait_for(
                 connector.collect_telemetry(), timeout=operation_timeout_seconds
             )
+            self._latest_system_health[state.system_id] = getattr(state, "health_status", None)
             systems_processed = 1
             self._emit_tagged(
                 "polaris.telemetry.collected",
@@ -228,38 +235,86 @@ class MonitoringLoop:
             "adaptations_executed": adaptations_executed,
         }
 
+    def _is_system_stressed(self, system_id: str) -> bool:
+        """Check if a system is experiencing stress (unhealthy or high regime)."""
+        health = self._latest_system_health.get(system_id)
+        if health is not None:
+            from polaris.core.models import HealthStatus
+
+            if health in (HealthStatus.WARNING, HealthStatus.CRITICAL):
+                return True
+
+        if self._world_model and hasattr(self._world_model, "_regime_probs"):
+            regime_probs = getattr(self._world_model, "_regime_probs", {}).get(system_id, {})
+            if isinstance(regime_probs, dict) and regime_probs.get("high", 0.0) > 0.5:
+                return True
+
+        return False
+
     def _resolve_system_collection_interval(self, system_id: str) -> float:
         """Resolve effective collection interval for a system.
 
-        The global monitoring interval is the loop cadence floor. Per-system intervals
-        can only slow collection down, not speed it up beyond the loop cadence.
+        The global monitoring interval is the loop cadence floor during normal operation.
+        When adaptive_cadence is enabled and the system is under stress, the collection
+        interval is dynamically accelerated by stress_multiplier down to min_adaptive_interval.
         """
         base_interval = float(self._interval)
-        systems_cfg = getattr(self._config, "systems", []) or []
+        configured_interval = base_interval
 
+        global_monitoring = getattr(self._config, "monitoring", {}) or {}
+        if not isinstance(global_monitoring, dict):
+            global_monitoring = {}
+
+        adaptive_enabled = bool(global_monitoring.get("adaptive_cadence", False))
+        stress_multiplier = float(global_monitoring.get("stress_multiplier", 0.5))
+        min_adaptive = float(global_monitoring.get("min_adaptive_interval", 1.0))
+
+        systems_cfg = getattr(self._config, "systems", []) or []
         for system_cfg in systems_cfg:
             if getattr(system_cfg, "id", None) != system_id:
                 continue
 
             monitoring_cfg = getattr(system_cfg, "monitoring", {}) or {}
             if not isinstance(monitoring_cfg, dict):
-                return base_interval
+                break
 
             raw_interval = monitoring_cfg.get("collection_interval")
-            if raw_interval is None:
-                return base_interval
+            if raw_interval is not None:
+                try:
+                    parsed = float(raw_interval)
+                    if parsed > 0:
+                        configured_interval = max(base_interval, parsed)
+                except (TypeError, ValueError):
+                    pass
 
-            try:
-                configured_interval = float(raw_interval)
-            except (TypeError, ValueError):
-                return base_interval
+            if "adaptive_cadence" in monitoring_cfg:
+                adaptive_enabled = bool(monitoring_cfg["adaptive_cadence"])
+            if "stress_multiplier" in monitoring_cfg:
+                try:
+                    parsed_mult = float(monitoring_cfg["stress_multiplier"])
+                    if 0 < parsed_mult <= 1.0:
+                        stress_multiplier = parsed_mult
+                except (TypeError, ValueError):
+                    pass
+            if "min_adaptive_interval" in monitoring_cfg:
+                try:
+                    parsed_min = float(monitoring_cfg["min_adaptive_interval"])
+                    if parsed_min > 0:
+                        min_adaptive = parsed_min
+                except (TypeError, ValueError):
+                    pass
+            break
 
-            if configured_interval <= 0:
-                return base_interval
+        if adaptive_enabled and self._is_system_stressed(system_id):
+            accelerated = max(min_adaptive, configured_interval * stress_multiplier)
+            self._emit_tagged(
+                "polaris.monitoring.adaptive_cadence_triggered",
+                system_id,
+                component="monitoring_loop",
+            )
+            return accelerated
 
-            return max(base_interval, configured_interval)
-
-        return base_interval
+        return configured_interval
 
     def _resolve_system_connector_timeout(self, system_id: str) -> float:
         """Resolve connector operation timeout with global and per-system overrides.
