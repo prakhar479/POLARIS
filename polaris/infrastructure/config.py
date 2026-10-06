@@ -115,6 +115,20 @@ class StrategyConfig(BaseModel):
 
     type: str = "threshold"
     params: Dict[str, Any] = Field(default_factory=dict)
+    fallback: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional fallback strategy config if primary strategy fails or circuit-breaks",
+    )
+    circuit_breaker_threshold: int = Field(
+        default=3,
+        ge=1,
+        description="Consecutive failure threshold before opening circuit breaker",
+    )
+    circuit_breaker_recovery_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="Seconds before attempting half-open recovery in circuit breaker",
+    )
 
     @model_validator(mode="after")
     def validate_strategy(self) -> "StrategyConfig":
@@ -127,6 +141,11 @@ class StrategyConfig(BaseModel):
 
         if not isinstance(self.params, dict):
             raise ValueError("strategy.params must be a dictionary")
+
+        if self.fallback is not None:
+            if not isinstance(self.fallback, dict):
+                raise ValueError("strategy.fallback must be a dictionary")
+            StrategyConfig.model_validate(self.fallback)
 
         validators = {
             "threshold": self._validate_threshold_params,

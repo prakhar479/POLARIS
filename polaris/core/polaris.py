@@ -274,6 +274,26 @@ class Polaris:
         config_reloader.update_meta_learner(self.meta_learner)
 
         if self.strategy is not None:
+            fallback_strategy = None
+            fallback_cfg = getattr(self.config.strategy, "fallback", None)
+            if fallback_cfg:
+                from polaris.infrastructure.config import StrategyConfig
+
+                fallback_obj = (
+                    StrategyConfig.model_validate(fallback_cfg)
+                    if isinstance(fallback_cfg, dict)
+                    else fallback_cfg
+                )
+                fallback_strategy = ComponentBuilder.build_strategy(
+                    fallback_obj,
+                    self.logger,
+                    self.metrics,
+                    self.knowledge_store,
+                    self.world_model,
+                    self.registry,
+                    self.config,
+                )
+
             pipeline = AdaptationPipeline(
                 strategy=self.strategy,
                 knowledge_store=self.knowledge_store,
@@ -283,6 +303,13 @@ class Polaris:
                 metrics=self.metrics,
                 config=self.config,
                 dry_run=bool(self.cli_overrides.get("dry_run", False)),
+                fallback_strategy=fallback_strategy,
+                circuit_breaker_threshold=getattr(
+                    self.config.strategy, "circuit_breaker_threshold", 3
+                ),
+                circuit_breaker_recovery_seconds=getattr(
+                    self.config.strategy, "circuit_breaker_recovery_seconds", 60.0
+                ),
             )
 
         monitoring = MonitoringLoop(

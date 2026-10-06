@@ -4,7 +4,7 @@ Extracted from ``Polaris._process_system_iteration`` so the decision-and- execut
 logic can be tested and reused independently of the monitoring loop.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -49,6 +49,9 @@ class AdaptationPipeline:
         metrics: Optional["MetricsCollector"],
         config: "PolarisConfig",
         dry_run: bool = False,
+        fallback_strategy: Optional["AdaptationStrategy"] = None,
+        circuit_breaker_threshold: int = 3,
+        circuit_breaker_recovery_seconds: float = 60.0,
     ) -> None:
         """Initialize the pipeline."""
         self._strategy = strategy
@@ -59,6 +62,27 @@ class AdaptationPipeline:
         self._metrics = metrics or NullMetricsCollector()
         self._config = config
         self._dry_run = dry_run
+        self._fallback_strategy = fallback_strategy
+        self._circuit_breaker_threshold = max(1, int(circuit_breaker_threshold))
+        self._circuit_breaker_recovery_seconds = max(0.001, float(circuit_breaker_recovery_seconds))
+        self._consecutive_failures = 0
+        self._circuit_breaker_open_until: Optional[datetime] = None
+        self._circuit_breaker_state: str = "CLOSED"
+
+    @property
+    def circuit_breaker_state(self) -> str:
+        """Current state of strategy circuit breaker ('CLOSED', 'OPEN', 'HALF_OPEN')."""
+        return self._circuit_breaker_state
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Number of consecutive assessment failures on the primary strategy."""
+        return self._consecutive_failures
+
+    @property
+    def fallback_strategy(self) -> Optional["AdaptationStrategy"]:
+        """Optional fallback strategy instance."""
+        return self._fallback_strategy
 
     async def run(
         self,
@@ -93,8 +117,6 @@ class AdaptationPipeline:
         # Fetch recent history so strategies can reason about trends.
         historical_states = []
         if self._knowledge_store:
-            from datetime import timedelta
-
             now = state.timestamp
             start = now - timedelta(hours=1)
             try:
@@ -124,22 +146,133 @@ class AdaptationPipeline:
             metadata={"connector": connector},
         )
 
-        # Assess
-        try:
-            actions = await self._strategy.assess(state, context)
-        except StrictContractViolation:
-            # Fatal contract errors should propagate
-            raise
-        except Exception as exc:
-            self._logger.error(
-                "Error in adaptation assessment", system_id=state.system_id, error=str(exc)
-            )
-            self._emit(
-                "polaris.adaptations.assessment_errors",
-                tags={"system_id": state.system_id},
-                component="core_framework",
-            )
-            return False
+        # Circuit breaker & Assess
+        actions = []
+        now_dt = datetime.now(timezone.utc)
+        primary_eligible = True
+
+        if self._circuit_breaker_state == "OPEN":
+            if self._circuit_breaker_open_until and now_dt >= self._circuit_breaker_open_until:
+                self._circuit_breaker_state = "HALF_OPEN"
+                self._logger.info(
+                    "Circuit breaker entered HALF_OPEN state; probing primary strategy",
+                    system_id=state.system_id,
+                )
+                self._emit(
+                    "polaris.circuit_breaker.half_open",
+                    tags={"system_id": state.system_id},
+                    component="core_framework",
+                )
+            else:
+                primary_eligible = False
+                self._logger.warning(
+                    "Circuit breaker is OPEN for primary strategy",
+                    system_id=state.system_id,
+                    open_until=(
+                        self._circuit_breaker_open_until.isoformat()
+                        if self._circuit_breaker_open_until
+                        else None
+                    ),
+                )
+                self._emit(
+                    "polaris.circuit_breaker.open_skip",
+                    tags={"system_id": state.system_id},
+                    component="core_framework",
+                )
+                if self._fallback_strategy is not None:
+                    self._logger.info(
+                        "Circuit breaker OPEN; delegating to fallback strategy",
+                        system_id=state.system_id,
+                        fallback=type(self._fallback_strategy).__name__,
+                    )
+                    self._emit(
+                        "polaris.circuit_breaker.fallback_delegated",
+                        tags={"system_id": state.system_id},
+                        component="core_framework",
+                    )
+                    try:
+                        actions = await self._fallback_strategy.assess(state, context)
+                    except Exception as fb_exc:
+                        self._logger.error(
+                            "Fallback strategy assessment failed",
+                            system_id=state.system_id,
+                            error=str(fb_exc),
+                        )
+                        return False
+                else:
+                    return False
+
+        if primary_eligible:
+            try:
+                actions = await self._strategy.assess(state, context)
+                if self._circuit_breaker_state == "HALF_OPEN" or self._consecutive_failures > 0:
+                    self._logger.info(
+                        "Circuit breaker reset to CLOSED after successful primary assessment",
+                        system_id=state.system_id,
+                    )
+                    self._consecutive_failures = 0
+                    self._circuit_breaker_state = "CLOSED"
+                    self._circuit_breaker_open_until = None
+                    self._emit(
+                        "polaris.circuit_breaker.reset",
+                        tags={"system_id": state.system_id},
+                        component="core_framework",
+                    )
+            except StrictContractViolation:
+                # Fatal contract errors should propagate
+                raise
+            except Exception as exc:
+                self._consecutive_failures += 1
+                self._logger.error(
+                    "Error in adaptation assessment",
+                    system_id=state.system_id,
+                    error=str(exc),
+                    consecutive_failures=self._consecutive_failures,
+                )
+                self._emit(
+                    "polaris.adaptations.assessment_errors",
+                    tags={"system_id": state.system_id},
+                    component="core_framework",
+                )
+                if self._consecutive_failures >= self._circuit_breaker_threshold:
+                    self._circuit_breaker_state = "OPEN"
+                    self._circuit_breaker_open_until = datetime.now(timezone.utc) + timedelta(
+                        seconds=self._circuit_breaker_recovery_seconds
+                    )
+                    self._logger.warning(
+                        "Circuit breaker TRIPPED to OPEN state",
+                        system_id=state.system_id,
+                        threshold=self._circuit_breaker_threshold,
+                        recovery_seconds=self._circuit_breaker_recovery_seconds,
+                    )
+                    self._emit(
+                        "polaris.circuit_breaker.tripped",
+                        tags={"system_id": state.system_id},
+                        component="core_framework",
+                    )
+
+                if self._fallback_strategy is not None:
+                    self._logger.info(
+                        "Invoking fallback strategy due to primary strategy failure",
+                        system_id=state.system_id,
+                        fallback=type(self._fallback_strategy).__name__,
+                    )
+                    self._emit(
+                        "polaris.circuit_breaker.fallback_invoked",
+                        tags={"system_id": state.system_id},
+                        component="core_framework",
+                    )
+                    try:
+                        actions = await self._fallback_strategy.assess(state, context)
+                    except Exception as fb_exc:
+                        self._logger.error(
+                            "Fallback strategy also failed",
+                            system_id=state.system_id,
+                            error=str(fb_exc),
+                        )
+                        return False
+                else:
+                    return False
 
         self._emit(
             "polaris.strategy.assessments",

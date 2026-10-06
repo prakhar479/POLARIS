@@ -160,6 +160,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         allowed_tools: Optional[List[str]] = None,
         system_prompt: Optional[str] = None,
         per_system_prompts: Optional[Dict[str, str]] = None,
+        max_cycle_time_seconds: Optional[float] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ) -> None:
@@ -186,6 +187,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             allowed_tools: Enabled tool names.
             system_prompt: Optional prompt template override.
             per_system_prompts: Optional per-system prompt overrides.
+            max_cycle_time_seconds: Optional total wall-clock budget in seconds for assess().
             logger: Optional structured logger.
             metrics: Optional metrics collector.
         """
@@ -200,6 +202,9 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         self.child_timeout_seconds = max(0.1, float(child_timeout_seconds))
         self.max_repeated_spawns = max(1, int(max_repeated_spawns))
         self.assessment_cooldown_seconds = max(0.0, float(assessment_cooldown_seconds))
+        self.max_cycle_time_seconds = (
+            float(max_cycle_time_seconds) if max_cycle_time_seconds is not None else None
+        )
         self.max_tool_result_chars = max(200, int(max_tool_result_chars))
         self.max_child_payload_chars = max(100, int(max_child_payload_chars))
         self.phi_mode = str(phi_mode or "last_line")
@@ -263,17 +268,46 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         runtime = _ThreadRuntime()
         try:
             root_input = self._initial_user_prompt(state, context)
-            result = await self._run_thread(
-                state=state,
-                context=context,
-                system_id=state.system_id,
-                thread_input=root_input,
-                depth=0,
-                lineage=(),
-                runtime=runtime,
-                supported_action_types=supported_action_types,
-                action_aliases=action_aliases,
-            )
+            try:
+                if self.max_cycle_time_seconds is not None and self.max_cycle_time_seconds > 0:
+                    result = await asyncio.wait_for(
+                        self._run_thread(
+                            state=state,
+                            context=context,
+                            system_id=state.system_id,
+                            thread_input=root_input,
+                            depth=0,
+                            lineage=(),
+                            runtime=runtime,
+                            supported_action_types=supported_action_types,
+                            action_aliases=action_aliases,
+                        ),
+                        timeout=self.max_cycle_time_seconds,
+                    )
+                else:
+                    result = await self._run_thread(
+                        state=state,
+                        context=context,
+                        system_id=state.system_id,
+                        thread_input=root_input,
+                        depth=0,
+                        lineage=(),
+                        runtime=runtime,
+                        supported_action_types=supported_action_types,
+                        action_aliases=action_aliases,
+                    )
+            except asyncio.TimeoutError:
+                if self.logger:
+                    self.logger.warning(
+                        "ThreadAgentic assessment cycle budget exceeded",
+                        system_id=state.system_id,
+                        budget_seconds=self.max_cycle_time_seconds,
+                    )
+                self.metrics.increment(
+                    "polaris.strategy.thread_agentic.cycle_timeout",
+                    tags={"system_id": state.system_id},
+                )
+                return []
 
             self.metrics.gauge(
                 "polaris.strategy.thread_agentic.max_depth",
@@ -397,6 +431,27 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 (datetime.now(timezone.utc) - llm_start).total_seconds(),
                 tags={"system_id": system_id, "depth": str(depth)},
             )
+            tokens_used = getattr(response, "tokens_used", None)
+            if tokens_used is not None:
+                self.metrics.increment(
+                    "polaris.llm.tokens.total",
+                    value=tokens_used,
+                    tags={"system_id": system_id, "strategy": "thread_agentic"},
+                )
+            prompt_tokens = getattr(response, "prompt_tokens", None)
+            if prompt_tokens is not None:
+                self.metrics.increment(
+                    "polaris.llm.tokens.prompt",
+                    value=prompt_tokens,
+                    tags={"system_id": system_id, "strategy": "thread_agentic"},
+                )
+            completion_tokens = getattr(response, "completion_tokens", None)
+            if completion_tokens is not None:
+                self.metrics.increment(
+                    "polaris.llm.tokens.completion",
+                    value=completion_tokens,
+                    tags={"system_id": system_id, "strategy": "thread_agentic"},
+                )
 
             parsed = self._parse_json_object(response.content)
 
@@ -868,6 +923,14 @@ class ThreadAgenticStrategy(AdaptationStrategy):
                 description="Minimum seconds between consecutive assessments",
                 kind="cooldown",
             ),
+            "max_cycle_time_seconds": ParameterSpec(
+                current_value=self.max_cycle_time_seconds,
+                type=float,
+                min_value=1.0,
+                max_value=300.0,
+                description="Maximum total wall-clock seconds for assess() cycle",
+                kind="cycle_timeout",
+            ),
         }
 
     async def update_parameter(self, parameter_path: str, new_value: Any) -> bool:
@@ -887,6 +950,11 @@ class ThreadAgenticStrategy(AdaptationStrategy):
         if parameter_path == "assessment_cooldown_seconds":
             self.assessment_cooldown_seconds = max(0.0, float(new_value))
             return True
+        if parameter_path == "max_cycle_time_seconds":
+            self.max_cycle_time_seconds = (
+                max(1.0, float(new_value)) if new_value is not None else None
+            )
+            return True
         return False
 
     async def apply_config_update(self, config: Dict[str, Any]) -> None:
@@ -900,6 +968,7 @@ class ThreadAgenticStrategy(AdaptationStrategy):
             "max_thread_depth",
             "max_total_threads",
             "assessment_cooldown_seconds",
+            "max_cycle_time_seconds",
         ):
             if key in config:
                 await self.update_parameter(key, config[key])

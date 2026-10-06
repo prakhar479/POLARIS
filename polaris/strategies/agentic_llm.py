@@ -10,6 +10,7 @@ and context 2. Uses available tools to gather additional information 3. Makes a 
 decision on adaptation needs 4. Proposes specific adaptation actions if needed
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -117,6 +118,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
         native_tools: Optional[List[Dict[str, Any]]] = None,
         max_tool_result_chars: int = 1200,
         native_tools_unsupported_policy: str = "skip_cycle",
+        max_cycle_time_seconds: Optional[float] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
@@ -144,6 +146,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
             native_tools_unsupported_policy: Behavior when provider does not support
                 native tool calling. One of: ``skip_cycle`` (default),
                 ``json_fallback`` (retry via JSON text mode), ``strict_fail``.
+            max_cycle_time_seconds: Maximum wall-clock seconds for a complete reasoning cycle.
             logger: Optional logger for debugging
             metrics: Optional metrics collector for monitoring
         """
@@ -153,6 +156,9 @@ class AgenticLLMStrategy(AdaptationStrategy):
         self.steps_limit = steps_limit
         self.temperature = temperature
         self.decision_cooldown_seconds = max(0.0, float(decision_cooldown_seconds))
+        self.max_cycle_time_seconds = (
+            float(max_cycle_time_seconds) if max_cycle_time_seconds is not None else None
+        )
         self.allowed_tools = allowed_tools or list(DEFAULT_ALLOWED_TOOLS)
         self._system_prompt_template = system_prompt
         self._per_system_prompts = per_system_prompts or {}
@@ -245,15 +251,60 @@ class AgenticLLMStrategy(AdaptationStrategy):
         ]
         try:
             for step in range(self.steps_limit):
+                if self.max_cycle_time_seconds is not None:
+                    elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+                    remaining_timeout = self.max_cycle_time_seconds - elapsed
+                    if remaining_timeout <= 0:
+                        if self.logger:
+                            self.logger.warning(
+                                "Agentic native tool reasoning cycle budget exceeded",
+                                system_id=state.system_id,
+                                elapsed_seconds=round(elapsed, 2),
+                                budget_seconds=self.max_cycle_time_seconds,
+                                step=step,
+                            )
+                        self.metrics.increment(
+                            "polaris.strategy.agentic.cycle_timeout",
+                            tags={"system_id": state.system_id},
+                        )
+                        return []
+                else:
+                    remaining_timeout = None
+
                 llm_start = datetime.now(timezone.utc)
                 try:
-                    response = await self.llm.generate_with_tools(
-                        messages,
-                        tools=self._native_tools,
-                        tool_choice="auto",
-                        temperature=self.temperature,
-                        max_tokens=DEFAULT_MAX_TOKENS_REASONING,
+                    if remaining_timeout is not None:
+                        response = await asyncio.wait_for(
+                            self.llm.generate_with_tools(
+                                messages,
+                                tools=self._native_tools,
+                                tool_choice="auto",
+                                temperature=self.temperature,
+                                max_tokens=DEFAULT_MAX_TOKENS_REASONING,
+                            ),
+                            timeout=max(0.01, remaining_timeout),
+                        )
+                    else:
+                        response = await self.llm.generate_with_tools(
+                            messages,
+                            tools=self._native_tools,
+                            tool_choice="auto",
+                            temperature=self.temperature,
+                            max_tokens=DEFAULT_MAX_TOKENS_REASONING,
+                        )
+                except asyncio.TimeoutError:
+                    if self.logger:
+                        self.logger.warning(
+                            "Agentic LLM call timed out due to cycle budget",
+                            system_id=state.system_id,
+                            step=step + 1,
+                            budget_seconds=self.max_cycle_time_seconds,
+                        )
+                    self.metrics.increment(
+                        "polaris.strategy.agentic.cycle_timeout",
+                        tags={"system_id": state.system_id},
                     )
+                    return []
                 except (NotImplementedError, AttributeError) as exc:
                     if self.logger:
                         self.logger.error(
@@ -291,6 +342,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     (datetime.now(timezone.utc) - llm_start).total_seconds(),
                     tags={"system_id": state.system_id},
                 )
+                self._record_token_metrics(response, state.system_id)
                 self._maybe_log_llm_response(
                     system_id=state.system_id,
                     step=step + 1,
@@ -529,18 +581,63 @@ class AgenticLLMStrategy(AdaptationStrategy):
         ]
         try:
             for step in range(self.steps_limit):
+                if self.max_cycle_time_seconds is not None:
+                    elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+                    remaining_timeout = self.max_cycle_time_seconds - elapsed
+                    if remaining_timeout <= 0:
+                        if self.logger:
+                            self.logger.warning(
+                                "Agentic JSON reasoning cycle budget exceeded",
+                                system_id=state.system_id,
+                                elapsed_seconds=round(elapsed, 2),
+                                budget_seconds=self.max_cycle_time_seconds,
+                                step=step,
+                            )
+                        self.metrics.increment(
+                            "polaris.strategy.agentic.cycle_timeout",
+                            tags={"system_id": state.system_id},
+                        )
+                        return []
+                else:
+                    remaining_timeout = None
+
                 self.metrics.gauge(
                     "polaris.strategy.agentic.step",
                     step + 1,
                     tags={"system_id": state.system_id},
                 )
                 llm_start = datetime.now(timezone.utc)
-                response = await self.llm.generate(
-                    messages,
-                    temperature=self.temperature,
-                    max_tokens=DEFAULT_MAX_TOKENS_REASONING,
-                    response_schema=AgenticResponseSchema,
-                )
+                try:
+                    if remaining_timeout is not None:
+                        response = await asyncio.wait_for(
+                            self.llm.generate(
+                                messages,
+                                temperature=self.temperature,
+                                max_tokens=DEFAULT_MAX_TOKENS_REASONING,
+                                response_schema=AgenticResponseSchema,
+                            ),
+                            timeout=max(0.01, remaining_timeout),
+                        )
+                    else:
+                        response = await self.llm.generate(
+                            messages,
+                            temperature=self.temperature,
+                            max_tokens=DEFAULT_MAX_TOKENS_REASONING,
+                            response_schema=AgenticResponseSchema,
+                        )
+                except asyncio.TimeoutError:
+                    if self.logger:
+                        self.logger.warning(
+                            "Agentic LLM generate timed out due to cycle budget",
+                            system_id=state.system_id,
+                            step=step + 1,
+                            budget_seconds=self.max_cycle_time_seconds,
+                        )
+                    self.metrics.increment(
+                        "polaris.strategy.agentic.cycle_timeout",
+                        tags={"system_id": state.system_id},
+                    )
+                    return []
 
                 # Optional deep debug to help diagnose provider-specific formatting issues.
                 # Enabled via env var to avoid logging large model outputs by default.
@@ -554,6 +651,7 @@ class AgenticLLMStrategy(AdaptationStrategy):
                     (datetime.now(timezone.utc) - llm_start).total_seconds(),
                     tags={"system_id": state.system_id},
                 )
+                self._record_token_metrics(response, state.system_id)
                 parsed = self._parse_json_object(response.content)
 
                 try:
@@ -734,6 +832,14 @@ class AgenticLLMStrategy(AdaptationStrategy):
                 description="Minimum seconds between consecutive LLM decisions",
                 kind="cooldown",
             ),
+            "max_cycle_time_seconds": ParameterSpec(
+                current_value=self.max_cycle_time_seconds,
+                type=float,
+                min_value=1.0,
+                max_value=300.0,
+                description="Maximum total wall-clock seconds for a reasoning cycle",
+                kind="cycle_timeout",
+            ),
             "system_prompt_suffix": ParameterSpec(
                 current_value=self._system_prompt_suffix,
                 type=str,
@@ -764,6 +870,11 @@ class AgenticLLMStrategy(AdaptationStrategy):
             return True
         if parameter_path == "decision_cooldown_seconds":
             self.decision_cooldown_seconds = max(0.0, float(new_value))
+            return True
+        if parameter_path == "max_cycle_time_seconds":
+            self.max_cycle_time_seconds = (
+                max(1.0, float(new_value)) if new_value is not None else None
+            )
             return True
         if parameter_path == "system_prompt_suffix":
             # Strip and store; an empty string clears any previous learnings.
@@ -796,6 +907,8 @@ class AgenticLLMStrategy(AdaptationStrategy):
             await self.update_parameter(
                 "decision_cooldown_seconds", config["decision_cooldown_seconds"]
             )
+        if "max_cycle_time_seconds" in config:
+            await self.update_parameter("max_cycle_time_seconds", config["max_cycle_time_seconds"])
 
         if "system_prompt" in config:
             self._system_prompt_template = config["system_prompt"]
@@ -863,6 +976,30 @@ class AgenticLLMStrategy(AdaptationStrategy):
             "success_rate": self._success_count / self._adaptation_count,
             "total_adaptations": float(self._adaptation_count),
         }
+
+    def _record_token_metrics(self, response: Any, system_id: str) -> None:
+        """Record token usage metrics if present on LLM response."""
+        tokens_used = getattr(response, "tokens_used", None)
+        if tokens_used is not None:
+            self.metrics.increment(
+                "polaris.llm.tokens.total",
+                value=tokens_used,
+                tags={"system_id": system_id, "strategy": "agentic"},
+            )
+        prompt_tokens = getattr(response, "prompt_tokens", None)
+        if prompt_tokens is not None:
+            self.metrics.increment(
+                "polaris.llm.tokens.prompt",
+                value=prompt_tokens,
+                tags={"system_id": system_id, "strategy": "agentic"},
+            )
+        completion_tokens = getattr(response, "completion_tokens", None)
+        if completion_tokens is not None:
+            self.metrics.increment(
+                "polaris.llm.tokens.completion",
+                value=completion_tokens,
+                tags={"system_id": system_id, "strategy": "agentic"},
+            )
 
     def _system_prompt(
         self,
