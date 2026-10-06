@@ -368,3 +368,57 @@ class TestStatisticalWorldModel:
         assert "invalid_int" not in system_history
         assert "invalid_str" not in system_history
         assert system_history["valid_metric"] == [75.0]
+
+    @pytest.mark.asyncio
+    async def test_predict_with_recorded_action_effects(self, world_model, sample_state):
+        """Test that recorded action effects apply counterfactual deltas in prediction."""
+        # Baseline response_time is 200.0 ms
+        await world_model.update(sample_state)
+
+        # Record empirical delta for scale_up: response_time drops by 50ms, cpu drops by 15%
+        world_model.record_action_effect(
+            system_id="test-system",
+            action_type="scale_up",
+            metric_deltas={"response_time": -50.0, "cpu_usage": -15.0},
+        )
+
+        action = AdaptationAction(
+            action_id="act-1",
+            action_type="scale_up",
+            target_system="test-system",
+        )
+        prediction = await world_model.predict(action, sample_state)
+
+        # 200 - 50 = 150.0 ms
+        assert prediction.predicted_metrics["response_time"] == 150.0
+        # 75 - 15 = 60.0%
+        assert prediction.predicted_metrics["cpu_usage"] == 60.0
+        assert prediction.confidence >= 0.75
+        assert "Simulated counterfactual impact" in prediction.reasoning
+        assert "response_time: -50.00" in prediction.reasoning
+
+    @pytest.mark.asyncio
+    async def test_predict_with_action_parameters(self, world_model):
+        """Test counterfactual prediction when action parameters directly alter state."""
+        state = SystemState(
+            system_id="test-system",
+            timestamp=datetime.now(timezone.utc),
+            metrics={
+                "dimmer": MetricValue("dimmer", 1.0, "ratio"),
+                "response_time": MetricValue("response_time", 300.0, "ms"),
+            },
+            health_status=HealthStatus.HEALTHY,
+        )
+        await world_model.update(state)
+
+        action = AdaptationAction(
+            action_id="act-dimmer",
+            action_type="set_dimmer",
+            target_system="test-system",
+            parameters={"dimmer": 0.6},
+        )
+        prediction = await world_model.predict(action, state)
+
+        assert prediction.predicted_metrics["dimmer"] == 0.6
+        assert prediction.confidence >= 0.75
+        assert "Simulated counterfactual impact" in prediction.reasoning

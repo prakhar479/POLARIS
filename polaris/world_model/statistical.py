@@ -68,6 +68,10 @@ class StatisticalWorldModel(WorldModel):
         # Simple HMM-style regime tracking per system
         self._regimes: List[str] = ["low", "normal", "high"]
         self._regime_probs: Dict[str, Dict[str, float]] = {}
+        # Empirical action effects: system_id -> action_type -> metric_name -> list of observed deltas
+        self._action_effects: Dict[str, Dict[str, Dict[str, list]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(list))
+        )
         self._logger = logger
         self._metrics = metrics
 
@@ -200,13 +204,32 @@ class StatisticalWorldModel(WorldModel):
                 new_probs[name] = new_probs[name] / total
             self._regime_probs[system_id] = new_probs
 
+    def record_action_effect(
+        self, system_id: str, action_type: str, metric_deltas: Dict[str, float]
+    ) -> None:
+        """Record observed metric deltas resulting from an executed action."""
+        for metric_name, delta in metric_deltas.items():
+            try:
+                val = float(delta)
+                history = self._action_effects[system_id][action_type][metric_name]
+                history.append(val)
+                if len(history) > self._window_size:
+                    self._action_effects[system_id][action_type][metric_name] = history[
+                        -self._window_size :
+                    ]
+            except (ValueError, TypeError):
+                continue
+
+        if self._metrics:
+            self._metrics.increment(
+                "polaris.world_model.statistical.action_effects_recorded",
+                tags={"system_id": system_id, "action_type": action_type},
+            )
+
     async def predict(
         self, action: AdaptationAction, current_state: SystemState
     ) -> PredictionResult:
-        """Predict outcome of action.
-
-        Simple prediction: use historical mean as baseline.
-        """
+        """Predict outcome of action using baseline statistics and action-effect dynamics."""
         if self._metrics:
             self._metrics.increment(
                 "polaris.world_model.statistical.predictions",
@@ -234,10 +257,35 @@ class StatisticalWorldModel(WorldModel):
                         continue
             predicted[metric_name] = statistics.mean(history)
 
+        # Check for empirical action effects
+        applied_deltas: Dict[str, float] = {}
+        effects_for_action = self._action_effects.get(system_id, {}).get(action.action_type, {})
+        for metric_name, deltas in effects_for_action.items():
+            if deltas and metric_name in predicted:
+                avg_delta = statistics.mean(deltas)
+                predicted[metric_name] = max(0.0, predicted[metric_name] + avg_delta)
+                applied_deltas[metric_name] = avg_delta
+
+        # Check for direct parameter assignments (e.g. set_dimmer)
+        if action.parameters and isinstance(action.parameters, dict):
+            for p_key, p_val in action.parameters.items():
+                if p_key in current_state.metrics:
+                    try:
+                        p_float = float(p_val)
+                        predicted[p_key] = p_float
+                        curr_mv = current_state.metrics[p_key]
+                        curr_val = float(curr_mv.value) if curr_mv is not None else 0.0
+                        applied_deltas[p_key] = p_float - curr_val
+                    except (TypeError, ValueError):
+                        pass
+
         if self._use_kalman and confidences:
             confidence = sum(confidences) / len(confidences)
         else:
             confidence = 0.5
+
+        if applied_deltas:
+            confidence = min(0.95, max(confidence, 0.75))
 
         if self._metrics:
             self._metrics.histogram(
@@ -253,6 +301,12 @@ class StatisticalWorldModel(WorldModel):
             )
         else:
             reasoning_parts.append("Statistical baseline from historical mean")
+
+        if applied_deltas:
+            delta_str = ", ".join(f"{m}: {d:+.2f}" for m, d in applied_deltas.items())
+            reasoning_parts.append(
+                f"Simulated counterfactual impact for action '{action.action_type}' ({delta_str})"
+            )
 
         # Add regime information if available
         regime_info = self._regime_probs.get(system_id)
