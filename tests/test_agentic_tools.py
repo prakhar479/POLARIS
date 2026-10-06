@@ -95,3 +95,49 @@ async def test_list_supported_actions_requires_contract():
 
     # Assert
     assert out.get("error_code") == "missing_system_contract"
+
+
+def test_tool_to_json_schema_default_and_override():
+    from polaris.tools.base import Tool, ToolDependencies
+
+    class MinimalTool(Tool):
+        @property
+        def name(self) -> str:
+            return "minimal"
+
+        async def execute(self, args, state, context, deps: ToolDependencies):
+            return {"ok": True}
+
+    tool = MinimalTool()
+    schema = tool.to_json_schema()
+    assert schema["type"] == "function"
+    assert schema["function"]["name"] == "minimal"
+    assert schema["function"]["description"] == "Tool: minimal"
+    assert schema["function"]["parameters"]["type"] == "object"
+
+    class CustomSchemaTool(Tool):
+        @property
+        def name(self) -> str:
+            return "custom"
+
+        @property
+        def description(self) -> str:
+            return "Custom description"
+
+        @property
+        def parameters_schema(self):
+            return {
+                "type": "object",
+                "properties": {"count": {"type": "integer"}},
+                "required": ["count"],
+            }
+
+        async def execute(self, args, state, context, deps: ToolDependencies):
+            return {"ok": True}
+
+    custom_tool = CustomSchemaTool()
+    custom_schema = custom_tool.to_json_schema()
+    assert custom_schema["function"]["name"] == "custom"
+    assert custom_schema["function"]["description"] == "Custom description"
+    assert "count" in custom_schema["function"]["parameters"]["properties"]
+    assert custom_schema["function"]["parameters"]["required"] == ["count"]

@@ -318,3 +318,28 @@ def test_main_both_uses_split_dashboard_mode(tmp_path: Path, monkeypatch) -> Non
 
     assert exit_code == 0
     assert captured["coroutine_name"] == "fake_run_with_dashboard_and_interactive"
+
+
+def test_doctor_probe_checks_systems(tmp_path: Path) -> None:
+    """Doctor with probe=True should inspect system network endpoints."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "systems:",
+                "  - id: swim-test",
+                "    connector_type: swim",
+                "    connection:",
+                "      host: 127.0.0.1",
+                "      port: 4242",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = doctor_cli.run_doctor(str(config_file), probe=True)
+    probe_items = [d for d in diagnostics if d.category == "probe"]
+
+    assert len(probe_items) == 1
+    assert "swim-test" in probe_items[0].message

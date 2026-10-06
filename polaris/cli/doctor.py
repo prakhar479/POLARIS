@@ -613,7 +613,99 @@ def _diagnose_tooling(raw_config: Dict[str, Any], diagnostics: List[Diagnostic])
         )
 
 
-def run_doctor(config_path: str) -> List[Diagnostic]:
+def _diagnose_probes(raw_config: Dict[str, Any], diagnostics: List[Diagnostic]) -> None:
+    """Probe network connectivity to configured managed systems."""
+    import socket
+    import urllib.request
+
+    systems = raw_config.get("systems", [])
+    if not isinstance(systems, list):
+        return
+
+    for sys_entry in systems:
+        if not isinstance(sys_entry, dict) or not sys_entry.get("enabled", True):
+            continue
+
+        sys_id = sys_entry.get("id", "unknown")
+        conn_type = str(sys_entry.get("connector_type", "")).lower()
+        connection = sys_entry.get("connection", {})
+        if not isinstance(connection, dict):
+            connection = {}
+
+        if conn_type == "swim":
+            host = connection.get("host", "localhost")
+            port = int(connection.get("port", 4242))
+            try:
+                with socket.create_connection((host, port), timeout=1.0):
+                    diagnostics.append(
+                        Diagnostic(
+                            "OK",
+                            "probe",
+                            f"Managed system '{sys_id}' reachable (TCP {host}:{port})",
+                        )
+                    )
+            except Exception:
+                diagnostics.append(
+                    Diagnostic(
+                        "WARN",
+                        "probe",
+                        f"Managed system '{sys_id}' unreachable at TCP {host}:{port} (is SWIM running?)",
+                    )
+                )
+
+        elif conn_type == "wildfire":
+            host = connection.get("host", "localhost")
+            port = int(connection.get("port", 5000))
+            url = f"http://{host}:{port}/health"
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=1.0) as resp:
+                    if resp.status == 200:
+                        diagnostics.append(
+                            Diagnostic(
+                                "OK", "probe", f"Managed system '{sys_id}' reachable (HTTP {url})"
+                            )
+                        )
+                    else:
+                        diagnostics.append(
+                            Diagnostic(
+                                "WARN",
+                                "probe",
+                                f"Managed system '{sys_id}' returned HTTP {resp.status} on {url}",
+                            )
+                        )
+            except Exception:
+                diagnostics.append(
+                    Diagnostic(
+                        "WARN",
+                        "probe",
+                        f"Managed system '{sys_id}' unreachable at {url} (is wildfire/adapter.py running?)",
+                    )
+                )
+
+        elif conn_type == "suave":
+            host = connection.get("host", "localhost")
+            port = int(connection.get("port", 9090))
+            try:
+                with socket.create_connection((host, port), timeout=1.0):
+                    diagnostics.append(
+                        Diagnostic(
+                            "OK",
+                            "probe",
+                            f"Managed system '{sys_id}' reachable (ROS bridge {host}:{port})",
+                        )
+                    )
+            except Exception:
+                diagnostics.append(
+                    Diagnostic(
+                        "WARN",
+                        "probe",
+                        f"Managed system '{sys_id}' unreachable at {host}:{port} (is ROS bridge running?)",
+                    )
+                )
+
+
+def run_doctor(config_path: str, probe: bool = False) -> List[Diagnostic]:
     """Run all doctor diagnostics and return findings."""
     diagnostics: List[Diagnostic] = []
 
@@ -638,6 +730,8 @@ def run_doctor(config_path: str) -> List[Diagnostic]:
     if isinstance(raw_config, dict):
         _diagnose_dependencies(raw_config, diagnostics)
         _diagnose_tooling(raw_config, diagnostics)
+        if probe:
+            _diagnose_probes(raw_config, diagnostics)
 
     return diagnostics
 
@@ -659,9 +753,15 @@ def run_doctor_cli(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="Treat warnings as failures",
     )
+    parser.add_argument(
+        "--probe",
+        "-p",
+        action="store_true",
+        help="Actively probe network connectivity to configured managed systems",
+    )
 
     args = parser.parse_args(list(argv) if argv is not None else None)
-    diagnostics = run_doctor(args.config)
+    diagnostics = run_doctor(args.config, probe=args.probe)
 
     print("Polaris Doctor")
     print(f"Config: {args.config}")

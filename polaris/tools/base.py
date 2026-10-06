@@ -131,6 +131,30 @@ class Tool(ABC):
         """
         return f"Tool: {self.name}"
 
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        """JSON Schema for the tool's input parameters.
+
+        Override in subclasses to provide strict parameter specifications for
+        native LLM function/tool calling.
+        """
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
+        }
+
+    def to_json_schema(self) -> Dict[str, Any]:
+        """Convert the tool definition into standard OpenAI/JSON Schema function format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema,
+            },
+        }
+
     @abstractmethod
     async def execute(
         self,

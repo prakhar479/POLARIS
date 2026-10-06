@@ -46,16 +46,27 @@ def parse_strict_json(content: str, error_class: type) -> Dict[str, Any]:
     Raises:
         error_class: If content is empty, not valid JSON, or not an object.
     """
+    import re
+
     payload = (content or "").strip()
     if not payload:
         raise error_class("Strategy received empty model response")
+
+    # Strip markdown code block wrappers if present (e.g. ```json ... ``` or ``` ...)
+    if payload.startswith("```"):
+        payload = re.sub(r"^```(?:json)?\s*\n?", "", payload, flags=re.IGNORECASE)
+        payload = re.sub(r"\n?```\s*$", "", payload).strip()
+    elif "```" in payload:
+        block_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```", payload, flags=re.DOTALL | re.IGNORECASE
+        )
+        if block_match:
+            payload = block_match.group(1).strip()
 
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError as exc:
         # Fallback for concatenated JSON objects (JSON-L-like output)
-        import re
-
         objects = []
         # Find individual JSON objects by scanning brackets
         decoder = json.JSONDecoder()
