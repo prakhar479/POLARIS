@@ -19,6 +19,7 @@ from polaris.core.models import (
 from polaris.core.monitoring_loop import MonitoringLoop
 from polaris.core.polaris import Polaris, PolarisConfig
 from polaris.core.registry import ConnectorRegistry
+from polaris.core.topology import SystemTopology
 
 __all__ = [
     # Models
@@ -30,6 +31,7 @@ __all__ = [
     "ExecutionStatus",
     "WorkflowStatus",
     "ActionWorkflow",
+    "SystemTopology",
     # Events
     "EventBus",
     "TelemetryEvent",

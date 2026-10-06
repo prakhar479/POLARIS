@@ -20,6 +20,7 @@ class ConnectorCapabilities:
     actions: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
     slos: Tuple[Any, ...] = ()
+    dependencies: Tuple[str, ...] = ()
 
     @classmethod
     def from_supported_action_types(
@@ -30,6 +31,7 @@ class ConnectorCapabilities:
         actions: Dict[str, Any] | None = None,
         metrics: Dict[str, Any] | None = None,
         slos: Iterable[Any] | None = None,
+        dependencies: Iterable[str] | None = None,
     ) -> "ConnectorCapabilities":
         """Build capabilities from supported action names and optional aliases."""
         deduped: list[str] = []
@@ -61,4 +63,5 @@ class ConnectorCapabilities:
             actions=dict(actions or {}),
             metrics=dict(metrics or {}),
             slos=tuple(slos or ()),
+            dependencies=tuple(dependencies or ()),
         )

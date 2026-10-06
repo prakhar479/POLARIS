@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from polaris.core.models import (
     ActionWorkflow,
@@ -76,3 +76,24 @@ class KnowledgeStore(ABC):
         Default implementation returns an empty list.
         """
         return []
+
+    async def store_topology(self, topology: Any) -> None:
+        """Store system topology graph.
+
+        Default implementation is a no-op for backward compatibility.
+        """
+        return None
+
+    async def get_topology(self) -> Any:
+        """Retrieve system topology graph.
+
+        Default implementation returns None.
+        """
+        return None
+
+    async def get_latest_state(self, system_id: str) -> Optional[SystemState]:
+        """Retrieve most recently stored state snapshot for a system.
+
+        Default implementation returns None.
+        """
+        return None

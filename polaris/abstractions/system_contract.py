@@ -118,6 +118,7 @@ class SystemContract:
     actions: Dict[str, ActionSchema] = field(default_factory=dict)
     metrics: Dict[str, MetricSchema] = field(default_factory=dict)
     slos: Tuple[SLOContract, ...] = ()
+    dependencies: Tuple[str, ...] = ()
 
     @classmethod
     def from_capabilities(
@@ -135,6 +136,11 @@ class SystemContract:
         actions = getattr(capabilities, "actions", {}) or {}
         metrics = getattr(capabilities, "metrics", {}) or {}
         slos = getattr(capabilities, "slos", ()) or ()
+        dependencies = tuple(getattr(capabilities, "dependencies", ()) or ())
+        if not dependencies and metadata and "dependencies" in metadata:
+            raw_deps = metadata["dependencies"]
+            if isinstance(raw_deps, (list, tuple)):
+                dependencies = tuple(raw_deps)
 
         # Fallback populate actions from supported_action_types if actions dict is empty
         if not actions and capabilities.supported_action_types:
@@ -152,6 +158,7 @@ class SystemContract:
             actions=dict(actions),
             metrics=dict(metrics),
             slos=tuple(slos),
+            dependencies=dependencies,
         )
 
     def supported_actions_list(self) -> list[str]:

@@ -379,6 +379,28 @@ class HybridStrategy(AdaptationStrategy):
                     except (TypeError, ValueError):
                         pass
 
+        # Check downstream peer health for cascade failure prevention
+        downstream_stressed = False
+        if context and context.peer_states and getattr(context, "downstream_systems", None):
+            for ds_id in context.downstream_systems:
+                peer_state = context.peer_states.get(ds_id)
+                if peer_state is not None:
+                    if getattr(peer_state, "health_status", None) in (
+                        HealthStatus.WARNING,
+                        HealthStatus.CRITICAL,
+                    ):
+                        downstream_stressed = True
+                        break
+                    for m_name in ("average_utilization", "cpu_usage", "utilization"):
+                        pmv = peer_state.metrics.get(m_name)
+                        if pmv is not None:
+                            try:
+                                if float(pmv.value) > 80.0:
+                                    downstream_stressed = True
+                                    break
+                            except (TypeError, ValueError):
+                                pass
+
         # 1. Performance utility
         if schema and getattr(schema, "performance_impact", "neutral") != "neutral":
             if schema.performance_impact == "positive":
@@ -393,6 +415,26 @@ class HybridStrategy(AdaptationStrategy):
             u_perf = 0.85 if high_load else 0.5
         else:
             u_perf = 0.5
+
+        # Cascade backpressure adjustment: If downstream dependencies are stressed,
+        # penalize capacity-expanding actions and prioritize load-shedding/throttling.
+        if downstream_stressed:
+            is_load_shedding = (
+                "dimmer" in action_type
+                or "throttle" in action_type
+                or (
+                    schema is not None
+                    and schema.cost_impact == "positive"
+                    and schema.performance_impact != "positive"
+                )
+            )
+            is_capacity_expansion = "scale_up" in action_type or (
+                schema is not None and schema.performance_impact == "positive"
+            )
+            if is_capacity_expansion:
+                u_perf = 0.2
+            elif is_load_shedding:
+                u_perf = 0.95
 
         # 2. Cost utility (higher score = lower monetary / server footprint)
         if schema and getattr(schema, "cost_impact", "neutral") != "neutral":

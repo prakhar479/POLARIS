@@ -57,6 +57,7 @@ class SystemConfig(BaseModel):
     connection: Dict[str, Any] = Field(default_factory=dict)
     monitoring: Dict[str, Any] = Field(default_factory=dict)
     action_policy: Optional[SystemActionPolicyConfig] = None
+    dependencies: List[str] = Field(default_factory=list)
 
     @staticmethod
     def _validate_port(port: Any, connector_name: str) -> None:

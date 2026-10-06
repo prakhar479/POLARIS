@@ -89,6 +89,7 @@ class SQLiteKnowledgeStore(KnowledgeStore):
         self._max_states = max_states_per_system
         self._logger = logger
         self._metrics = metrics
+        self._topology: Any = None
         # For :memory: databases we must reuse a single connection because each
         # sqlite3.connect(":memory:") call opens a brand-new, empty database.
         self._shared_conn: Optional[sqlite3.Connection] = None
@@ -405,3 +406,38 @@ class SQLiteKnowledgeStore(KnowledgeStore):
                     )
 
         return results
+
+    async def get_latest_state(self, system_id: str) -> Optional[SystemState]:
+        """Return the most recently stored state for a system."""
+
+        def _query(system_id: str) -> Any:
+            con = self._connect()
+            con.row_factory = sqlite3.Row
+            try:
+                cur = con.execute(
+                    "SELECT * FROM system_states WHERE system_id=? ORDER BY timestamp DESC LIMIT 1",
+                    (system_id,),
+                )
+                return cur.fetchone()
+            finally:
+                self._close(con)
+
+        row = await self._run(_query, system_id)
+        if not row:
+            return None
+        try:
+            return self._deserialise_state(row)
+        except Exception as exc:
+            if self._logger:
+                self._logger.warning(
+                    f"SQLiteKnowledgeStore: failed to deserialise latest state row: {exc}"
+                )
+            return None
+
+    async def store_topology(self, topology: Any) -> None:
+        """Store system topology graph."""
+        self._topology = topology
+
+    async def get_topology(self) -> Any:
+        """Retrieve system topology graph."""
+        return self._topology

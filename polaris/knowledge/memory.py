@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
@@ -31,6 +31,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         self._states: Dict[str, List[SystemState]] = defaultdict(list)
         self._actions: Dict[str, List[Tuple[AdaptationAction, ExecutionResult]]] = defaultdict(list)
         self._workflows: Dict[str, List[ActionWorkflow]] = defaultdict(list)
+        self._topology: Any = None
         self._logger = logger
         self._metrics = metrics
 
@@ -170,3 +171,16 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         """Query action workflows for a system."""
         workflows = self._workflows.get(system_id, [])
         return list(workflows[-max(1, limit) :])
+
+    async def store_topology(self, topology: Any) -> None:
+        """Store system topology graph."""
+        self._topology = topology
+
+    async def get_topology(self) -> Any:
+        """Retrieve system topology graph."""
+        return self._topology
+
+    async def get_latest_state(self, system_id: str) -> Optional[SystemState]:
+        """Retrieve most recently stored state snapshot for a system."""
+        states = self._states.get(system_id, [])
+        return states[-1] if states else None

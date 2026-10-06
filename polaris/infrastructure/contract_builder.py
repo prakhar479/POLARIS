@@ -1,6 +1,6 @@
 """Helpers for building runtime system contracts from connectors."""
 
-from typing import TYPE_CHECKING, Dict, Iterable
+from typing import TYPE_CHECKING, Any, Dict, Iterable
 
 from polaris.abstractions.connector_capabilities import ConnectorCapabilities
 from polaris.abstractions.system_contract import SystemContract
@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 async def build_system_contract(
     connector: "Connector",
     logger: "Logger | None" = None,
+    metadata: Dict[str, Any] | None = None,
+    dependencies: Iterable[str] | None = None,
 ) -> SystemContract:
     """Build a contract for a single connector."""
     system_id = await connector.get_system_id()
@@ -26,10 +28,15 @@ async def build_system_contract(
             f"Connector '{connector_type}' for system '{system_id}' returned empty supported actions"
         )
 
+    merged_metadata = dict(metadata or {})
+    if dependencies is not None and "dependencies" not in merged_metadata:
+        merged_metadata["dependencies"] = list(dependencies)
+
     return SystemContract.from_capabilities(
         system_id=system_id,
         connector_type=connector_type,
         capabilities=capabilities,
+        metadata=merged_metadata,
     )
 
 

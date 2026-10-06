@@ -102,6 +102,14 @@ class Polaris:
         self.registry: ConnectorRegistry = ConnectorRegistry(metrics=registry_metrics)
         self._connectors: List["Connector"] = connectors or []
 
+        # Multi-system topology graph
+        from polaris.core.topology import SystemTopology
+
+        self._topology: SystemTopology = SystemTopology()
+        for sys_cfg in getattr(self.config, "systems", []):
+            for dep_id in getattr(sys_cfg, "dependencies", []):
+                self._topology.add_dependency(sys_cfg.id, dep_id)
+
         # Strategy
         self.strategy: Optional["AdaptationStrategy"] = strategy
         if not self.strategy and hasattr(self.config, "strategy") and self.config.strategy:
@@ -197,8 +205,14 @@ class Polaris:
 
         await self.event_bus.start()
 
+        # Store system topology in knowledge store
+        if self.knowledge_store and hasattr(self.knowledge_store, "store_topology"):
+            await self.knowledge_store.store_topology(self._topology)
+
         # Connect all configured connectors
         from polaris.infrastructure.contract_builder import build_system_contract
+
+        sys_cfg_map = {sc.id: sc for sc in getattr(self.config, "systems", [])}
 
         for connector in self._connectors:
             system_id = await connector.get_system_id()
@@ -230,7 +244,11 @@ class Polaris:
                 continue
 
             try:
-                contract = await build_system_contract(connector, logger=self.logger)
+                sys_cfg = sys_cfg_map.get(system_id)
+                deps = sys_cfg.dependencies if sys_cfg else ()
+                contract = await build_system_contract(
+                    connector, logger=self.logger, dependencies=deps
+                )
                 await self.registry.register(connector, contract=contract)
                 self.logger.info(
                     "Connected to system",
@@ -311,6 +329,7 @@ class Polaris:
                 circuit_breaker_recovery_seconds=getattr(
                     self.config.strategy, "circuit_breaker_recovery_seconds", 60.0
                 ),
+                topology=self._topology,
             )
 
         monitoring = MonitoringLoop(
@@ -471,6 +490,11 @@ class Polaris:
     def monitoring_loop(self) -> Optional[Any]:
         """Return the active monitoring loop instance if running."""
         return self._monitoring_loop
+
+    @property
+    def topology(self) -> Any:
+        """Return the system dependency topology graph."""
+        return self._topology
 
     async def ingest_telemetry(self, state: Any) -> bool:
         """Ingest push-based telemetry into the running framework.

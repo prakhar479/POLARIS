@@ -5,7 +5,7 @@ logic can be tested and reused independently of the monitoring loop.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from polaris.abstractions import (
@@ -46,12 +46,13 @@ class AdaptationPipeline:
         world_model: Optional["WorldModel"],
         event_bus: "EventBus",
         logger: "Logger",
-        metrics: Optional["MetricsCollector"],
         config: "PolarisConfig",
+        metrics: Optional["MetricsCollector"] = None,
         dry_run: bool = False,
         fallback_strategy: Optional["AdaptationStrategy"] = None,
         circuit_breaker_threshold: int = 3,
         circuit_breaker_recovery_seconds: float = 60.0,
+        topology: Optional[Any] = None,
     ) -> None:
         """Initialize the pipeline."""
         self._strategy = strategy
@@ -65,6 +66,7 @@ class AdaptationPipeline:
         self._fallback_strategy = fallback_strategy
         self._circuit_breaker_threshold = max(1, int(circuit_breaker_threshold))
         self._circuit_breaker_recovery_seconds = max(0.001, float(circuit_breaker_recovery_seconds))
+        self._topology = topology
         self._consecutive_failures = 0
         self._circuit_breaker_open_until: Optional[datetime] = None
         self._circuit_breaker_state: str = "CLOSED"
@@ -140,6 +142,50 @@ class AdaptationPipeline:
                 )
                 historical_states = []
 
+        # Resolve topology and peer context
+        topology = self._topology
+        if (
+            topology is None
+            and self._knowledge_store
+            and hasattr(self._knowledge_store, "get_topology")
+        ):
+            try:
+                topology = await self._knowledge_store.get_topology()
+            except Exception as exc:
+                self._logger.debug(
+                    "Failed to retrieve topology from knowledge store",
+                    system_id=state.system_id,
+                    error=str(exc),
+                )
+                topology = None
+
+        from polaris.core.topology import SystemTopology
+
+        if not isinstance(topology, SystemTopology):
+            topology = None
+
+        upstream_systems: List[str] = []
+        downstream_systems: List[str] = []
+        peer_states: Dict[str, SystemState] = {}
+
+        if topology is not None:
+            try:
+                upstream_systems = list(topology.get_dependents(state.system_id))
+                downstream_systems = list(topology.get_dependencies(state.system_id))
+                impact_radius = topology.get_impact_radius(state.system_id)
+                if self._knowledge_store and hasattr(self._knowledge_store, "get_latest_state"):
+                    for peer_id in impact_radius:
+                        if peer_id != state.system_id:
+                            peer_st = await self._knowledge_store.get_latest_state(peer_id)
+                            if peer_st is not None:
+                                peer_states[peer_id] = peer_st
+            except Exception as exc:
+                self._logger.debug(
+                    "Failed to resolve topology context for adaptation",
+                    system_id=state.system_id,
+                    error=str(exc),
+                )
+
         # Build context
         context = AdaptationContext(
             system_id=state.system_id,
@@ -150,6 +196,10 @@ class AdaptationPipeline:
             system_contract=system_contract,
             connector=connector,
             metadata={"connector": connector},
+            topology=topology,
+            peer_states=peer_states,
+            upstream_systems=upstream_systems,
+            downstream_systems=downstream_systems,
         )
 
         # Circuit breaker & Assess
