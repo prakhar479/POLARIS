@@ -139,6 +139,27 @@ class LLMReasoningStrategy(AdaptationStrategy):
                 llm_duration,
                 tags={"system_id": state.system_id},
             )
+            tokens_used = getattr(response, "tokens_used", None)
+            if tokens_used is not None:
+                self.metrics.increment(
+                    "polaris.llm.tokens.total",
+                    value=tokens_used,
+                    tags={"system_id": state.system_id, "strategy": "llm_reasoning"},
+                )
+            prompt_tokens = getattr(response, "prompt_tokens", None)
+            if prompt_tokens is not None:
+                self.metrics.increment(
+                    "polaris.llm.tokens.prompt",
+                    value=prompt_tokens,
+                    tags={"system_id": state.system_id, "strategy": "llm_reasoning"},
+                )
+            completion_tokens = getattr(response, "completion_tokens", None)
+            if completion_tokens is not None:
+                self.metrics.increment(
+                    "polaris.llm.tokens.completion",
+                    value=completion_tokens,
+                    tags={"system_id": state.system_id, "strategy": "llm_reasoning"},
+                )
 
             if self.logger:
                 self.logger.debug(

@@ -72,10 +72,14 @@ def parse_openai_compat_response(response: Any, provider_name: str) -> Dict[str,
 
     usage = getattr(response, "usage", None)
     tokens_used = getattr(usage, "total_tokens", None) if usage is not None else None
+    prompt_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
+    completion_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None
 
     return {
         "content": content,
         "tool_calls": tool_calls,
         "finish_reason": getattr(choice, "finish_reason", None),
         "tokens_used": tokens_used,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
     }

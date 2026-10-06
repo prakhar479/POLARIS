@@ -25,6 +25,8 @@ class LLMResponse:
     tokens_used: Optional[int] = None
     finish_reason: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
     """Normalized tool calls from native function-calling providers.
 
     Each entry is a dict with keys:

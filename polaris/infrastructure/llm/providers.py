@@ -368,11 +368,23 @@ class GoogleGeminiClient(LLMClient):
                 if not text:
                     raise ValueError("Empty response from Gemini API")
 
+            usage = getattr(response, "usage_metadata", None)
+            tokens_used = getattr(usage, "total_token_count", None) if usage is not None else None
+            prompt_tokens = (
+                getattr(usage, "prompt_token_count", None) if usage is not None else None
+            )
+            completion_tokens = (
+                getattr(usage, "candidates_token_count", None) if usage is not None else None
+            )
+
             return LLMResponse(
                 content=text,
                 model=self.model,
+                tokens_used=tokens_used,
                 finish_reason=finish_reason,
                 tool_calls=tool_calls_out,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
 
         except ImportError:
@@ -468,6 +480,8 @@ class OpenAIClient(LLMClient):
                 tokens_used=parsed["tokens_used"],
                 finish_reason=parsed["finish_reason"],
                 tool_calls=parsed["tool_calls"],
+                prompt_tokens=parsed.get("prompt_tokens"),
+                completion_tokens=parsed.get("completion_tokens"),
             )
 
         except ImportError:
@@ -592,6 +606,8 @@ class OpenRouterClient(LLMClient):
                 tokens_used=parsed["tokens_used"],
                 finish_reason=parsed["finish_reason"],
                 tool_calls=parsed["tool_calls"],
+                prompt_tokens=parsed.get("prompt_tokens"),
+                completion_tokens=parsed.get("completion_tokens"),
             )
         except ImportError:
             raise ImportError("openai package not installed. Install with: pip install openai")
@@ -728,11 +744,19 @@ class OllamaClient(LLMClient):
                 if not text:
                     raise ValueError("Empty response from Ollama /api/generate")
 
+                p_tokens = data.get("prompt_eval_count")
+                c_tokens = data.get("eval_count")
+                tot_tokens = None
+                if p_tokens is not None or c_tokens is not None:
+                    tot_tokens = (p_tokens or 0) + (c_tokens or 0)
+
                 return LLMResponse(
                     content=text,
                     model=self.model,
-                    tokens_used=data.get("eval_count"),
+                    tokens_used=tot_tokens,
                     finish_reason="stop",
+                    prompt_tokens=p_tokens,
+                    completion_tokens=c_tokens,
                 )
 
             # Default: OpenAI-compatible endpoint
@@ -770,6 +794,8 @@ class OllamaClient(LLMClient):
                 tokens_used=parsed["tokens_used"],
                 finish_reason=parsed["finish_reason"],
                 tool_calls=parsed["tool_calls"],
+                prompt_tokens=parsed.get("prompt_tokens"),
+                completion_tokens=parsed.get("completion_tokens"),
             )
 
         except ImportError:
@@ -871,6 +897,8 @@ class GroqClient(LLMClient):
                 tokens_used=parsed["tokens_used"],
                 finish_reason=parsed["finish_reason"],
                 tool_calls=parsed["tool_calls"],
+                prompt_tokens=parsed.get("prompt_tokens"),
+                completion_tokens=parsed.get("completion_tokens"),
             )
 
         except ImportError:
