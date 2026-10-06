@@ -166,6 +166,7 @@ class Polaris:
         # Internal state
         self._running: bool = False
         self._tasks: List[asyncio.Task[Any]] = []
+        self._monitoring_loop: Optional[Any] = None
 
         # Log summary
         self.logger.info(
@@ -325,6 +326,7 @@ class Polaris:
             config=self.config,
         )
 
+        self._monitoring_loop = monitoring
         self._tasks.append(asyncio.create_task(monitoring.run()))
 
         if self._metrics_export_config.get("enabled", False):
@@ -464,6 +466,39 @@ class Polaris:
     def get_metrics_summary(self) -> Dict[str, Any]:
         """Return the current metrics summary dict."""
         return self.metrics.get_summary()
+
+    @property
+    def monitoring_loop(self) -> Optional[Any]:
+        """Return the active monitoring loop instance if running."""
+        return self._monitoring_loop
+
+    async def ingest_telemetry(self, state: Any) -> bool:
+        """Ingest push-based telemetry into the running framework.
+
+        Allows external systems (webhooks, OpenTelemetry receivers, streaming pipelines)
+        to submit telemetry asynchronously, triggering instant evaluation.
+
+        Args:
+            state: Pushed SystemState snapshot.
+
+        Returns:
+            True if queued or processed, False otherwise.
+        """
+        if self._monitoring_loop is not None:
+            return bool(await self._monitoring_loop.ingest_telemetry(state))
+
+        # Fallback if loop has not started: persist state and update world model
+        if self.knowledge_store:
+            try:
+                await self.knowledge_store.store_state(state)
+            except Exception:
+                pass
+        if self.world_model:
+            try:
+                await self.world_model.update(state)
+            except Exception:
+                pass
+        return True
 
     # ──────────────────────────────────────────────────────────────────────
     # Async context manager

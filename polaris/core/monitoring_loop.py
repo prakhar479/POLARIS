@@ -54,9 +54,43 @@ class MonitoringLoop:
         self._interval = interval_seconds
         self._config = config
         self._running = False
+        self._telemetry_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=1000)
         self._last_collection_at: Dict[str, datetime] = {}
         self._latest_system_health: Dict[str, Any] = {}
         self._default_connector_timeout_seconds = 30.0
+
+    def stop(self) -> None:
+        """Stop the monitoring loop."""
+        self._running = False
+
+    async def ingest_telemetry(self, state: Any) -> bool:
+        """Ingest pushed telemetry state directly, bypassing polling wait.
+
+        Args:
+            state: Pushed SystemState snapshot.
+
+        Returns:
+            True if queued successfully, False if queue is full.
+        """
+        try:
+            self._telemetry_queue.put_nowait(state)
+            self._emit_tagged(
+                "polaris.telemetry.pushed_enqueued",
+                state.system_id,
+                component="monitoring_loop",
+            )
+            return True
+        except asyncio.QueueFull:
+            self._logger.warning(
+                "Push telemetry queue is full, dropping state",
+                system_id=state.system_id,
+            )
+            self._emit_tagged(
+                "polaris.telemetry.pushed_dropped",
+                state.system_id,
+                component="monitoring_loop",
+            )
+            return False
 
     async def run(self) -> None:
         """Run the monitoring loop until cancelled."""
@@ -76,6 +110,19 @@ class MonitoringLoop:
                     self._config = new_config
 
                 loop_start = datetime.now(timezone.utc)
+                pushed_processed = 0
+                pushed_adaptations = 0
+
+                # Process any queued push-telemetry states immediately
+                while not self._telemetry_queue.empty():
+                    try:
+                        pushed_state = self._telemetry_queue.get_nowait()
+                        pushed_res = await self._process_pushed_state(pushed_state)
+                        pushed_processed += pushed_res["systems_processed"]
+                        pushed_adaptations += pushed_res["adaptations_executed"]
+                        self._telemetry_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
 
                 connectors = list(self._registry.all())
                 due_connectors: List[tuple[str, "Connector"]] = []
@@ -106,8 +153,8 @@ class MonitoringLoop:
                     return_exceptions=True,
                 )
 
-                systems_processed = 0
-                adaptations_executed = 0
+                systems_processed = pushed_processed
+                adaptations_executed = pushed_adaptations
                 for r in results:
                     if isinstance(r, dict):
                         systems_processed += r["systems_processed"]
@@ -128,7 +175,26 @@ class MonitoringLoop:
                     if sys_int < cadence_target:
                         cadence_target = sys_int
                 sleep_for = max(0.0, cadence_target - loop_duration)
-                await asyncio.sleep(sleep_for)
+
+                # Responsive wait: sleep for sleep_for or wake immediately on pushed telemetry
+                if sleep_for > 0:
+                    sleep_task = asyncio.create_task(asyncio.sleep(sleep_for))
+                    queue_task = asyncio.create_task(self._telemetry_queue.get())
+                    done, pending = await asyncio.wait(
+                        [sleep_task, queue_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for p in pending:
+                        p.cancel()
+                    if queue_task in done:
+                        try:
+                            pushed_state = queue_task.result()
+                            await self._process_pushed_state(pushed_state)
+                            self._telemetry_queue.task_done()
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                else:
+                    await asyncio.sleep(0.0)
 
             except asyncio.CancelledError:
                 break
@@ -230,6 +296,92 @@ class MonitoringLoop:
                 "polaris.monitoring.errors",
                 system_id,
                 component="monitoring_loop",
+            )
+
+        return {
+            "systems_processed": systems_processed,
+            "adaptations_executed": adaptations_executed,
+        }
+
+    async def _process_pushed_state(self, state: Any) -> Dict[str, int]:
+        """Run adaptation pipeline for an asynchronously pushed telemetry state."""
+        from polaris.core.events import TelemetryEvent
+
+        systems_processed = 1
+        adaptations_executed = 0
+        system_id = getattr(state, "system_id", "unknown")
+        self._latest_system_health[system_id] = getattr(state, "health_status", None)
+        self._last_collection_at[system_id] = datetime.now(timezone.utc)
+
+        self._emit_tagged(
+            "polaris.telemetry.pushed_processed",
+            system_id,
+            component="monitoring_loop",
+        )
+
+        if self._knowledge_store:
+            try:
+                await self._knowledge_store.store_state(state)
+                self._emit_tagged(
+                    "polaris.knowledge.state_stored",
+                    system_id,
+                    component="knowledge_store",
+                )
+            except Exception as e:
+                self._logger.debug("Failed to store pushed state", error=str(e))
+
+        if self._world_model:
+            try:
+                await self._world_model.update(state)
+                self._emit_tagged(
+                    "polaris.world_model.updated",
+                    system_id,
+                    component="world_model",
+                )
+            except Exception as e:
+                self._logger.debug("Failed to update world model with pushed state", error=str(e))
+
+        try:
+            await self._event_bus.publish(
+                TelemetryEvent(
+                    system_id=system_id,
+                    state=state,
+                    timestamp=getattr(state, "timestamp", datetime.now(timezone.utc)),
+                )
+            )
+            self._emit_tagged(
+                "polaris.events.telemetry_published",
+                system_id,
+                component="event_bus",
+            )
+        except Exception as e:
+            self._logger.debug("Failed to publish pushed telemetry event", error=str(e))
+
+        connector = self._registry.get(system_id)
+        if connector is not None:
+            system_contract = self._registry.get_contract(system_id)
+            operation_timeout_seconds = self._resolve_system_connector_timeout(system_id)
+            try:
+                executed = await asyncio.wait_for(
+                    self._pipeline.run(
+                        state,
+                        connector,
+                        system_contract=system_contract,
+                    ),
+                    timeout=operation_timeout_seconds,
+                )
+                if executed:
+                    adaptations_executed = 1
+            except Exception as exc:
+                self._logger.error(
+                    "Error executing adaptation on pushed telemetry",
+                    system_id=system_id,
+                    error=str(exc),
+                )
+        else:
+            self._logger.debug(
+                "No registered connector found for pushed telemetry; adaptation skipped",
+                system_id=system_id,
             )
 
         return {
