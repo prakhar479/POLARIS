@@ -15,13 +15,25 @@ from polaris.abstractions.meta_learner import (
 )
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.abstractions.strategy import AdaptationContext, AdaptationStrategy, ParameterSpec
-from polaris.abstractions.system_contract import SystemContract
+from polaris.abstractions.system_contract import (
+    ActionSchema,
+    MetricDirection,
+    MetricSchema,
+    MetricType,
+    SLOContract,
+    SystemContract,
+)
 from polaris.abstractions.world_model import PredictionResult, WorldModel
 
 __all__ = [
     "Connector",
     "ConnectorCapabilities",
     "SystemContract",
+    "ActionSchema",
+    "MetricSchema",
+    "MetricType",
+    "MetricDirection",
+    "SLOContract",
     "normalize_action_token",
     "AdaptationStrategy",
     "AdaptationContext",
