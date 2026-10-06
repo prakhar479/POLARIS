@@ -237,7 +237,7 @@ class StatisticalWorldModel(WorldModel):
             )
 
         predicted = {}
-        system_id = action.target_system
+        system_id = action.target_system or current_state.system_id
         confidences: List[float] = []
 
         for metric_name in current_state.metrics.keys():

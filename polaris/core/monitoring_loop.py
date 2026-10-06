@@ -79,10 +79,12 @@ class MonitoringLoop:
 
                 connectors = list(self._registry.all())
                 due_connectors: List[tuple[str, "Connector"]] = []
+                all_system_ids: List[str] = []
                 systems_skipped_interval = 0
 
                 for connector in connectors:
                     system_id = await connector.get_system_id()
+                    all_system_ids.append(system_id)
                     if self._is_due_for_collection(system_id, loop_start):
                         due_connectors.append((system_id, connector))
                         # Record collection attempt time to keep cadence stable even on failures.
@@ -121,8 +123,8 @@ class MonitoringLoop:
 
                 loop_duration = (datetime.now(timezone.utc) - loop_start).total_seconds()
                 cadence_target = float(self._interval)
-                for system_id, _ in due_connectors:
-                    sys_int = self._resolve_system_collection_interval(system_id)
+                for sys_id in all_system_ids:
+                    sys_int = self._resolve_system_collection_interval(sys_id)
                     if sys_int < cadence_target:
                         cadence_target = sys_int
                 sleep_for = max(0.0, cadence_target - loop_duration)
