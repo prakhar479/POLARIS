@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +19,20 @@ from polaris.abstractions.strategy import AdaptationStrategy, ParameterSpec
 from polaris.infrastructure.constants import DEFAULT_MAX_TOKENS
 from polaris.infrastructure.llm import LLMClient, LLMMessage
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
+
+
+@dataclass
+class EpisodicReflection:
+    """Record of a parameter tuning episode and its observed impact."""
+
+    episode_id: str
+    system_id: str
+    timestamp: datetime
+    applied_parameters: Dict[str, Any]
+    pre_success_rate: float
+    rationale: str = ""
+    post_success_rate: Optional[float] = None
+    outcome_evaluation: Optional[str] = None  # "improved", "degraded", "neutral"
 
 
 class LLMMetaLearner(MetaLearner):
@@ -62,6 +76,7 @@ class LLMMetaLearner(MetaLearner):
         self.analysis_system_prompt = analysis_system_prompt
         self.optimization_system_prompt = optimization_system_prompt
         self._per_system_prompts = per_system_prompts or {}
+        self._reflections: List[EpisodicReflection] = []
 
     async def analyze_performance(
         self, system_id: str, time_window_hours: float = 24.0
@@ -329,6 +344,8 @@ class LLMMetaLearner(MetaLearner):
             return []
 
         results: List[AppliedUpdate] = []
+        applied_params: Dict[str, Any] = {}
+        rationales: List[str] = []
         for proposal in proposals:
             if proposal.status != ProposalStatus.APPROVED:
                 continue
@@ -337,6 +354,10 @@ class LLMMetaLearner(MetaLearner):
                     proposal.parameter_path, proposal.proposed_value
                 )
                 results.append(AppliedUpdate(proposal_id=proposal.proposal_id, success=success))
+                if success:
+                    applied_params[proposal.parameter_path] = proposal.proposed_value
+                    if proposal.rationale:
+                        rationales.append(f"{proposal.parameter_path}: {proposal.rationale}")
                 self.logger.info(
                     "Meta-learner applied parameter update",
                     parameter=proposal.parameter_path,
@@ -356,7 +377,80 @@ class LLMMetaLearner(MetaLearner):
                         error_message=str(e),
                     )
                 )
+
+        if applied_params:
+            strat_sys_id = getattr(strategy, "system_id", "default")
+            pre_rate = 0.0
+            try:
+                metrics = await strategy.get_performance_metrics()
+                if isinstance(metrics, dict) and "success_rate" in metrics:
+                    pre_rate = float(metrics["success_rate"])
+            except Exception:
+                pass
+            self.record_reflection(
+                EpisodicReflection(
+                    episode_id=str(uuid.uuid4()),
+                    system_id=str(strat_sys_id),
+                    timestamp=datetime.now(timezone.utc),
+                    applied_parameters=applied_params,
+                    pre_success_rate=pre_rate,
+                    rationale="; ".join(rationales),
+                )
+            )
+
         return results
+
+    def record_reflection(self, reflection: EpisodicReflection) -> None:
+        """Store an episodic reflection for cross-iteration memory."""
+        self._reflections.append(reflection)
+        if len(self._reflections) > 50:
+            self._reflections = self._reflections[-50:]
+
+    def evaluate_episode(
+        self,
+        episode_id: str,
+        post_success_rate: float,
+        outcome_evaluation: Optional[str] = None,
+    ) -> bool:
+        """Record the observed outcome of a past tuning episode."""
+        for ref in self._reflections:
+            if ref.episode_id == episode_id:
+                ref.post_success_rate = post_success_rate
+                if outcome_evaluation:
+                    ref.outcome_evaluation = outcome_evaluation
+                else:
+                    diff = post_success_rate - ref.pre_success_rate
+                    if diff > 0.05:
+                        ref.outcome_evaluation = "improved"
+                    elif diff < -0.05:
+                        ref.outcome_evaluation = "degraded"
+                    else:
+                        ref.outcome_evaluation = "neutral"
+                return True
+        return False
+
+    def _format_reflections(self, system_id: Optional[str] = None) -> str:
+        """Format recent reflections for inclusion in optimization prompt."""
+        relevant = [
+            r for r in self._reflections if not system_id or r.system_id in (system_id, "default")
+        ][-5:]
+        if not relevant:
+            return "No previous parameter tuning episodes recorded."
+
+        lines = []
+        for r in relevant:
+            params_str = ", ".join(f"{k}={v}" for k, v in r.applied_parameters.items())
+            outcome_str = (
+                f"Outcome: {r.outcome_evaluation}" if r.outcome_evaluation else "Outcome: pending"
+            )
+            if r.post_success_rate is not None:
+                outcome_str += f" (post-success rate: {r.post_success_rate:.1%})"
+            lines.append(
+                f"- Episode [{r.timestamp.strftime('%Y-%m-%d %H:%M:%S')}]: Parameters: {params_str}. "
+                f"Pre-success rate: {r.pre_success_rate:.1%}. {outcome_str}. "
+                f"Rationale: {r.rationale or 'N/A'}"
+            )
+        return "\n".join(lines)
 
     def _get_system_prompt(self, system_id: Optional[str] = None) -> str:
         """System prompt for performance analysis, with optional system-specific overrides."""
@@ -517,6 +611,7 @@ Provide a comprehensive analysis and recommendations for optimization.
         compact_metrics = self._compact_strategy_metrics(
             analysis.insights.get("strategy_metrics", {})
         )
+        reflections_desc = self._format_reflections(analysis.system_id)
 
         return f"""Analysis:
 **Success Rate:** {analysis.success_rate: .1%}
@@ -524,6 +619,9 @@ Provide a comprehensive analysis and recommendations for optimization.
 **Recommendations:** {', '.join(analysis.recommendations) if analysis.recommendations else 'None'}
 **Insights:** {analysis.insights.get('llm_analysis', 'None')}
 **Strategy Metrics:** {compact_metrics}
+
+**Historical Parameter Tuning Reflections:**
+{reflections_desc}
 
 **Tunable Parameters:**
 {params_desc}

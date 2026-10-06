@@ -607,5 +607,149 @@ class TestLLMMetaLearnerIntegration:
         assert any("polaris.meta_learning.llm.proposals_requests" in key for key in metric_keys)
 
 
+def test_episodic_reflection_recording_and_formatting(mock_llm_client, mock_knowledge_store):
+    """Test recording episodic reflections and formatting for prompt injection."""
+    from datetime import datetime, timezone
+
+    from polaris.meta_learner.llm_based import EpisodicReflection, LLMMetaLearner
+
+    logger = MockLogger()
+    learner = LLMMetaLearner(mock_llm_client, mock_knowledge_store, logger)
+
+    assert (
+        learner._format_reflections("test-sys") == "No previous parameter tuning episodes recorded."
+    )
+
+    ref = EpisodicReflection(
+        episode_id="ep-1",
+        system_id="test-sys",
+        timestamp=datetime.now(timezone.utc),
+        applied_parameters={"scale_up_threshold": 0.85},
+        pre_success_rate=0.72,
+        rationale="Prevent premature scaling under bursty loads",
+        outcome_evaluation="improved",
+        post_success_rate=0.91,
+    )
+    learner.record_reflection(ref)
+
+    formatted = learner._format_reflections("test-sys")
+    assert "scale_up_threshold=0.85" in formatted
+    assert "Pre-success rate: 72.0%" in formatted
+    assert "Outcome: improved" in formatted
+    assert "post-success rate: 91.0%" in formatted
+    assert "Prevent premature scaling" in formatted
+
+
+def test_episodic_reflection_evaluate_outcome(mock_llm_client, mock_knowledge_store):
+    """Test evaluating outcome of a previous tuning episode."""
+    from datetime import datetime, timezone
+
+    from polaris.meta_learner.llm_based import EpisodicReflection, LLMMetaLearner
+
+    logger = MockLogger()
+    learner = LLMMetaLearner(mock_llm_client, mock_knowledge_store, logger)
+
+    ref = EpisodicReflection(
+        episode_id="ep-42",
+        system_id="test-sys",
+        timestamp=datetime.now(timezone.utc),
+        applied_parameters={"cooldown_seconds": 30},
+        pre_success_rate=0.80,
+    )
+    learner.record_reflection(ref)
+
+    # Evaluate improvement: pre=80%, post=92% -> diff > 5% -> improved
+    evaluated = learner.evaluate_episode("ep-42", post_success_rate=0.92)
+    assert evaluated is True
+    assert ref.outcome_evaluation == "improved"
+    assert ref.post_success_rate == 0.92
+
+    # Nonexistent episode returns False
+    assert learner.evaluate_episode("ep-nonexistent", post_success_rate=0.5) is False
+
+
+def test_episodic_reflections_injected_into_optimization_prompt(
+    mock_llm_client, mock_knowledge_store
+):
+    """Verify reflections are injected into the optimization prompt."""
+    from datetime import datetime, timezone
+
+    from polaris.meta_learner.llm_based import (
+        EpisodicReflection,
+        LLMMetaLearner,
+        PerformanceAnalysis,
+    )
+
+    logger = MockLogger()
+    learner = LLMMetaLearner(mock_llm_client, mock_knowledge_store, logger)
+
+    learner.record_reflection(
+        EpisodicReflection(
+            episode_id="ep-10",
+            system_id="web-sys",
+            timestamp=datetime.now(timezone.utc),
+            applied_parameters={"dimmer_step": 0.1},
+            pre_success_rate=0.60,
+            outcome_evaluation="improved",
+            post_success_rate=0.85,
+        )
+    )
+
+    analysis = PerformanceAnalysis(
+        system_id="web-sys",
+        time_window_hours=1.0,
+        success_rate=0.85,
+        insights={},
+        recommendations=[],
+    )
+    prompt = learner._build_optimization_prompt(analysis, {})
+    assert "**Historical Parameter Tuning Reflections:**" in prompt
+    assert "dimmer_step=0.1" in prompt
+    assert "Outcome: improved" in prompt
+
+
+@pytest.mark.asyncio
+async def test_episodic_reflection_created_on_apply_updates(mock_llm_client, mock_knowledge_store):
+    """Verify that apply_updates records an EpisodicReflection capturing strategy metrics."""
+    from unittest.mock import AsyncMock
+
+    from polaris.meta_learner.llm_based import (
+        LLMMetaLearner,
+        ParameterProposal,
+        ProposalStatus,
+    )
+
+    logger = MockLogger()
+    learner = LLMMetaLearner(mock_llm_client, mock_knowledge_store, logger)
+    learner.auto_apply = True
+
+    strat = MockStrategy()
+    strat.system_id = "test-sys"
+    strat.get_performance_metrics = AsyncMock(return_value={"success_rate": 0.82})
+    strat.update_parameter = AsyncMock(return_value=True)
+
+    proposal = ParameterProposal(
+        proposal_id="prop-1",
+        parameter_path="scale_threshold",
+        current_value=0.5,
+        proposed_value=0.7,
+        rationale="Optimize throughput",
+        confidence=0.9,
+        expected_impact="High",
+        status=ProposalStatus.APPROVED,
+    )
+
+    results = await learner.apply_proposals(strat, [proposal])
+    assert len(results) == 1
+    assert results[0].success is True
+    assert len(learner._reflections) == 1
+
+    ref = learner._reflections[0]
+    assert ref.system_id == "test-sys"
+    assert ref.applied_parameters == {"scale_threshold": 0.7}
+    assert ref.pre_success_rate == 0.82
+    assert "Optimize throughput" in ref.rationale
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
