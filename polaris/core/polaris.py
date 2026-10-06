@@ -11,7 +11,7 @@ The ``Polaris`` class is a thin orchestrator that wires together focused sub-mod
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from polaris.core.component_builder import ComponentBuilder
 from polaris.core.events import EventBus
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         Logger,
         MetaLearner,
         MetricsCollector,
+        SystemContract,
         WorldModel,
     )
 
@@ -522,6 +523,140 @@ class Polaris:
                 await self.world_model.update(state)
             except Exception:
                 pass
+        return True
+
+    async def register_system(
+        self,
+        connector: "Connector",
+        contract: Optional["SystemContract"] = None,
+        dependencies: Optional[Sequence[str]] = None,
+    ) -> bool:
+        """Dynamically register a new managed system connector at runtime.
+
+        Connects the connector if needed, resolves or synthesizes its SystemContract,
+        registers it in the connector registry, updates the topology graph, and
+        synchronizes the updated topology with the knowledge store.
+
+        Args:
+            connector: Managed system connector instance.
+            contract: Optional explicit SystemContract. If omitted, built via contract builder.
+            dependencies: Optional sequence of downstream system IDs this system depends on.
+
+        Returns:
+            True if registration succeeded, False otherwise.
+        """
+        from polaris.infrastructure.contract_builder import build_system_contract
+
+        system_id = await connector.get_system_id()
+        connector_type = type(connector).__name__
+
+        # Connect if not connected
+        try:
+            connected = await connector.connect()
+        except Exception as exc:
+            self.logger.error(
+                "Dynamic connector connection raised exception",
+                system_id=system_id,
+                connector_type=connector_type,
+                error=str(exc),
+            )
+            connected = False
+
+        if not connected:
+            self.logger.warning(
+                "Failed to connect dynamic connector",
+                system_id=system_id,
+                connector_type=connector_type,
+            )
+            return False
+
+        # Build contract if not provided
+        if contract is None:
+            try:
+                contract = await build_system_contract(
+                    connector, logger=self.logger, dependencies=dependencies or ()
+                )
+            except Exception as exc:
+                self.logger.error(
+                    "Failed to synthesize contract for dynamic connector",
+                    system_id=system_id,
+                    error=str(exc),
+                )
+                return False
+
+        await self.registry.register(connector, contract=contract)
+
+        # Update topology
+        self._topology.add_node(system_id, dependencies=dependencies)
+        if self.knowledge_store and hasattr(self.knowledge_store, "store_topology"):
+            try:
+                await self.knowledge_store.store_topology(self._topology)
+            except Exception as exc:
+                self.logger.debug(
+                    "Failed to persist updated topology after dynamic registration",
+                    error=str(exc),
+                )
+
+        self.logger.info(
+            "Dynamically registered system connector",
+            system_id=system_id,
+            connector_type=connector_type,
+            dependencies=list(dependencies or []),
+        )
+        if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
+            self.metrics.increment(
+                "polaris.core.dynamic_system_registered",
+                tags={"system_id": system_id, "connector_type": connector_type},
+            )
+        return True
+
+    async def unregister_system(
+        self,
+        system_id: str,
+        disconnect: bool = True,
+    ) -> bool:
+        """Dynamically unregister a managed system connector at runtime.
+
+        Removes the connector and contract from the registry, updates the topology graph,
+        and optionally disconnects the connector.
+
+        Args:
+            system_id: ID of the system to unregister.
+            disconnect: If True, calls connector.disconnect().
+
+        Returns:
+            True if system was found and removed, False otherwise.
+        """
+        connector = self.registry.unregister(system_id)
+        if connector is None:
+            return False
+
+        if disconnect:
+            try:
+                await connector.disconnect()
+            except Exception as exc:
+                self.logger.warning(
+                    "Error disconnecting connector during dynamic unregistration",
+                    system_id=system_id,
+                    error=str(exc),
+                )
+
+        self._topology.remove_node(system_id)
+        if self.knowledge_store and hasattr(self.knowledge_store, "store_topology"):
+            try:
+                await self.knowledge_store.store_topology(self._topology)
+            except Exception as exc:
+                self.logger.debug(
+                    "Failed to persist updated topology after unregistration",
+                    error=str(exc),
+                )
+
+        self.logger.info("Dynamically unregistered system connector", system_id=system_id)
+        if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
+            self.metrics.increment(
+                "polaris.core.dynamic_system_unregistered",
+                tags={"system_id": system_id},
+            )
         return True
 
     # ──────────────────────────────────────────────────────────────────────

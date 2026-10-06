@@ -38,6 +38,26 @@ class ConnectorRegistry:
             )
             self._metrics.gauge("polaris.registry.total_connectors", len(self._connectors))
 
+    def unregister(self, system_id: str) -> Optional["Connector"]:
+        """Unregister a connector and its contract by system ID.
+
+        Args:
+            system_id: System ID to unregister.
+
+        Returns:
+            Removed connector if found, None otherwise.
+        """
+        connector = self._connectors.pop(system_id, None)
+        self._contracts.pop(system_id, None)
+
+        if self._metrics and connector is not None:
+            self._metrics.increment(
+                "polaris.registry.connector_unregistered", tags={"system_id": system_id}
+            )
+            self._metrics.gauge("polaris.registry.total_connectors", len(self._connectors))
+
+        return connector
+
     def get(self, system_id: str) -> Optional["Connector"]:
         """Get a connector by system ID.
 

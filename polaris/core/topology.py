@@ -6,7 +6,7 @@ Used for cascade failure prevention, cross-system co-adaptation, and blast radiu
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Sequence, Set
 
 
 @dataclass
@@ -19,6 +19,36 @@ class SystemTopology:
     """
 
     dependencies: Dict[str, List[str]] = field(default_factory=dict)
+
+    def add_node(self, system_id: str, dependencies: Optional[Sequence[str]] = None) -> None:
+        """Add a system node and optional dependencies to the topology graph.
+
+        Args:
+            system_id: System ID to register in topology.
+            dependencies: Optional list of downstream system IDs it depends on.
+        """
+        sid = system_id.strip()
+        if not sid:
+            return
+        if sid not in self.dependencies:
+            self.dependencies[sid] = []
+        if dependencies:
+            for dep in dependencies:
+                self.add_dependency(sid, dep)
+
+    def remove_node(self, system_id: str) -> None:
+        """Remove a system node and all its incoming and outgoing dependencies.
+
+        Args:
+            system_id: System ID to remove.
+        """
+        sid = system_id.strip()
+        if not sid:
+            return
+        self.dependencies.pop(sid, None)
+        for targets in self.dependencies.values():
+            if sid in targets:
+                targets.remove(sid)
 
     def add_dependency(self, source_system: str, target_system: str) -> None:
         """Add a directed dependency: source_system depends on target_system.
