@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 import pytest
 
 from polaris.core.models import (
+    ActionWorkflow,
     AdaptationAction,
     ExecutionResult,
     ExecutionStatus,
     HealthStatus,
     MetricValue,
     SystemState,
+    WorkflowStatus,
 )
 
 
@@ -180,3 +182,47 @@ class TestEnums:
         assert ExecutionStatus.FAILED.value == "failed"
         assert ExecutionStatus.PARTIAL.value == "partial"
         assert ExecutionStatus.TIMEOUT.value == "timeout"
+
+    def test_workflow_status_values(self):
+        """Test WorkflowStatus enum values."""
+        assert WorkflowStatus.PENDING.value == "pending"
+        assert WorkflowStatus.VALIDATING.value == "validating"
+        assert WorkflowStatus.EXECUTING.value == "executing"
+        assert WorkflowStatus.VERIFYING.value == "verifying"
+        assert WorkflowStatus.COMPLETED.value == "completed"
+        assert WorkflowStatus.FAILED.value == "failed"
+        assert WorkflowStatus.ROLLING_BACK.value == "rolling_back"
+        assert WorkflowStatus.ROLLED_BACK.value == "rolled_back"
+
+
+class TestActionWorkflow:
+    """Test ActionWorkflow model."""
+
+    def test_action_workflow_creation(self):
+        action = AdaptationAction(
+            action_id="act-test",
+            action_type="scale_up",
+            target_system="sys-test",
+            verification_window_seconds=10.0,
+        )
+        wf = ActionWorkflow(action=action)
+
+        assert wf.workflow_id != ""
+        assert wf.status == WorkflowStatus.PENDING
+        assert wf.verification_window_seconds == 10.0
+        assert wf.execution_result is None
+        assert wf.rollback_result is None
+
+    def test_action_workflow_transition(self):
+        action = AdaptationAction(
+            action_id="act-test",
+            action_type="scale_up",
+            target_system="sys-test",
+        )
+        wf = ActionWorkflow(action=action)
+        wf.transition_to(WorkflowStatus.EXECUTING)
+        assert wf.status == WorkflowStatus.EXECUTING
+
+        wf.transition_to(WorkflowStatus.ROLLED_BACK, error="Rollback applied")
+        assert wf.status == WorkflowStatus.ROLLED_BACK
+        assert wf.error_message == "Rollback applied"

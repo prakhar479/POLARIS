@@ -6,7 +6,12 @@ from typing import Dict, List, Optional, Tuple
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
-from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.core.models import (
+    ActionWorkflow,
+    AdaptationAction,
+    ExecutionResult,
+    SystemState,
+)
 
 
 class InMemoryKnowledgeStore(KnowledgeStore):
@@ -25,6 +30,7 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         self.max_states = max_states_per_system
         self._states: Dict[str, List[SystemState]] = defaultdict(list)
         self._actions: Dict[str, List[Tuple[AdaptationAction, ExecutionResult]]] = defaultdict(list)
+        self._workflows: Dict[str, List[ActionWorkflow]] = defaultdict(list)
         self._logger = logger
         self._metrics = metrics
 
@@ -145,3 +151,22 @@ class InMemoryKnowledgeStore(KnowledgeStore):
             )
 
         return results
+
+    async def store_workflow(self, workflow: ActionWorkflow) -> None:
+        """Store action workflow lifecycle."""
+        system_id = workflow.action.target_system
+        self._workflows[system_id].append(workflow)
+
+        if len(self._workflows[system_id]) > self.max_states:
+            self._workflows[system_id] = self._workflows[system_id][-self.max_states :]
+
+        if self._metrics:
+            self._metrics.increment(
+                "polaris.knowledge.inmemory.workflows_stored",
+                tags={"system_id": system_id, "status": workflow.status.value},
+            )
+
+    async def query_workflows(self, system_id: str, limit: int = 100) -> List[ActionWorkflow]:
+        """Query action workflows for a system."""
+        workflows = self._workflows.get(system_id, [])
+        return list(workflows[-max(1, limit) :])

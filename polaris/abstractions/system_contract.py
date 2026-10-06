@@ -34,6 +34,7 @@ class ActionSchema:
     required_parameters: Tuple[str, ...] = ()
     rollback_action: Optional[str] = None
     expected_duration_seconds: float = 0.0
+    default_verification_window_seconds: float = 0.0
     performance_impact: str = "neutral"  # "positive", "negative", "neutral"
     cost_impact: str = "neutral"  # "positive" (saves cost), "negative" (increases cost), "neutral"
     qos_impact: str = "neutral"  # "positive", "negative", "neutral"
@@ -192,3 +193,16 @@ class SystemContract:
             return schema.validate_parameters(params)
 
         return True, None
+
+    def get_violated_slos(self, state: Any) -> list[SLOContract]:
+        """Return list of violated SLOs for the given system state."""
+        violated: list[SLOContract] = []
+        metrics = getattr(state, "metrics", {}) or {}
+        for slo in self.slos:
+            if slo.metric_name in metrics:
+                mv = metrics[slo.metric_name]
+                raw_val = getattr(mv, "value", None)
+                if isinstance(raw_val, (int, float)):
+                    if slo.is_violated(float(raw_val)):
+                        violated.append(slo)
+        return violated

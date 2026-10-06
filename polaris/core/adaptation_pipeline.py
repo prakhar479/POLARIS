@@ -102,6 +102,12 @@ class AdaptationPipeline:
         """
         from polaris.abstractions.strategy import AdaptationContext
         from polaris.core.events import AdaptationEvent
+        from polaris.core.models import (
+            ActionWorkflow,
+            AdaptationAction,
+            ExecutionStatus,
+            WorkflowStatus,
+        )
         from polaris.strategies.action_resolution import StrictContractViolation
 
         if getattr(self._strategy, "requires_system_contract", False):
@@ -286,6 +292,8 @@ class AdaptationPipeline:
         if not actions:
             return False
 
+        import uuid
+
         executed_any = False
         for action in actions:
             self._logger.info(
@@ -298,7 +306,33 @@ class AdaptationPipeline:
                 component="core_framework",
             )
 
+            # Resolve schema defaults for rollback and verification window if not specified
+            rollback_act = action.rollback_action
+            verif_window = getattr(action, "verification_window_seconds", 0.0)
+            if system_contract:
+                schema = system_contract.get_action_schema(action.action_type)
+                if schema:
+                    if verif_window == 0.0 and schema.default_verification_window_seconds > 0.0:
+                        verif_window = schema.default_verification_window_seconds
+                    if rollback_act is None and schema.rollback_action:
+                        rollback_act = AdaptationAction(
+                            action_id=str(uuid.uuid4()),
+                            action_type=schema.rollback_action,
+                            target_system=action.target_system,
+                            parameters={"reason": f"Contract rollback for {action.action_type}"},
+                        )
+
+            workflow = ActionWorkflow(
+                action=action,
+                rollback_action=rollback_act,
+                verification_window_seconds=verif_window,
+            )
+
             # Validate
+            workflow.transition_to(WorkflowStatus.VALIDATING)
+            await self._publish_workflow_event(
+                workflow, WorkflowStatus.PENDING, WorkflowStatus.VALIDATING
+            )
             if not await connector.validate_action(action):
                 self._logger.warning(
                     f"Action validation failed for {action.action_type}",
@@ -308,6 +342,13 @@ class AdaptationPipeline:
                     "polaris.adaptations.validation_errors",
                     tags={"system_id": state.system_id, "action_type": action.action_type},
                     component="core_framework",
+                )
+                workflow.transition_to(
+                    WorkflowStatus.FAILED,
+                    error=f"Action validation failed for {action.action_type}",
+                )
+                await self._publish_workflow_event(
+                    workflow, WorkflowStatus.VALIDATING, WorkflowStatus.FAILED
                 )
                 continue
 
@@ -323,11 +364,20 @@ class AdaptationPipeline:
                     tags={"system_id": state.system_id, "action_type": action.action_type},
                     component="core_framework",
                 )
+                workflow.transition_to(WorkflowStatus.COMPLETED)
+                await self._publish_workflow_event(
+                    workflow, WorkflowStatus.VALIDATING, WorkflowStatus.COMPLETED
+                )
                 executed_any = True
                 continue
 
+            workflow.transition_to(WorkflowStatus.EXECUTING)
+            await self._publish_workflow_event(
+                workflow, WorkflowStatus.VALIDATING, WorkflowStatus.EXECUTING
+            )
             try:
                 result = await connector.execute_action(action)
+                workflow.execution_result = result
                 executed_any = True
 
                 self._logger.info(
@@ -347,16 +397,76 @@ class AdaptationPipeline:
                 # Store result
                 if self._knowledge_store:
                     await self._knowledge_store.store_action(action, result)
+                    if hasattr(self._knowledge_store, "store_workflow"):
+                        await self._knowledge_store.store_workflow(workflow)
 
                 # Notify strategy
                 await self._strategy.on_action_executed(action, result)
 
-                # Publish event
+                # Verification Window & Rollback Check
+                if result.status == ExecutionStatus.SUCCESS:
+                    if workflow.verification_window_seconds > 0:
+                        workflow.transition_to(WorkflowStatus.VERIFYING)
+                        await self._publish_workflow_event(
+                            workflow, WorkflowStatus.EXECUTING, WorkflowStatus.VERIFYING
+                        )
+                        is_verified = await self._verify_action(
+                            workflow, connector, state, system_contract
+                        )
+                        if not is_verified:
+                            self._logger.warning(
+                                f"Post-adaptation verification failed for {action.action_type}",
+                                action_id=action.action_id,
+                                system_id=state.system_id,
+                            )
+                            if workflow.rollback_action:
+                                await self._execute_rollback(workflow, connector)
+                            else:
+                                workflow.transition_to(
+                                    WorkflowStatus.FAILED,
+                                    error="Post-adaptation verification failed",
+                                )
+                                await self._publish_workflow_event(
+                                    workflow, WorkflowStatus.VERIFYING, WorkflowStatus.FAILED
+                                )
+                        else:
+                            workflow.transition_to(WorkflowStatus.COMPLETED)
+                            await self._publish_workflow_event(
+                                workflow, WorkflowStatus.VERIFYING, WorkflowStatus.COMPLETED
+                            )
+                            self._emit(
+                                "polaris.workflow.verified",
+                                tags={
+                                    "system_id": state.system_id,
+                                    "action_type": action.action_type,
+                                },
+                                component="core_framework",
+                            )
+                    else:
+                        workflow.transition_to(WorkflowStatus.COMPLETED)
+                        await self._publish_workflow_event(
+                            workflow, WorkflowStatus.EXECUTING, WorkflowStatus.COMPLETED
+                        )
+                else:
+                    if workflow.rollback_action:
+                        await self._execute_rollback(workflow, connector)
+                    else:
+                        workflow.transition_to(
+                            WorkflowStatus.FAILED,
+                            error=result.error_message
+                            or f"Execution returned {result.status.value}",
+                        )
+                        await self._publish_workflow_event(
+                            workflow, WorkflowStatus.EXECUTING, WorkflowStatus.FAILED
+                        )
+
+                # Publish events
                 await self._event_bus.publish(
                     AdaptationEvent(
                         action=action,
                         result=result,
                         timestamp=result.completed_at or datetime.now(timezone.utc),
+                        workflow=workflow,
                     )
                 )
                 self._emit(
@@ -374,8 +484,182 @@ class AdaptationPipeline:
                     tags={"system_id": state.system_id, "action_type": action.action_type},
                     component="core_framework",
                 )
+                if workflow.rollback_action:
+                    try:
+                        await self._execute_rollback(workflow, connector)
+                    except Exception as rb_exc:
+                        self._logger.error(f"Rollback execution failed: {rb_exc}")
+                else:
+                    workflow.transition_to(WorkflowStatus.FAILED, error=str(e))
+                    await self._publish_workflow_event(
+                        workflow, WorkflowStatus.EXECUTING, WorkflowStatus.FAILED
+                    )
 
         return executed_any
+
+    async def _verify_action(
+        self,
+        workflow: Any,
+        connector: "Connector",
+        initial_state: "SystemState",
+        system_contract: Optional["SystemContract"],
+    ) -> bool:
+        """Verify action effects over verification_window_seconds.
+
+        Returns True if the system is healthy and satisfies SLOs post-adaptation,
+        False if health degraded to CRITICAL/UNHEALTHY or an SLO was breached.
+        """
+        import asyncio
+
+        if workflow.verification_window_seconds > 0:
+            await asyncio.sleep(workflow.verification_window_seconds)
+
+        try:
+            post_state = await connector.collect_telemetry()
+        except Exception as exc:
+            self._logger.warning(
+                "Telemetry collection failed during verification window",
+                system_id=workflow.action.target_system,
+                error=str(exc),
+            )
+            return False
+
+        if self._knowledge_store:
+            try:
+                await self._knowledge_store.store_state(post_state)
+            except Exception:
+                pass
+        if self._world_model:
+            try:
+                await self._world_model.update(post_state)
+            except Exception:
+                pass
+
+        from polaris.core.models import HealthStatus
+
+        if getattr(post_state, "health_status", None) in (
+            HealthStatus.CRITICAL,
+            HealthStatus.UNHEALTHY,
+        ):
+            return False
+
+        if system_contract is not None:
+            violated = system_contract.get_violated_slos(post_state)
+            if violated:
+                self._logger.warning(
+                    f"SLO violated after action {workflow.action.action_type}: "
+                    f"{[s.metric_name for s in violated]}",
+                    system_id=post_state.system_id,
+                )
+                return False
+
+        return True
+
+    async def _execute_rollback(
+        self,
+        workflow: Any,
+        connector: "Connector",
+    ) -> None:
+        """Execute automated compensation/rollback action."""
+        if not workflow.rollback_action:
+            return
+
+        from polaris.core.models import ExecutionStatus, WorkflowStatus
+
+        rb_action = workflow.rollback_action
+        prev_status = workflow.status
+        workflow.transition_to(WorkflowStatus.ROLLING_BACK)
+        await self._publish_workflow_event(workflow, prev_status, WorkflowStatus.ROLLING_BACK)
+        self._logger.warning(
+            f"Triggering automated rollback {rb_action.action_type} for "
+            f"action {workflow.action.action_type}",
+            system_id=rb_action.target_system,
+            workflow_id=workflow.workflow_id,
+        )
+        self._emit(
+            "polaris.workflow.rolling_back",
+            tags={"system_id": rb_action.target_system, "action_type": rb_action.action_type},
+            component="core_framework",
+        )
+
+        try:
+            if await connector.validate_action(rb_action):
+                rb_result = await connector.execute_action(rb_action)
+                workflow.rollback_result = rb_result
+                if rb_result.status == ExecutionStatus.SUCCESS:
+                    workflow.transition_to(WorkflowStatus.ROLLED_BACK)
+                    await self._publish_workflow_event(
+                        workflow, WorkflowStatus.ROLLING_BACK, WorkflowStatus.ROLLED_BACK
+                    )
+                    self._logger.info(
+                        f"Rollback succeeded for {workflow.action.action_type}",
+                        workflow_id=workflow.workflow_id,
+                    )
+                    self._emit(
+                        "polaris.workflow.rolled_back",
+                        tags={
+                            "system_id": rb_action.target_system,
+                            "action_type": rb_action.action_type,
+                        },
+                        component="core_framework",
+                    )
+                else:
+                    workflow.transition_to(
+                        WorkflowStatus.FAILED,
+                        error=f"Rollback returned status {rb_result.status.value}",
+                    )
+                    await self._publish_workflow_event(
+                        workflow, WorkflowStatus.ROLLING_BACK, WorkflowStatus.FAILED
+                    )
+                    self._emit(
+                        "polaris.workflow.rollback_failed",
+                        tags={
+                            "system_id": rb_action.target_system,
+                            "action_type": rb_action.action_type,
+                        },
+                        component="core_framework",
+                    )
+            else:
+                workflow.transition_to(
+                    WorkflowStatus.FAILED,
+                    error=f"Rollback action {rb_action.action_type} validation failed",
+                )
+                await self._publish_workflow_event(
+                    workflow, WorkflowStatus.ROLLING_BACK, WorkflowStatus.FAILED
+                )
+        except Exception as exc:
+            workflow.transition_to(
+                WorkflowStatus.FAILED,
+                error=f"Exception during rollback: {exc}",
+            )
+            await self._publish_workflow_event(
+                workflow, WorkflowStatus.ROLLING_BACK, WorkflowStatus.FAILED
+            )
+            self._logger.error(
+                f"Exception during rollback execution: {exc}",
+                workflow_id=workflow.workflow_id,
+            )
+
+    async def _publish_workflow_event(
+        self,
+        workflow: Any,
+        previous_status: Any,
+        current_status: Any,
+    ) -> None:
+        """Publish workflow transition event to event bus."""
+        from polaris.core.events import WorkflowEvent
+
+        try:
+            await self._event_bus.publish(
+                WorkflowEvent(
+                    workflow=workflow,
+                    previous_status=previous_status,
+                    current_status=current_status,
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
+        except Exception:
+            pass
 
     def _apply_action_policies(self, state: "SystemState", actions: Any) -> Any:
         """Apply optional per-system action policies.

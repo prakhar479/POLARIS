@@ -4,7 +4,12 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Tuple
 
-from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.core.models import (
+    ActionWorkflow,
+    AdaptationAction,
+    ExecutionResult,
+    SystemState,
+)
 
 
 class KnowledgeStore(ABC):
@@ -55,5 +60,19 @@ class KnowledgeStore(ABC):
 
         Returns:
             List of (action, result) tuples
+        """
+        return []
+
+    async def store_workflow(self, workflow: ActionWorkflow) -> None:
+        """Store action workflow lifecycle data.
+
+        Default implementation is a no-op for backward compatibility.
+        """
+        return None
+
+    async def query_workflows(self, system_id: str, limit: int = 100) -> List[ActionWorkflow]:
+        """Query action workflows for a system.
+
+        Default implementation returns an empty list.
         """
         return []

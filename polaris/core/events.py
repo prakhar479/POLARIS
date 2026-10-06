@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from polaris.abstractions.observability import Logger, MetricsCollector
-from polaris.core.models import AdaptationAction, ExecutionResult, SystemState
+from polaris.core.models import (
+    ActionWorkflow,
+    AdaptationAction,
+    ExecutionResult,
+    SystemState,
+    WorkflowStatus,
+)
 
 
 @dataclass
@@ -26,6 +32,17 @@ class AdaptationEvent:
 
     action: AdaptationAction
     result: ExecutionResult
+    timestamp: datetime
+    workflow: Optional[ActionWorkflow] = None
+
+
+@dataclass
+class WorkflowEvent:
+    """Action workflow state transition event."""
+
+    workflow: ActionWorkflow
+    previous_status: Optional[WorkflowStatus]
+    current_status: WorkflowStatus
     timestamp: datetime
 
 
