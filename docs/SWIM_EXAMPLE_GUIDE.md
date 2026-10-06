@@ -724,5 +724,5 @@ constraints to the agentic strategy's `system_prompt` or `per_system_prompts`.
 
 1. This file (`docs/SWIM_EXAMPLE_GUIDE.md`) — start here
 2. `docs/STRATEGIES_DETAILED.md` — per-strategy deep dive and hybrid composition patterns
-3. `CONFIGURATION.md` — complete config parameter reference
+3. `docs/CONFIGURATION.md` — complete config parameter reference
 4. `README.md` — framework overview and quick-start

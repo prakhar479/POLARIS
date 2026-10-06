@@ -139,9 +139,9 @@ polaris --both --config config/default.yaml
 
 Source-of-truth references for CLI/config details:
 
-- `README.md`
-- `CLI_USAGE.md`
-- `CONFIGURATION.md`
+- [`README.md`](../README.md)
+- [`CLI_USAGE.md`](CLI_USAGE.md)
+- [`CONFIGURATION.md`](CONFIGURATION.md)
 
 If you are starting with SWIM, run the full tutorial in:
 

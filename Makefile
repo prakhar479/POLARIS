@@ -1,7 +1,7 @@
 .PHONY: help install install-dev test test-verbose test-all format format-check lint type-check dependency-check dependency-policy-check pre-commit-check ci clean install-hooks run-hooks build docs docker-build-core docker-build-full docker-build-ci docker-smoke
 
 LINE_LENGTH ?= 100
-PYTHON ?= python
+PYTHON ?= python3
 PIP_CONSTRAINTS ?= requirements/constraints.txt
 PIP_CONSTRAINT_ARGS := $(if $(wildcard $(PIP_CONSTRAINTS)),-c $(PIP_CONSTRAINTS),)
 BLACK_ARGS := --line-length=$(LINE_LENGTH)

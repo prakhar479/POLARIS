@@ -2,7 +2,17 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-**Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of ![POLARIS](./POLARIS_Framework.pdf)). It provides a simple default experience while allowing full customization of every component.
+**Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of [POLARIS](./POLARIS_Framework.pdf)). It provides a simple default experience while allowing full customization of every component.
+
+## Documentation
+
+- **[Framework Reference](./docs/POLARIS_COMPLETE_DOCUMENTATION.md)**: Deep architectural overview, MAPE-K loop, and extension points.
+- **[Configuration Guide](./docs/CONFIGURATION.md)**: Comprehensive YAML schema reference for systems, connectors, and strategies.
+- **[CLI Reference](./docs/CLI_USAGE.md)**: Command line usage, interactive REPL, dashboard, and pre-flight doctor checks.
+- **[Strategy Deep Dive](./docs/STRATEGIES_DETAILED.md)**: Detailed breakdown of threshold, LLM reasoning, agentic ReAct, THREAD, and multi-agent strategies.
+- **[SWIM Benchmark Guide](./docs/SWIM_EXAMPLE_GUIDE.md)**: Step-by-step walkthrough for running the SWIM web cluster benchmark.
+- **[Agent Engineering Guide](./AGENTS.md)**: Architectural context, coding invariants, and testing standards for AI agents.
+- **[Research Paper](./POLARIS_Framework.pdf)**: POLARIS framework design paper.
 
 ## Quick Start
 
@@ -77,7 +87,7 @@ Polaris includes built-in connectors for common exemplar systems:
 - **Wildfire**: Connects to the WildFire multi-UAV fire suppression simulation via REST API.
 - **Kubernetes**: Connects to Kubernetes clusters (natively or via kubeconfig) to monitor pods and scale deployments. Requires `pip install kubernetes`.
 
-See [CONFIGURATION.md](./CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
+See [CONFIGURATION.md](./docs/CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
 
 ## Wildfire simulation (quick run)
 
@@ -96,7 +106,7 @@ Polaris supports OpenRouter via an OpenAI-compatible client.
 - Set `OPENROUTER_API_KEY`
 - In YAML, set `provider: openrouter` under `strategy.params` and/or `meta_learner.llm`
 
-See [CONFIGURATION.md](./CONFIGURATION.md#using-openrouter-openai-compatible-gateway) for details.
+See [CONFIGURATION.md](./docs/CONFIGURATION.md#using-openrouter-openai-compatible-gateway) for details.
 
 ## Factory-based Registration
 
@@ -107,7 +117,7 @@ Polaris uses factory registries to map configuration type strings to concrete co
 
 Built-in factories are registered at import time in `polaris.core.factories`. To add your own connector/strategy type without changing Polaris core, register a factory in your code and use the new type string in YAML.
 
-See [CONFIGURATION.md](./CONFIGURATION.md#factory-based-registration-connectors--strategies) for the full pattern and examples.
+See [CONFIGURATION.md](./docs/CONFIGURATION.md#factory-based-registration-connectors--strategies) for the full pattern and examples.
 
 ## CLI Usage
 

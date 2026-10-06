@@ -1,35 +1,51 @@
-.venv
-venv
-.pytest_cache
-*.log
-.vscode
-.kiro
-.windsurf
+# Python & Virtual Environments
+.venv/
+venv/
+*.pyc
+__pycache__/
+*.egg-info/
+build/
+dist/
+
+# Testing & Quality
+.pytest_cache/
+.mypy_cache/
+.mypy/
+.benchmarks/
 .coverage
-node_modules/
+coverage.json
+coverage.xml
+htmlcov/
+
+# Logs & Metrics & Local Data
+*.log
+logs/
+metrics/
 data/
 unzipped/
 *.zip
 *.csv
-build/
 *.pt
 
-coverage.json
-htmlcov
-build/
-data/
-*.zip
-*.pt
+# Simulation Traces & Binary Artifacts
+*.vec
+*.sca
+*.out
 
-polaris.egg-info/
-logs/
-*.pyc
+# Environment & Editor
 .env
-metrics/
+.vscode/
+.kiro/
+.windsurf/
+node_modules/
 
+# Local Exemplars
 wildfire/
-.mypy
-.mypy_cache
-.benchmarks
-coverage.xml
-dist/
+
+# Generated Evaluation Plots & Summaries
+*_metrics_plot.png
+*_experiment_summary.json
+swim_metrics_plot.png
+swim_experiment_summary.json
+comparison_summary.md
+comparison_metrics_plot.png
