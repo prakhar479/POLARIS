@@ -642,6 +642,10 @@ class Polaris:
                 )
 
         self._topology.remove_node(system_id)
+        if self._monitoring_loop is not None and hasattr(
+            self._monitoring_loop, "unregister_system"
+        ):
+            self._monitoring_loop.unregister_system(system_id)
         if self.knowledge_store and hasattr(self.knowledge_store, "store_topology"):
             try:
                 await self.knowledge_store.store_topology(self._topology)

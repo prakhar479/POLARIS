@@ -53,6 +53,11 @@ def test_action_schema_validation_required_and_bounds():
     assert valid is False
     assert "must be <= 50" in (err or "")
 
+    # Boolean rejected as integer
+    valid, err = schema.validate_parameters({"replicas": True})
+    assert valid is False
+    assert "must be an integer" in (err or "")
+
     # Valid
     valid, err = schema.validate_parameters({"replicas": 5, "step_factor": 1.5})
     assert valid is True
@@ -78,6 +83,10 @@ def test_metric_schema_and_slo_contract_violations():
     slo_availability = SLOContract(metric_name="uptime_ratio", operator=">=", target_value=0.999)
     assert slo_availability.is_violated(1.0) is False
     assert slo_availability.is_violated(0.998) is True
+
+    slo_exact = SLOContract(metric_name="cluster_mode", operator="!=", target_value=0.0)
+    assert slo_exact.is_violated(0.0) is True
+    assert slo_exact.is_violated(1.0) is False
 
 
 def test_system_contract_alias_resolution_and_validation():

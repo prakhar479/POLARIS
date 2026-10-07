@@ -221,3 +221,63 @@ class TestSQLiteKnowledgeStore:
             assert len(results) == 1
 
         asyncio.run(_run())
+
+    def test_store_and_query_workflows(self) -> None:
+        """Test persisting and querying workflows in SQLiteKnowledgeStore."""
+        from polaris.core.models import (
+            ActionWorkflow,
+            AdaptationAction,
+            ExecutionResult,
+            ExecutionStatus,
+            WorkflowStatus,
+        )
+
+        store = SQLiteKnowledgeStore(db_path=":memory:")
+        action = AdaptationAction(
+            action_id="act-1",
+            action_type="scale_up",
+            target_system="order-api",
+            parameters={"replicas": 3},
+        )
+        res = ExecutionResult(
+            action_id="act-1",
+            status=ExecutionStatus.SUCCESS,
+            result_data={"scaled": True},
+        )
+        wf = ActionWorkflow(
+            action=action,
+            workflow_id="wf-1",
+            status=WorkflowStatus.COMPLETED,
+            execution_result=res,
+        )
+
+        async def _run() -> None:
+            await store.store_workflow(wf)
+            workflows = await store.query_workflows("order-api")
+            assert len(workflows) == 1
+            assert workflows[0].workflow_id == "wf-1"
+            assert workflows[0].action.action_type == "scale_up"
+            assert workflows[0].status == WorkflowStatus.COMPLETED
+            assert workflows[0].execution_result is not None
+            assert workflows[0].execution_result.status == ExecutionStatus.SUCCESS
+
+        asyncio.run(_run())
+
+    def test_store_and_get_topology(self) -> None:
+        """Test persisting and retrieving system topology in SQLiteKnowledgeStore."""
+        from polaris.core.topology import SystemTopology
+
+        store = SQLiteKnowledgeStore(db_path=":memory:")
+        topo = SystemTopology()
+        topo.add_dependency("gateway", "auth")
+        topo.add_dependency("gateway", "orders")
+
+        async def _run() -> None:
+            await store.store_topology(topo)
+            # Reset in-memory cache to force DB retrieval
+            store._topology = None
+            retrieved = await store.get_topology()
+            assert retrieved is not None
+            assert retrieved.get_dependencies("gateway") == ["auth", "orders"]
+
+        asyncio.run(_run())

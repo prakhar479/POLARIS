@@ -116,6 +116,10 @@ async def test_polaris_register_and_unregister_system():
     assert polaris.topology.get_dependencies("payment_api") == ["stripe_gateway"]
     assert mock_ks.store_topology.called
 
+    # Attach mock monitoring loop
+    mock_loop = MagicMock()
+    polaris._monitoring_loop = mock_loop
+
     # Unregister dynamically
     unreg_success = await polaris.unregister_system("payment_api", disconnect=True)
     assert unreg_success is True
@@ -123,6 +127,7 @@ async def test_polaris_register_and_unregister_system():
     assert polaris.registry.get("payment_api") is None
     assert polaris.registry.get_contract("payment_api") is None
     assert "payment_api" not in polaris.topology.dependencies
+    mock_loop.unregister_system.assert_called_with("payment_api")
 
 
 @pytest.mark.asyncio

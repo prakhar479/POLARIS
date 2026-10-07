@@ -53,14 +53,35 @@ class ActionSchema:
             if key in params and isinstance(spec, dict):
                 val = params[key]
                 expected_type = spec.get("type")
-                if expected_type == "integer" and not isinstance(val, int):
+                if expected_type == "integer" and (
+                    isinstance(val, bool) or not isinstance(val, int)
+                ):
                     return False, f"Parameter '{key}' must be an integer"
-                elif expected_type == "number" and not isinstance(val, (int, float)):
+                elif expected_type == "number" and (
+                    isinstance(val, bool) or not isinstance(val, (int, float))
+                ):
                     return False, f"Parameter '{key}' must be numeric"
-                if "minimum" in spec and isinstance(val, (int, float)):
+                elif expected_type == "string" and not isinstance(val, str):
+                    return False, f"Parameter '{key}' must be a string"
+                elif expected_type == "boolean" and not isinstance(val, bool):
+                    return False, f"Parameter '{key}' must be a boolean"
+                elif expected_type == "array" and not isinstance(val, (list, tuple)):
+                    return False, f"Parameter '{key}' must be an array"
+                elif expected_type == "object" and not isinstance(val, dict):
+                    return False, f"Parameter '{key}' must be an object"
+
+                if (
+                    "minimum" in spec
+                    and isinstance(val, (int, float))
+                    and not isinstance(val, bool)
+                ):
                     if val < spec["minimum"]:
                         return False, f"Parameter '{key}' must be >= {spec['minimum']}"
-                if "maximum" in spec and isinstance(val, (int, float)):
+                if (
+                    "maximum" in spec
+                    and isinstance(val, (int, float))
+                    and not isinstance(val, bool)
+                ):
                     if val > spec["maximum"]:
                         return False, f"Parameter '{key}' must be <= {spec['maximum']}"
         return True, None
@@ -85,7 +106,7 @@ class SLOContract:
     """Declarative Service Level Objective contract."""
 
     metric_name: str
-    operator: str  # "<", "<=", ">", ">=", "=="
+    operator: str  # "<", "<=", ">", ">=", "==", "!=", "="
     target_value: float
     window_seconds: int = 60
     priority: float = 1.0  # Weight in multi-objective evaluation
@@ -93,16 +114,19 @@ class SLOContract:
 
     def is_violated(self, current_value: float) -> bool:
         """Check if current metric value violates the SLO."""
-        if self.operator == "<":
+        op = self.operator.strip()
+        if op == "<":
             return current_value >= self.target_value
-        elif self.operator == "<=":
+        elif op == "<=":
             return current_value > self.target_value
-        elif self.operator == ">":
+        elif op == ">":
             return current_value <= self.target_value
-        elif self.operator == ">=":
+        elif op == ">=":
             return current_value < self.target_value
-        elif self.operator == "==":
+        elif op in ("==", "="):
             return current_value != self.target_value
+        elif op == "!=":
+            return current_value == self.target_value
         return False
 
 

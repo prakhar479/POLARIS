@@ -46,9 +46,8 @@ class SystemTopology:
         if not sid:
             return
         self.dependencies.pop(sid, None)
-        for targets in self.dependencies.values():
-            if sid in targets:
-                targets.remove(sid)
+        for src, targets in list(self.dependencies.items()):
+            self.dependencies[src] = [tgt for tgt in targets if tgt != sid]
 
     def add_dependency(self, source_system: str, target_system: str) -> None:
         """Add a directed dependency: source_system depends on target_system.

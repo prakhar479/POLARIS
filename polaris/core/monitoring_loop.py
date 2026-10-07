@@ -92,6 +92,11 @@ class MonitoringLoop:
             )
             return False
 
+    def unregister_system(self, system_id: str) -> None:
+        """Clean up tracking state for an unregistered system."""
+        self._last_collection_at.pop(system_id, None)
+        self._latest_system_health.pop(system_id, None)
+
     async def run(self) -> None:
         """Run the monitoring loop until cancelled."""
         self._running = True
@@ -186,6 +191,8 @@ class MonitoringLoop:
                     )
                     for p in pending:
                         p.cancel()
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
                     if queue_task in done:
                         try:
                             pushed_state = queue_task.result()

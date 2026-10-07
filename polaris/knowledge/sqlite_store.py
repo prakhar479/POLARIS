@@ -13,19 +13,21 @@ Usage::
 import asyncio
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
 from polaris.core.models import (
+    ActionWorkflow,
     AdaptationAction,
     ExecutionResult,
     ExecutionStatus,
     HealthStatus,
     MetricValue,
     SystemState,
+    WorkflowStatus,
 )
 from polaris.infrastructure.constants import DEFAULT_MAX_STATES_PER_SYSTEM
 
@@ -58,6 +60,31 @@ CREATE TABLE IF NOT EXISTS adaptation_actions (
     completed_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_actions_system ON adaptation_actions (target_system);
+"""
+
+_CREATE_TOPOLOGY = """
+CREATE TABLE IF NOT EXISTS system_topology (
+    id          TEXT    PRIMARY KEY,
+    data        TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL
+);
+"""
+
+_CREATE_WORKFLOWS = """
+CREATE TABLE IF NOT EXISTS system_workflows (
+    workflow_id                 TEXT PRIMARY KEY,
+    target_system               TEXT NOT NULL,
+    action_type                 TEXT NOT NULL,
+    status                      TEXT NOT NULL,
+    verification_window_seconds REAL,
+    error_message               TEXT,
+    created_at                  TEXT,
+    updated_at                  TEXT,
+    action_json                 TEXT NOT NULL,
+    result_json                 TEXT,
+    rollback_json               TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_workflows_system ON system_workflows (target_system);
 """
 
 
@@ -105,6 +132,8 @@ class SQLiteKnowledgeStore(KnowledgeStore):
         try:
             con.executescript(_CREATE_STATES)
             con.executescript(_CREATE_ACTIONS)
+            con.executescript(_CREATE_TOPOLOGY)
+            con.executescript(_CREATE_WORKFLOWS)
             con.commit()
         finally:
             if self._shared_conn is None:
@@ -435,9 +464,188 @@ class SQLiteKnowledgeStore(KnowledgeStore):
             return None
 
     async def store_topology(self, topology: Any) -> None:
-        """Store system topology graph."""
+        """Store system topology graph persistently in SQLite."""
         self._topology = topology
+        if topology is None:
+            return
+
+        def _persist(topo_data: str) -> None:
+            con = self._connect()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO system_topology (id, data, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at
+                    """,
+                    ("current", topo_data, datetime.now(timezone.utc).isoformat()),
+                )
+                con.commit()
+            finally:
+                self._close(con)
+
+        topo_dict = topology.to_dict() if hasattr(topology, "to_dict") else {}
+        await self._run(_persist, json.dumps(topo_dict))
 
     async def get_topology(self) -> Any:
-        """Retrieve system topology graph."""
-        return self._topology
+        """Retrieve system topology graph from SQLite."""
+        if self._topology is not None:
+            return self._topology
+
+        def _query() -> Optional[str]:
+            con = self._connect()
+            try:
+                cur = con.execute("SELECT data FROM system_topology WHERE id = 'current'")
+                row = cur.fetchone()
+                return str(row[0]) if row else None
+            finally:
+                self._close(con)
+
+        raw_json = await self._run(_query)
+        if raw_json:
+            try:
+                from polaris.core.topology import SystemTopology
+
+                self._topology = SystemTopology.from_dict(json.loads(raw_json))
+                return self._topology
+            except Exception:
+                return None
+        return None
+
+    async def store_workflow(self, workflow: ActionWorkflow) -> None:
+        """Store action workflow lifecycle in SQLite."""
+
+        def _insert() -> None:
+            con = self._connect()
+            try:
+                act = workflow.action
+                action_data = {
+                    "action_id": act.action_id,
+                    "action_type": act.action_type,
+                    "target_system": act.target_system,
+                    "parameters": act.parameters or {},
+                }
+                res_data = None
+                if workflow.execution_result:
+                    res_data = {
+                        "action_id": workflow.execution_result.action_id,
+                        "status": (
+                            workflow.execution_result.status.value
+                            if hasattr(workflow.execution_result.status, "value")
+                            else str(workflow.execution_result.status)
+                        ),
+                        "result_data": workflow.execution_result.result_data,
+                        "error_message": workflow.execution_result.error_message,
+                        "execution_time_ms": workflow.execution_result.execution_time_ms,
+                    }
+                con.execute(
+                    """
+                    INSERT INTO system_workflows
+                        (workflow_id, target_system, action_type, status,
+                         verification_window_seconds, error_message, created_at, updated_at,
+                         action_json, result_json, rollback_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(workflow_id) DO UPDATE SET
+                        status=excluded.status,
+                        error_message=excluded.error_message,
+                        updated_at=excluded.updated_at,
+                        result_json=excluded.result_json,
+                        rollback_json=excluded.rollback_json
+                    """,
+                    (
+                        workflow.workflow_id,
+                        act.target_system,
+                        act.action_type,
+                        (
+                            workflow.status.value
+                            if hasattr(workflow.status, "value")
+                            else str(workflow.status)
+                        ),
+                        workflow.verification_window_seconds,
+                        workflow.error_message,
+                        workflow.created_at.isoformat() if workflow.created_at else None,
+                        workflow.updated_at.isoformat() if workflow.updated_at else None,
+                        json.dumps(action_data),
+                        json.dumps(res_data) if res_data else None,
+                        None,
+                    ),
+                )
+                con.commit()
+            finally:
+                self._close(con)
+
+        await self._run(_insert)
+        if self._metrics:
+            self._metrics.increment(
+                "polaris.knowledge.sqlite.workflows_stored",
+                tags={
+                    "system_id": workflow.action.target_system,
+                    "status": (
+                        workflow.status.value
+                        if hasattr(workflow.status, "value")
+                        else str(workflow.status)
+                    ),
+                },
+            )
+
+    async def query_workflows(self, system_id: str, limit: int = 100) -> List[ActionWorkflow]:
+        """Query action workflows for a system from SQLite."""
+
+        def _query() -> List[sqlite3.Row]:
+            con = self._connect()
+            con.row_factory = sqlite3.Row
+            try:
+                cur = con.execute(
+                    """
+                    SELECT * FROM system_workflows
+                    WHERE target_system = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (system_id, max(1, limit)),
+                )
+                return cur.fetchall()
+            finally:
+                self._close(con)
+
+        rows = await self._run(_query)
+        workflows: List[ActionWorkflow] = []
+        for row in reversed(rows):
+            try:
+                act_dict = json.loads(row["action_json"])
+                action = AdaptationAction(
+                    action_id=act_dict["action_id"],
+                    action_type=act_dict["action_type"],
+                    target_system=act_dict["target_system"],
+                    parameters=act_dict.get("parameters", {}),
+                )
+                res = None
+                if row["result_json"]:
+                    res_dict = json.loads(row["result_json"])
+                    res = ExecutionResult(
+                        action_id=res_dict["action_id"],
+                        status=ExecutionStatus(res_dict["status"]),
+                        result_data=res_dict.get("result_data", {}),
+                        error_message=res_dict.get("error_message"),
+                        execution_time_ms=res_dict.get("execution_time_ms"),
+                    )
+
+                wf = ActionWorkflow(
+                    action=action,
+                    workflow_id=row["workflow_id"],
+                    status=WorkflowStatus(row["status"]),
+                    verification_window_seconds=float(row["verification_window_seconds"] or 0.0),
+                    execution_result=res,
+                    error_message=row["error_message"],
+                    created_at=(
+                        datetime.fromisoformat(row["created_at"]) if row["created_at"] else None
+                    ),
+                    updated_at=(
+                        datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+                    ),
+                )
+                workflows.append(wf)
+            except Exception as exc:
+                if self._logger:
+                    self._logger.warning(f"Failed to deserialise workflow row: {exc}")
+        return workflows
