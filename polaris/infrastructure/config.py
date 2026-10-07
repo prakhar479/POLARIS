@@ -546,6 +546,7 @@ class PolarisConfig(BaseModel):
     observability: Optional[Dict[str, Any]] = None
     monitoring: Optional[Dict[str, Any]] = None
     safety: Optional[Dict[str, Any]] = None
+    otel: Optional[Dict[str, Any]] = None
     plugin_imports: List[str] = Field(default_factory=list)
     max_concurrent_connectors: int = Field(default=10, gt=0)
 
@@ -618,6 +619,22 @@ class PolarisConfig(BaseModel):
             raise ValueError(
                 "safety.concurrency_mode must be one of: 'parallel', 'serialized', 'blast_radius_isolated'"
             )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_otel(self) -> "PolarisConfig":
+        """Validate top-level OpenTelemetry receiver settings."""
+        if self.otel is None:
+            return self
+
+        if not isinstance(self.otel, dict):
+            raise ValueError("otel must be a dictionary")
+
+        port = self.otel.get("port")
+        if port is not None:
+            if not isinstance(port, int) or port < 1 or port > 65535:
+                raise ValueError("otel.port must be an integer between 1 and 65535")
 
         return self
 

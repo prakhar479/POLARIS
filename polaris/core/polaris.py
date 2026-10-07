@@ -123,6 +123,24 @@ class Polaris:
                 metrics=self.metrics,
             )
 
+        # OpenTelemetry receiver
+        self._otel_receiver: Optional[Any] = None
+        otel_cfg_data = getattr(self.config, "otel", None)
+        if otel_cfg_data:
+            from polaris.infrastructure.otel_receiver import (
+                OtelReceiverConfig,
+                OtelTelemetryReceiver,
+            )
+
+            otel_cfg = OtelReceiverConfig.from_dict(otel_cfg_data)
+            if otel_cfg.enabled:
+                self._otel_receiver = OtelTelemetryReceiver(
+                    config=otel_cfg,
+                    on_state_received=self.ingest_telemetry,
+                    logger=self.logger,
+                    metrics=self.metrics,
+                )
+
         # Strategy
         self.strategy: Optional["AdaptationStrategy"] = strategy
         if not self.strategy and hasattr(self.config, "strategy") and self.config.strategy:
@@ -384,12 +402,21 @@ class Polaris:
             )
             self._tasks.append(asyncio.create_task(meta_loop.run()))
 
+        # Start OpenTelemetry receiver if enabled
+        if self._otel_receiver and self._otel_receiver.config.enabled:
+            await self._otel_receiver.start()
+
         try:
             while self._running:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
         finally:
+            if self._otel_receiver:
+                try:
+                    await self._otel_receiver.stop()
+                except Exception:
+                    pass
             for task in self._tasks:
                 if not task.done():
                     task.cancel()
@@ -404,6 +431,12 @@ class Polaris:
 
         self._running = False
         self.logger.info("Stopping Polaris framework")
+
+        if self._otel_receiver:
+            try:
+                await self._otel_receiver.stop()
+            except Exception as exc:
+                self.logger.error("OTel receiver stop failed", error=str(exc))
 
         if ComponentBuilder.should_collect(self.config, "core_framework", self.metrics):
             self.metrics.increment("polaris.core.stop_called")
@@ -514,6 +547,11 @@ class Polaris:
     def safety_policy_engine(self) -> Optional[Any]:
         """Return the cluster safety guardrail engine if configured."""
         return self.safety_engine
+
+    @property
+    def otel_receiver(self) -> Optional[Any]:
+        """Return the OpenTelemetry receiver instance if configured."""
+        return self._otel_receiver
 
     async def ingest_telemetry(self, state: Any) -> bool:
         """Ingest push-based telemetry into the running framework.

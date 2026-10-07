@@ -6,6 +6,11 @@ from polaris.infrastructure.openapi_synthesizer import (
     OpenApiSynthesizer,
     SynthesizedApi,
 )
+from polaris.infrastructure.otel_receiver import (
+    OtelMetricParser,
+    OtelReceiverConfig,
+    OtelTelemetryReceiver,
+)
 
 __all__ = [
     "StructuredLogger",
@@ -13,4 +18,7 @@ __all__ = [
     "OpenApiSynthesizer",
     "HttpActionEndpoint",
     "SynthesizedApi",
+    "OtelMetricParser",
+    "OtelReceiverConfig",
+    "OtelTelemetryReceiver",
 ]
