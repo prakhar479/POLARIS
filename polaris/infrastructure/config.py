@@ -545,6 +545,7 @@ class PolarisConfig(BaseModel):
     meta_learner: Optional[Dict[str, Any]] = None
     observability: Optional[Dict[str, Any]] = None
     monitoring: Optional[Dict[str, Any]] = None
+    safety: Optional[Dict[str, Any]] = None
     plugin_imports: List[str] = Field(default_factory=list)
     max_concurrent_connectors: int = Field(default=10, gt=0)
 
@@ -596,6 +597,27 @@ class PolarisConfig(BaseModel):
         if min_interval is not None:
             if not isinstance(min_interval, (int, float)) or float(min_interval) <= 0:
                 raise ValueError("monitoring.min_adaptive_interval must be a number > 0")
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_safety(self) -> "PolarisConfig":
+        """Validate top-level safety settings."""
+        if self.safety is None:
+            return self
+
+        if not isinstance(self.safety, dict):
+            raise ValueError("safety must be a dictionary")
+
+        mode = self.safety.get("concurrency_mode")
+        if mode is not None and str(mode).strip() not in (
+            "parallel",
+            "serialized",
+            "blast_radius_isolated",
+        ):
+            raise ValueError(
+                "safety.concurrency_mode must be one of: 'parallel', 'serialized', 'blast_radius_isolated'"
+            )
 
         return self
 

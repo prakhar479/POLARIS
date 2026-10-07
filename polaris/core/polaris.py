@@ -111,6 +111,18 @@ class Polaris:
             for dep_id in getattr(sys_cfg, "dependencies", []):
                 self._topology.add_dependency(sys_cfg.id, dep_id)
 
+        # Cluster safety guardrails
+        from polaris.core.safety import SafetyPolicyEngine
+
+        self.safety_engine: Optional[SafetyPolicyEngine] = None
+        safety_cfg = getattr(self.config, "safety", None)
+        if safety_cfg is not None:
+            self.safety_engine = SafetyPolicyEngine(
+                config=safety_cfg,
+                logger=self.logger,
+                metrics=self.metrics,
+            )
+
         # Strategy
         self.strategy: Optional["AdaptationStrategy"] = strategy
         if not self.strategy and hasattr(self.config, "strategy") and self.config.strategy:
@@ -331,6 +343,7 @@ class Polaris:
                     self.config.strategy, "circuit_breaker_recovery_seconds", 60.0
                 ),
                 topology=self._topology,
+                safety_engine=self.safety_engine,
             )
 
         monitoring = MonitoringLoop(
@@ -496,6 +509,11 @@ class Polaris:
     def topology(self) -> Any:
         """Return the system dependency topology graph."""
         return self._topology
+
+    @property
+    def safety_policy_engine(self) -> Optional[Any]:
+        """Return the cluster safety guardrail engine if configured."""
+        return self.safety_engine
 
     async def ingest_telemetry(self, state: Any) -> bool:
         """Ingest push-based telemetry into the running framework.

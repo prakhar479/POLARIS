@@ -19,6 +19,7 @@ from polaris.core.models import (
 from polaris.core.monitoring_loop import MonitoringLoop
 from polaris.core.polaris import Polaris, PolarisConfig
 from polaris.core.registry import ConnectorRegistry
+from polaris.core.safety import SafetyConfig, SafetyPolicyEngine
 from polaris.core.topology import SystemTopology
 
 __all__ = [
@@ -39,6 +40,8 @@ __all__ = [
     "WorkflowEvent",
     # Infrastructure
     "ConnectorRegistry",
+    "SafetyConfig",
+    "SafetyPolicyEngine",
     # Orchestrator
     "Polaris",
     "PolarisConfig",

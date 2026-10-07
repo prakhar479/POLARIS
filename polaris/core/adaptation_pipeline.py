@@ -53,6 +53,7 @@ class AdaptationPipeline:
         circuit_breaker_threshold: int = 3,
         circuit_breaker_recovery_seconds: float = 60.0,
         topology: Optional[Any] = None,
+        safety_engine: Optional[Any] = None,
     ) -> None:
         """Initialize the pipeline."""
         self._strategy = strategy
@@ -67,9 +68,15 @@ class AdaptationPipeline:
         self._circuit_breaker_threshold = max(1, int(circuit_breaker_threshold))
         self._circuit_breaker_recovery_seconds = max(0.001, float(circuit_breaker_recovery_seconds))
         self._topology = topology
+        self._safety_engine = safety_engine
         self._consecutive_failures = 0
         self._circuit_breaker_open_until: Optional[datetime] = None
         self._circuit_breaker_state: str = "CLOSED"
+
+    @property
+    def safety_engine(self) -> Optional[Any]:
+        """Optional safety guardrail policy engine."""
+        return self._safety_engine
 
     @property
     def circuit_breaker_state(self) -> str:
@@ -346,6 +353,26 @@ class AdaptationPipeline:
 
         executed_any = False
         for action in actions:
+            # Check cluster safety guardrails
+            if self._safety_engine is not None:
+                is_safe, safety_reason = self._safety_engine.check_action_safety(
+                    action, topology=topology
+                )
+                if not is_safe:
+                    self._logger.warning(
+                        f"Safety guardrail rejected action '{action.action_type}' for "
+                        f"{state.system_id}: {safety_reason}",
+                        action_id=action.action_id,
+                        system_id=state.system_id,
+                        reason=safety_reason,
+                    )
+                    self._emit(
+                        "polaris.safety.action_rejected",
+                        tags={"system_id": state.system_id, "action_type": action.action_type},
+                        component="safety_engine",
+                    )
+                    continue
+
             self._logger.info(
                 f"Adaptation proposed for {state.system_id}: {action.action_type}",
                 action_id=action.action_id,
@@ -425,10 +452,15 @@ class AdaptationPipeline:
             await self._publish_workflow_event(
                 workflow, WorkflowStatus.VALIDATING, WorkflowStatus.EXECUTING
             )
+            if self._safety_engine is not None:
+                self._safety_engine.record_action_start(action, topology=topology)
+            action_success = False
             try:
                 result = await connector.execute_action(action)
                 workflow.execution_result = result
                 executed_any = True
+                if result.status == ExecutionStatus.SUCCESS:
+                    action_success = True
 
                 self._logger.info(
                     f"Adaptation executed: {action.action_type} -> {result.status.value}",
@@ -544,6 +576,9 @@ class AdaptationPipeline:
                     await self._publish_workflow_event(
                         workflow, WorkflowStatus.EXECUTING, WorkflowStatus.FAILED
                     )
+            finally:
+                if self._safety_engine is not None:
+                    self._safety_engine.record_action_end(action, success=action_success)
 
         return executed_any
 
