@@ -276,6 +276,7 @@ class OtelMetricParser:
                                 metrics_by_name[f"{metric_name}.count"] = MetricValue(
                                     name=f"{metric_name}.count",
                                     value=float(count),
+                                    unit="count",
                                     tags=tags,
                                     timestamp=ts,
                                 )
@@ -287,6 +288,28 @@ class OtelMetricParser:
                                     tags=tags,
                                     timestamp=ts,
                                 )
+                            if count and s_sum is not None and float(count) > 0:
+                                avg_name = f"{metric_name}.avg"
+                                metrics_by_name[avg_name] = MetricValue(
+                                    name=avg_name,
+                                    value=float(s_sum) / float(count),
+                                    unit=unit,
+                                    tags=tags,
+                                    timestamp=ts,
+                                )
+                            for qv in dp.get("quantileValues", []):
+                                q_val = qv.get("quantile")
+                                q_num = qv.get("value")
+                                if q_val is not None and q_num is not None:
+                                    q_pct = int(round(float(q_val) * 100))
+                                    q_name = f"{metric_name}.p{q_pct}"
+                                    metrics_by_name[q_name] = MetricValue(
+                                        name=q_name,
+                                        value=float(q_num),
+                                        unit=unit,
+                                        tags=tags,
+                                        timestamp=ts,
+                                    )
 
             # Check health status indicator metrics if present
             if "system.health" in metrics_by_name:

@@ -233,7 +233,7 @@ class SystemContract:
             if slo.metric_name in metrics:
                 mv = metrics[slo.metric_name]
                 raw_val = getattr(mv, "value", None)
-                if isinstance(raw_val, (int, float)):
+                if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool):
                     if slo.is_violated(float(raw_val)):
                         violated.append(slo)
         return violated

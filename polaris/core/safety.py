@@ -348,8 +348,8 @@ class SafetyPolicyEngine:
             self.metrics.increment(
                 "polaris.safety.action_completed",
                 tags={
-                    "system_id": action.target_system,
-                    "action_type": action.action_type,
+                    "system_id": action.target_system.strip(),
+                    "action_type": action.action_type.strip().lower(),
                     "success": str(success).lower(),
                 },
             )

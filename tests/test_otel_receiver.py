@@ -212,3 +212,48 @@ def test_polaris_config_instantiates_otel_receiver():
     assert polaris.otel_receiver.config.enabled is True
     assert polaris.otel_receiver.config.port == 4318
     assert polaris.otel_receiver.config.default_system_id == "k8s_cluster"
+
+
+def test_otel_metric_parser_summary_with_quantiles():
+    """Verify OTel Summary metrics extract count, sum, avg, and quantiles (p95, p99)."""
+    payload = {
+        "resourceMetrics": [
+            {
+                "resource": {
+                    "attributes": [{"key": "service.name", "value": {"stringValue": "api_gateway"}}]
+                },
+                "scopeMetrics": [
+                    {
+                        "metrics": [
+                            {
+                                "name": "rpc.server.duration",
+                                "unit": "ms",
+                                "summary": {
+                                    "dataPoints": [
+                                        {
+                                            "count": 200,
+                                            "sum": 10000.0,
+                                            "quantileValues": [
+                                                {"quantile": 0.50, "value": 45.0},
+                                                {"quantile": 0.95, "value": 85.0},
+                                                {"quantile": 0.99, "value": 140.0},
+                                            ],
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+    states = OtelMetricParser.parse_otlp_payload(payload)
+    assert len(states) == 1
+    metrics = states[0].metrics
+    assert metrics["rpc.server.duration.count"].value == 200.0
+    assert metrics["rpc.server.duration.sum"].value == 10000.0
+    assert metrics["rpc.server.duration.avg"].value == 50.0
+    assert metrics["rpc.server.duration.p50"].value == 45.0
+    assert metrics["rpc.server.duration.p95"].value == 85.0
+    assert metrics["rpc.server.duration.p99"].value == 140.0

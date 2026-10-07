@@ -351,9 +351,9 @@ class OpenApiSynthesizer:
                     action_type=action_name,
                     path=path,
                     method=method_upper,
-                    path_parameters=tuple(path_param_names),
-                    query_parameters=tuple(query_param_names),
-                    body_parameters=tuple(body_param_names),
+                    path_parameters=tuple(dict.fromkeys(path_param_names)),
+                    query_parameters=tuple(dict.fromkeys(query_param_names)),
+                    body_parameters=tuple(dict.fromkeys(body_param_names)),
                 )
 
                 action_schemas[action_name] = action_schema
