@@ -7,7 +7,7 @@ Prometheus metric endpoints, and REST APIs via declarative configuration.
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -28,6 +28,11 @@ from polaris.infrastructure.constants import (
     HTTP_STATUS_MIN_SUCCESS,
     MILLISECONDS_PER_SECOND,
 )
+from polaris.infrastructure.openapi_synthesizer import (
+    HttpActionEndpoint,
+    OpenApiSynthesizer,
+    SynthesizedApi,
+)
 
 
 class HttpConnector(Connector):
@@ -44,6 +49,10 @@ class HttpConnector(Connector):
         timeout: float = DEFAULT_CONNECTOR_TIMEOUT,
         supported_actions: Optional[List[str]] = None,
         action_schemas: Optional[Dict[str, Any]] = None,
+        action_endpoints: Optional[Dict[str, HttpActionEndpoint]] = None,
+        openapi_spec: Optional[Union[Dict[str, Any], str]] = None,
+        openapi_path: Optional[str] = None,
+        openapi_url: Optional[str] = None,
         dependencies: Optional[List[str]] = None,
         logger: Optional[Logger] = None,
         metrics: Optional[MetricsCollector] = None,
@@ -60,6 +69,10 @@ class HttpConnector(Connector):
             timeout: Request timeout in seconds
             supported_actions: List of supported action type strings
             action_schemas: Optional mapping of action names to ActionSchemas
+            action_endpoints: Optional mapping of action names to HttpActionEndpoints
+            openapi_spec: Optional OpenAPI specification (dict or JSON string)
+            openapi_path: Optional path to OpenAPI JSON or YAML file
+            openapi_url: Optional remote URL to fetch OpenAPI specification
             dependencies: Optional list of downstream dependency system IDs
             logger: Optional structured logger
             metrics: Optional metrics collector
@@ -73,12 +86,46 @@ class HttpConnector(Connector):
         self.timeout = float(timeout)
         self.supported_actions = list(supported_actions or [])
         self._action_schemas = dict(action_schemas or {})
+        self._action_endpoints = dict(action_endpoints or {})
+        self.openapi_spec = openapi_spec
+        self.openapi_path = openapi_path
+        self.openapi_url = openapi_url
         self._dependencies = list(dependencies or [])
         self.logger = logger
         self.metrics = metrics
 
+        # Apply static OpenAPI spec or file if provided
+        if self.openapi_path:
+            synth = OpenApiSynthesizer.synthesize_from_file(
+                self.openapi_path, system_id=self.system_id, base_url=self.base_url
+            )
+            self._apply_synthesized_api(synth)
+        elif self.openapi_spec:
+            if isinstance(self.openapi_spec, dict):
+                synth = OpenApiSynthesizer.synthesize_from_dict(
+                    self.openapi_spec, system_id=self.system_id, base_url=self.base_url
+                )
+            else:
+                synth = OpenApiSynthesizer.synthesize_from_json(
+                    str(self.openapi_spec), system_id=self.system_id, base_url=self.base_url
+                )
+            self._apply_synthesized_api(synth)
+
         self._client: Optional[httpx.AsyncClient] = None
         self._connected = False
+
+    def _apply_synthesized_api(self, synth: SynthesizedApi) -> None:
+        """Merge synthesized API actions, schemas, and endpoint bindings."""
+        for act_name, schema in synth.action_schemas.items():
+            if act_name not in self._action_schemas:
+                self._action_schemas[act_name] = schema
+            if act_name not in self.supported_actions:
+                self.supported_actions.append(act_name)
+        for act_name, endpoint in synth.action_endpoints.items():
+            if act_name not in self._action_endpoints:
+                self._action_endpoints[act_name] = endpoint
+        if synth.base_url and (not self.base_url or self.base_url == "http://localhost:8080"):
+            self.base_url = synth.base_url
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -95,6 +142,28 @@ class HttpConnector(Connector):
         probe_path = self.health_endpoint or self.telemetry_endpoint or "/"
 
         try:
+            if self.openapi_url and not self._action_endpoints:
+                full_url = (
+                    self.openapi_url
+                    if self.openapi_url.startswith("http")
+                    else f"{self.base_url}/{self.openapi_url.lstrip('/')}"
+                )
+                try:
+                    synth = await OpenApiSynthesizer.synthesize_from_url(
+                        full_url,
+                        system_id=self.system_id,
+                        headers=self.headers,
+                        timeout=self.timeout,
+                    )
+                    self._apply_synthesized_api(synth)
+                except Exception as synth_exc:
+                    if self.logger:
+                        self.logger.warning(
+                            "Failed to fetch OpenAPI spec from URL",
+                            url=full_url,
+                            error=str(synth_exc),
+                        )
+
             response = await client.get(probe_path)
             # Accept any responsive status code (2xx, 3xx, 401, 403, 404 all indicate host is reachable)
             self._connected = response.status_code < 500
@@ -231,11 +300,76 @@ class HttpConnector(Connector):
             )
 
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
-        """Execute action via HTTP POST mutation."""
+        """Execute action via mapped HTTP endpoint or default POST mutation."""
         client = self._get_client()
         start_time = time.time()
-        endpoint = self.actions_endpoint
 
+        # Check if this action maps to a synthesized OpenAPI endpoint binding
+        if action.action_type in self._action_endpoints:
+            endpoint_def = self._action_endpoints[action.action_type]
+            method = endpoint_def.method.upper()
+            req_path = endpoint_def.path
+            params = dict(action.parameters or {})
+
+            # Format path parameters (e.g. /service/{name}/scale)
+            for p_name in endpoint_def.path_parameters:
+                if p_name in params:
+                    req_path = req_path.replace(f"{{{p_name}}}", str(params.pop(p_name)))
+
+            # Extract query parameters
+            query_dict = {}
+            for q_name in endpoint_def.query_parameters:
+                if q_name in params:
+                    query_dict[q_name] = params.pop(q_name)
+
+            # Body parameters: remainder of parameters
+            body_dict = params
+
+            try:
+                if method in ("GET", "DELETE") and not body_dict:
+                    response = await client.request(method, req_path, params=query_dict or None)
+                else:
+                    response = await client.request(
+                        method, req_path, params=query_dict or None, json=body_dict
+                    )
+                elapsed_ms = (time.time() - start_time) * MILLISECONDS_PER_SECOND
+
+                if HTTP_STATUS_MIN_SUCCESS <= response.status_code <= HTTP_STATUS_MAX_SUCCESS:
+                    res_data = {}
+                    try:
+                        res_data = response.json()
+                    except Exception:
+                        res_data = {"text": response.text}
+
+                    return ExecutionResult(
+                        action_id=action.action_id,
+                        status=ExecutionStatus.SUCCESS,
+                        result_data=res_data,
+                        execution_time_ms=int(elapsed_ms),
+                        completed_at=datetime.now(timezone.utc),
+                    )
+                else:
+                    return ExecutionResult(
+                        action_id=action.action_id,
+                        status=ExecutionStatus.FAILED,
+                        result_data={},
+                        error_message=f"HTTP {response.status_code}: {response.text}",
+                        execution_time_ms=int(elapsed_ms),
+                        completed_at=datetime.now(timezone.utc),
+                    )
+            except Exception as exc:
+                elapsed_ms = (time.time() - start_time) * MILLISECONDS_PER_SECOND
+                return ExecutionResult(
+                    action_id=action.action_id,
+                    status=ExecutionStatus.FAILED,
+                    result_data={},
+                    error_message=str(exc),
+                    execution_time_ms=int(elapsed_ms),
+                    completed_at=datetime.now(timezone.utc),
+                )
+
+        # Default fallback: post to actions_endpoint
+        endpoint = self.actions_endpoint
         payload = {
             "action_id": action.action_id,
             "action_type": action.action_type,
