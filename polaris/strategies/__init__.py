@@ -1,5 +1,6 @@
 """Strategy implementations."""
 
+from polaris.strategies.adamls import AdaMLSStrategy
 from polaris.strategies.agentic_llm import AgenticLLMStrategy
 from polaris.strategies.hybrid import HybridStrategy
 from polaris.strategies.llm_reasoning import LLMReasoningStrategy
@@ -9,6 +10,7 @@ from polaris.strategies.thread_agentic import ThreadAgenticStrategy
 from polaris.strategies.threshold import ThresholdReactiveStrategy
 
 __all__ = [
+    "AdaMLSStrategy",
     "ThresholdReactiveStrategy",
     "LLMReasoningStrategy",
     "HybridStrategy",

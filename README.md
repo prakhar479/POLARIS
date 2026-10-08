@@ -1,18 +1,26 @@
-# Polaris - Modular Self-Adaptive Systems Framework
+# POLARIS: Autonomous Self-Adaptive Systems Control Plane
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-**Polaris** is a clean, modular framework for building self-adaptive systems (Implementation of [POLARIS](./POLARIS_Framework.pdf)). It provides a simple default experience while allowing full customization of every component.
+**POLARIS** (*Proactive Optimization & Learning Architecture for Resilient Intelligent Systems*) is a production-grade, modular self-adaptive control plane implementing autonomous **MAPE-K** (Monitor, Analyze, Plan, Execute, Knowledge) control loops for cloud infrastructure, Kubernetes microservices, and AI inference systems.
+
+POLARIS pairs modern LLM reasoning (single-shot, ReAct tool-use, hierarchical THREAD, multi-agent committees) with **formal neuro-symbolic safety verification** and **calibrated statistical world modeling**, delivering mathematically grounded safety bounds and closed-loop adaptability.
+
+The repository is organized into two clean, segregated tiers:
+- **`polaris/` (Production Control Plane)**: Enterprise-grade autonomous runtime featuring Kubernetes/HTTP connectors, contract validation, Metric Temporal Logic (MTL) safety envelopes, pluggable queuing surrogates, and OpenTelemetry observability.
+- **`benchmarks/` (Research & Scientific Replication)**: Segregated research artifacts, exemplars (SWIM, SWITCH, Wildfire, SUAVE), baselines (AdaMLS), and a single-command scientific replication suite generating publication-ready LaTeX tables and non-parametric statistical reports ($p$-values, $\hat{A}_{12}$ effect sizes).
 
 ## Documentation
 
 - **[Framework Reference](./docs/POLARIS_COMPLETE_DOCUMENTATION.md)**: Deep architectural overview, MAPE-K loop, and extension points.
+- **[Research Benchmarks & Replication](./benchmarks/README.md)**: Standalone academic exemplars, baselines, and replication workflows.
 - **[Configuration Guide](./docs/CONFIGURATION.md)**: Comprehensive YAML schema reference for systems, connectors, and strategies.
 - **[CLI Reference](./docs/CLI_USAGE.md)**: Command line usage, interactive REPL, dashboard, and pre-flight doctor checks.
 - **[Strategy Deep Dive](./docs/STRATEGIES_DETAILED.md)**: Detailed breakdown of threshold, LLM reasoning, agentic ReAct, THREAD, and multi-agent strategies.
 - **[SWIM Benchmark Guide](./docs/SWIM_EXAMPLE_GUIDE.md)**: Step-by-step walkthrough for running the SWIM web cluster benchmark.
 - **[Agent Engineering Guide](./AGENTS.md)**: Architectural context, coding invariants, and testing standards for AI agents.
-- **[Research Paper](./POLARIS_Framework.pdf)**: POLARIS framework design paper.
+- **[Research Paper](./POLARIS_Framework.pdf)**: POLARIS framework design paper (arXiv:2512.04702v2).
 
 ## Quick Start
 
@@ -80,21 +88,50 @@ polaris = Polaris(
 
 ## Supported Connectors
 
-Polaris includes built-in connectors for common exemplar systems:
+Polaris includes production and benchmark connectors for diverse managed targets:
 
-- **SWIM**: Connects to SWIM (Simulated Web Infrastructure Manager) via TCP.
-  Reference config with native tool calling: [config/swim.yaml](./config/swim.yaml)
-- **Wildfire**: Connects to the WildFire multi-UAV fire suppression simulation via REST API.
-- **Kubernetes**: Connects to Kubernetes clusters (natively or via kubeconfig) to monitor pods and scale deployments. Requires `pip install kubernetes`.
+- **Kubernetes**: Connects natively to Kubernetes clusters (or via kubeconfig) to monitor pod CPU/memory and dynamically scale deployments. Requires `pip install kubernetes`.
+- **HTTP / REST**: Generic high-performance REST adapter for monitoring arbitrary microservices via OpenAPI specs and health endpoints.
+- **SWIM**: Connects to the SWIM (Simulated Web Infrastructure Manager) cluster via TCP socket (`localhost:4242`). Reference config: [config/swim.yaml](./config/swim.yaml).
+- **SWITCH**: Connects to dynamic vision model switching servers (YOLOv5n..x on COCO 2017) via REST or zero-dependency synthetic simulation. Reference config: [config/switch.yaml](./config/switch.yaml).
+- **Wildfire**: Connects to the Wildfire multi-UAV fire suppression simulation via REST API. Reference config: [config/wildfire.yaml](./config/wildfire.yaml).
+- **SUAVE**: Connects to the SUAVE autonomous underwater vehicle via ROS `roslibpy` bridge. Reference config: [config/suave.yaml](./config/suave.yaml).
 
 See [CONFIGURATION.md](./docs/CONFIGURATION.md#connectors) for detailed configuration and metrics/actions for each connector.
 
-## Wildfire simulation (quick run)
+## Scientific Replication & Benchmarks Suite (`benchmarks/`)
 
-1) Start the Wildfire adapter (Flask REST API) so `http://localhost:5000/health` is reachable.
+All academic exemplars, baseline strategies (AdaMLS, SuaveThreshold), and scientific replication tooling are segregated in [`benchmarks/`](./benchmarks/README.md) to keep `polaris/` clean as an enterprise-grade control plane:
+
+### 1. One-Command Paper Reproduction
+Reproduce paper tables (Tables 2, 3) and statistical significance tests across multiple seeds:
+```bash
+# Fast analytical / synthetic reproduction of all benchmarks
+python3 benchmarks/reproduce_paper.py --mode fast --seeds 5
+
+# Replicate specific exemplar with custom seed count
+python3 benchmarks/reproduce_paper.py --exemplar switch --seeds 5
+```
+
+### 2. Universal Benchmark Shell Runner
+```bash
+# Run universal benchmark execution (pre-flight doctor + reproduction)
+./benchmarks/run_benchmark.sh all 5
+```
+
+Outputs are automatically compiled to:
+- `benchmarks/results/table2_swim.tex` (LaTeX Table 2 for publication)
+- `benchmarks/results/table3_switch.tex` (LaTeX Table 3 for publication)
+- `benchmarks/results/statistical_significance.md` (Mann-Whitney U tests & Vargha-Delaney $\hat{A}_{12}$ effect sizes)
+
+## Wildfire Simulation (Quick Run)
+
+1) Start the Wildfire adapter (Flask REST API) so `http://localhost:5000/health` is reachable:
+```bash
+python3 wildfire/adapter.py
+```
 
 2) Run Polaris with the Wildfire config:
-
 ```bash
 polaris --config config/wildfire.yaml
 ```

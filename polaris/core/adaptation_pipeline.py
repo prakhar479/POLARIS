@@ -4,6 +4,7 @@ Extracted from ``Polaris._process_system_iteration`` so the decision-and- execut
 logic can be tested and reused independently of the monitoring loop.
 """
 
+import inspect
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -17,10 +18,12 @@ if TYPE_CHECKING:
         WorldModel,
     )
     from polaris.abstractions.system_contract import SystemContract
+    from polaris.abstractions.verifier import Verifier
     from polaris.core.events import EventBus
-    from polaris.core.models import SystemState
+    from polaris.core.models import AdaptationAction, SystemState
     from polaris.infrastructure.config import PolarisConfig
 
+from polaris.abstractions.verifier import VerificationContext, VerificationDecision
 from polaris.infrastructure.observability.null_metrics import NullMetricsCollector
 
 
@@ -54,6 +57,7 @@ class AdaptationPipeline:
         circuit_breaker_recovery_seconds: float = 60.0,
         topology: Optional[Any] = None,
         safety_engine: Optional[Any] = None,
+        verifier: Optional["Verifier"] = None,
     ) -> None:
         """Initialize the pipeline."""
         self._strategy = strategy
@@ -72,6 +76,23 @@ class AdaptationPipeline:
         self._consecutive_failures = 0
         self._circuit_breaker_open_until: Optional[datetime] = None
         self._circuit_breaker_state: str = "CLOSED"
+
+        if verifier is not None:
+            self._verifier: "Verifier" = verifier
+        else:
+            from polaris.core.verifier import NeuroSymbolicVerifier
+
+            self._verifier = NeuroSymbolicVerifier(
+                safety_engine=self._safety_engine,
+                logger=self._logger,
+                metrics=self._metrics,
+            )
+        self._action_history: Dict[str, List["AdaptationAction"]] = {}
+
+    @property
+    def verifier(self) -> "Verifier":
+        """Formal Neuro-Symbolic Verifier instance."""
+        return self._verifier
 
     @property
     def safety_engine(self) -> Optional[Any]:
@@ -92,6 +113,13 @@ class AdaptationPipeline:
     def fallback_strategy(self) -> Optional["AdaptationStrategy"]:
         """Optional fallback strategy instance."""
         return self._fallback_strategy
+
+    def _record_action_history(self, system_id: str, action: "AdaptationAction") -> None:
+        """Track recent executed action for temporal dwell invariants."""
+        history = self._action_history.setdefault(system_id, [])
+        history.append(action)
+        if len(history) > 50:
+            self._action_history[system_id] = history[-50:]
 
     async def run(
         self,
@@ -353,28 +381,55 @@ class AdaptationPipeline:
 
         executed_any = False
         for action in actions:
-            # Check cluster safety guardrails
-            if self._safety_engine is not None:
-                is_safe, safety_reason = self._safety_engine.check_action_safety(
-                    action, topology=topology
+            # Formal Neuro-Symbolic Verification (safety contracts, bounds clamping, delta envelopes, dwell, topology)
+            recent_acts = self._action_history.get(state.system_id, [])
+            v_context = VerificationContext(
+                system_id=state.system_id,
+                system_state=state,
+                system_contract=system_contract,
+                recent_actions=recent_acts,
+                topology=topology,
+                peer_states=peer_states,
+            )
+            v_result = await self._verifier.verify(action, v_context)
+
+            if v_result.decision == VerificationDecision.REJECTED:
+                self._logger.warning(
+                    f"Verifier rejected action '{action.action_type}' for "
+                    f"{state.system_id}: {v_result.explanation}",
+                    action_id=action.action_id,
+                    system_id=state.system_id,
+                    reason=v_result.explanation,
                 )
-                if not is_safe:
-                    self._logger.warning(
-                        f"Safety guardrail rejected action '{action.action_type}' for "
-                        f"{state.system_id}: {safety_reason}",
-                        action_id=action.action_id,
-                        system_id=state.system_id,
-                        reason=safety_reason,
-                    )
-                    self._emit(
-                        "polaris.safety.action_rejected",
-                        tags={"system_id": state.system_id, "action_type": action.action_type},
-                        component="safety_engine",
-                    )
-                    continue
+                self._emit(
+                    "polaris.verifier.rejected",
+                    tags={"system_id": state.system_id, "action_type": action.action_type},
+                    component="verifier",
+                )
+                continue
+
+            if v_result.decision == VerificationDecision.CLAMPED and v_result.verified_action:
+                self._logger.info(
+                    f"Verifier clamped action '{action.action_type}' for "
+                    f"{state.system_id}: {v_result.explanation}",
+                    action_id=action.action_id,
+                    system_id=state.system_id,
+                )
+                self._emit(
+                    "polaris.verifier.clamped",
+                    tags={"system_id": state.system_id, "action_type": action.action_type},
+                    component="verifier",
+                )
+                action = v_result.verified_action
+            else:
+                self._emit(
+                    "polaris.verifier.accepted",
+                    tags={"system_id": state.system_id, "action_type": action.action_type},
+                    component="verifier",
+                )
 
             self._logger.info(
-                f"Adaptation proposed for {state.system_id}: {action.action_type}",
+                f"Adaptation verified and proposed for {state.system_id}: {action.action_type}",
                 action_id=action.action_id,
             )
             self._emit(
@@ -446,6 +501,7 @@ class AdaptationPipeline:
                     workflow, WorkflowStatus.VALIDATING, WorkflowStatus.COMPLETED
                 )
                 executed_any = True
+                self._record_action_history(state.system_id, action)
                 continue
 
             workflow.transition_to(WorkflowStatus.EXECUTING)
@@ -461,6 +517,13 @@ class AdaptationPipeline:
                 executed_any = True
                 if result.status == ExecutionStatus.SUCCESS:
                     action_success = True
+                    self._record_action_history(state.system_id, action)
+                    if self._world_model is not None and hasattr(
+                        self._world_model, "record_pending_action"
+                    ):
+                        ret = self._world_model.record_pending_action(action, state)
+                        if inspect.isawaitable(ret):
+                            await ret
 
                 self._logger.info(
                     f"Adaptation executed: {action.action_type} -> {result.status.value}",

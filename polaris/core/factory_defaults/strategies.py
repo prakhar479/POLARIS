@@ -36,6 +36,7 @@ def register_default_strategy_factories(
     """Register factories for built-in strategy types."""
     # Import here to avoid circular imports
     from polaris.strategies import (
+        AdaMLSStrategy,
         AgenticLLMStrategy,
         HybridStrategy,
         LLMReasoningStrategy,
@@ -43,6 +44,29 @@ def register_default_strategy_factories(
         ThreadAgenticStrategy,
         ThresholdReactiveStrategy,
     )
+
+    def _adamls_factory(
+        strategy_cfg: Any,
+        logger: "Logger",
+        metrics: Optional["MetricsCollector"],
+        knowledge_store: "KnowledgeStore",
+        world_model: "WorldModel",
+        registry: ConnectorRegistry,
+    ) -> "AdaptationStrategy":
+        params = getattr(strategy_cfg, "params", {}) or {}
+        return AdaMLSStrategy(
+            model_hierarchy=params.get("model_hierarchy"),
+            latency_sla=params.get("latency_sla", 0.15),
+            cpu_sla=params.get("cpu_sla", 70.0),
+            confidence_target=params.get("confidence_target", 0.65),
+            headroom_factor=params.get("headroom_factor", 0.70),
+            cooldown_seconds=params.get("cooldown_seconds", 5.0),
+            action_name=params.get("action_name", "switch_model"),
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_strategy_factory("adamls", _adamls_factory)
 
     def _threshold_factory(
         strategy_cfg: Any,

@@ -21,6 +21,7 @@ htmlcov/
 *.log
 logs/
 metrics/
+/results/
 data/
 unzipped/
 *.zip
@@ -40,7 +41,7 @@ unzipped/
 node_modules/
 
 # Local Exemplars
-wildfire/
+/wildfire/
 
 # Generated Evaluation Plots & Summaries
 *_metrics_plot.png

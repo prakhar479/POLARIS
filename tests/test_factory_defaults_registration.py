@@ -21,8 +21,23 @@ def test_default_connector_registrations_are_complete():
         register_connector_validator,
     )
 
-    assert set(connector_factories) == {"swim", "wildfire", "suave", "kubernetes", "http", "rest"}
-    assert set(connector_validators) == {"swim", "wildfire", "kubernetes", "http", "rest"}
+    assert set(connector_factories) == {
+        "swim",
+        "wildfire",
+        "suave",
+        "kubernetes",
+        "http",
+        "rest",
+        "switch",
+    }
+    assert set(connector_validators) == {
+        "swim",
+        "wildfire",
+        "kubernetes",
+        "http",
+        "rest",
+        "switch",
+    }
 
 
 def test_default_strategy_registrations_are_complete():
@@ -46,4 +61,5 @@ def test_default_strategy_registrations_are_complete():
         "agentic_llm",
         "thread_agentic",
         "multi_agent",
+        "adamls",
     }

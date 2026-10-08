@@ -1,8 +1,8 @@
 """World Model interface for system behavior modeling."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Dict
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from polaris.core.models import AdaptationAction, SystemState
 
@@ -14,6 +14,7 @@ class PredictionResult:
     predicted_metrics: Dict[str, float]
     confidence: float
     reasoning: str = ""
+    uncertainty: Dict[str, float] = field(default_factory=dict)
 
 
 class WorldModel(ABC):
@@ -62,3 +63,29 @@ class WorldModel(ABC):
         statistical regime detection. Default implementation returns False.
         """
         return False
+
+    def record_pending_action(self, action: AdaptationAction, state: SystemState) -> Optional[Any]:
+        """Record an in-flight action to calibrate effect observation on next telemetry update.
+
+        Override in concrete implementations that support closed-loop delta absorption.
+        Default implementation is a no-op.
+        """
+        return None
+
+
+class DomainSurrogate(ABC):
+    """Abstract protocol for pluggable domain physics, queuing, and surrogate models.
+
+    Enables self-adaptive systems to supply analytical, mathematical, or empirical
+    priors for counterfactual reasoning before real-world trial-and-error observations.
+    """
+
+    @abstractmethod
+    def can_handle(self, system_id: str, action_type: str) -> bool:
+        """Check if this surrogate applies to the given system and action type."""
+        pass
+
+    @abstractmethod
+    def predict_deltas(self, action: AdaptationAction, state: SystemState) -> Dict[str, float]:
+        """Predict counterfactual metric deltas resulting from the adaptation action."""
+        pass

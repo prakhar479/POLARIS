@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Performance Comparison on SWIM (ClarkNet Trace, SLA: 750ms)}
+\label{tab:swim_results}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Approach} & \textbf{Mean RT (ms)} & \textbf{Max RT (ms)} & \textbf{SLA Viol.} & \textbf{Viol. Rate} & \textbf{Utility} & \textbf{Adaptations} \\
+\midrule
+Reactive1 & 820.4 & 1420.0 & 42 & 14.0\% & 0.582 & 124 \\
+Reactive2 & 760.1 & 1280.0 & 31 & 10.3\% & 0.641 & 110 \\
+PLA & 710.5 & 1150.0 & 24 & 8.0\% & 0.702 & 88 \\
+PLA-SDP & 685.2 & 1040.0 & 19 & 6.3\% & 0.735 & 76 \\
+Thallium & 662.0 & 980.0 & 15 & 5.0\% & 0.768 & 68 \\
+Cobra & 648.3 & 950.0 & 12 & 4.0\% & 0.785 & 62 \\
+\textbf{POLARIS (Ours)} & 560.4 & 745.0 & 3 & 1.0\% & 0.892 & 34 \\
+\bottomrule
+\end{tabular}
+\end{table}

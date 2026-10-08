@@ -22,11 +22,12 @@ Welcome to the **POLARIS** codebase. This guide provides AI agents and human con
 
 ```
 polaris/
-├── polaris/                       # Core Python package
+├── polaris/                       # Core Python package (Production Control Plane)
 │   ├── abstractions/              # Abstract Base Classes (Protocols & Interfaces)
 │   │   ├── connector.py           # Connector ABC & ExecutionResult
 │   │   ├── strategy.py            # AdaptationStrategy ABC & AdaptationContext
-│   │   ├── world_model.py         # WorldModel ABC
+│   │   ├── world_model.py         # WorldModel ABC & DomainSurrogate protocol
+│   │   ├── verifier.py            # Verifier ABC, VerificationDecision, VerificationContext
 │   │   ├── knowledge_store.py     # KnowledgeStore ABC
 │   │   ├── meta_learner.py        # MetaLearner ABC
 │   │   ├── system_contract.py     # SystemContract & ActionSchema contracts
@@ -38,13 +39,15 @@ polaris/
 │   │   └── interactive.py         # Interactive terminal REPL
 │   ├── connectors/                # Concrete system connectors
 │   │   ├── swim.py                # SWIM (web infrastructure manager via TCP)
+│   │   ├── switch.py              # SWITCH (vision model switching: YOLOv5n..x on COCO)
 │   │   ├── wildfire.py            # Wildfire-UAVSim (via HTTP REST API)
 │   │   ├── kubernetes_connector.py# Kubernetes pod scaler
 │   │   └── suave.py               # SUAVE underwater robotics (ROS/roslibpy)
 │   ├── core/                      # Core runtime orchestration
 │   │   ├── polaris.py             # Polaris top-level coordinator & lifecycle
 │   │   ├── component_builder.py   # Factory builder wiring config to instances
-│   │   ├── adaptation_pipeline.py # Assess → Validate → Execute pipeline
+│   │   ├── adaptation_pipeline.py # Assess → Validate → Verify (V) → Execute pipeline
+│   │   ├── verifier.py            # SafetyVerifier: MTL bounds, anti-flapping dwell, cascade backpressure
 │   │   ├── monitoring_loop.py     # Periodic telemetry collection loop
 │   │   ├── meta_learning_loop.py  # Background parameter optimization loop
 │   │   ├── metrics_export_loop.py # Background JSON/CSV metrics export
@@ -52,6 +55,8 @@ polaris/
 │   │   ├── factories.py           # Connector & strategy registries
 │   │   ├── registry.py            # Runtime connector registry
 │   │   └── models.py              # Pydantic domain models (SystemState, AdaptationAction)
+│   ├── evaluation/                # Empirical statistical rigor engine
+│   │   └── stats.py               # Mann-Whitney U, Wilcoxon, Vargha-Delaney A12 effect size
 │   ├── infrastructure/            # Supporting infrastructure & I/O
 │   │   ├── config.py              # Pydantic schema validation for YAML configurations
 │   │   ├── contract_builder.py    # Auto-generates SystemContract from connectors
@@ -67,6 +72,7 @@ polaris/
 │   │   └── llm_based.py           # LLM reflective feedback meta-learner
 │   ├── strategies/                # Adaptation decision engines
 │   │   ├── threshold.py           # Reactive threshold strategy with cooldowns
+│   │   ├── adamls.py              # AdaMLS QoS-aware model switching baseline
 │   │   ├── llm_reasoning.py       # Zero/Few-shot structured LLM reasoning
 │   │   ├── agentic_llm.py         # Tool-calling ReAct agentic strategy
 │   │   ├── thread_agentic.py      # Hierarchical supervisor-worker thread agentic
@@ -78,19 +84,28 @@ polaris/
 │   │   ├── factories.py           # Factory registration for custom tools
 │   │   └── builtin.py             # Standard tools (metric math, trends, action history)
 │   └── world_model/               # World modeling implementations
-│       └── statistical.py         # Kalman filter, trends, and regime tracking
+│       ├── statistical.py         # Kalman filter, trends, and closed-loop delta absorption
+│       └── surrogates.py          # Pluggable QueuingDomainSurrogate & ModelSwitchingDomainSurrogate
+├── benchmarks/                    # Dedicated Academic & Research Replication Suite
+│   ├── exemplars/                 # Standalone configs & specs for SWIM, SWITCH, Wildfire, SUAVE
+│   ├── baselines/                 # Baseline strategy implementations (AdaMLS, SuaveThreshold)
+│   ├── results/                   # Replicated publication outputs (LaTeX tables, markdown stats)
+│   ├── reproduce_paper.py         # One-command scientific replication CLI
+│   ├── run_benchmark.sh           # Universal benchmark shell runner
+│   └── README.md                  # Comprehensive researcher benchmark documentation
 ├── config/                        # YAML configuration files
 │   ├── default.yaml               # Baseline configuration (threshold + LLM hybrid)
 │   ├── swim.yaml                  # SWIM web server pool configuration
+│   ├── switch.yaml                # SWITCH vision model switching configuration
 │   ├── wildfire.yaml              # Wildfire-UAVSim REST configuration
 │   ├── suave.yaml                 # SUAVE underwater vehicle configuration
 │   └── swim_thread_threshold_hybrid_experiment.yaml # THREAD experimental configuration
 ├── docs/                          # Detailed architecture and guide documents
-├── examples/                      # Runnable examples and scripts
+├── examples/                      # Runnable production and integration examples
 ├── requirements/                  # Dependency constraints
 │   └── constraints.txt            # Pinned package constraints for deterministic builds
 ├── scripts/                       # Maintenance and CI utility scripts
-├── tests/                         # Pytest test suite (470+ unit and integration tests)
+├── tests/                         # Pytest test suite (600+ unit and integration tests)
 ├── wildfire/                      # Mesa simulation code & REST adapter for Wildfire
 ├── pyproject.toml                 # Package definition and single source of truth for dependencies
 ├── Makefile                       # Developer command shortcuts
@@ -120,10 +135,19 @@ polaris/
    - `get_tunable_parameters() -> Dict[str, Any]`
    - `update_parameter(name: str, value: Any) -> bool`
    - `on_action_executed(action: AdaptationAction, result: ExecutionResult) -> None`
-3. **`BaseTool`** ([tools/base.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/tools/base.py)):
+3. **`Verifier`** ([verifier.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/abstractions/verifier.py)):
+   - `verify(action: AdaptationAction, context: VerificationContext) -> VerificationDecision`
+   - Formal verification engine enforcing Metric Temporal Logic (MTL) parameter envelopes, contract domain clamping, anti-flapping temporal dwell, and topological cascade backpressure suppression.
+4. **`DomainSurrogate`** ([world_model.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/abstractions/world_model.py)):
+   - `can_handle(system_id: str, action_type: str) -> bool`
+   - `predict_deltas(action: AdaptationAction, state: SystemState) -> Dict[str, float]`
+   - Pluggable queuing, physics, and ML surrogate priors plugged into `StatisticalWorldModel` with online closed-loop delta absorption (`record_pending_action`).
+5. **`BaseTool`** ([tools/base.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/tools/base.py)):
    - `name: str`, `description: str`, `parameters_schema: Dict[str, Any]`
    - `execute(context: ToolContext, **kwargs) -> ToolResult`
-4. **Resilience & Fault Tolerance Guards**:
+6. **Empirical Statistical Testing Engine** ([evaluation/stats.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/evaluation/stats.py)):
+   - `mann_whitney_u_test`, `wilcoxon_signed_rank_test`, and `vargha_delaney_a12` non-parametric effect sizes for rigorous scientific comparison across multiple evaluation seeds ($N \ge 5$).
+7. **Resilience & Fault Tolerance Guards**:
    - **Circuit Breaker & Strategy Fallback** ([core/adaptation_pipeline.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/core/adaptation_pipeline.py)): Tracks consecutive strategy failures; trips to `OPEN` after `circuit_breaker_threshold` failures and safely delegates adaptation decisions to `fallback_strategy` without hanging the loop. Probes recovery via `HALF_OPEN` state.
    - **Reasoning Cycle Execution Budget** (`max_cycle_time_seconds`): Enforces cumulative wall-clock limits on ReAct and recursive THREAD agentic reasoning loops, automatically returning fallback or skipping to prevent monitoring loop stalls.
    - **Token & Cost Accounting** ([infrastructure/llm/](file:///home/prakhar/dev/prakhar479/polaris/polaris/infrastructure/llm)): Standardizes `prompt_tokens`, `completion_tokens`, and `tokens_used` across OpenAI, Gemini, Groq, OpenRouter, and Ollama.
@@ -253,14 +277,34 @@ POLARIS supports multiple real-world and benchmark exemplars for self-adaptive s
   polaris --config config/wildfire.yaml --metrics-export ./metrics/wildfire --metrics-experiment wf_exp
   ```
 
-### C. SUAVE (Search and Underwater Autonomous Vehicle)
+### C. SWITCH (Dynamic Edge Vision Model Switching)
+- **Protocol**: HTTP REST API on `localhost:8000` or zero-dependency synthetic simulation mode.
+- **Metrics**: `latency`, `fps`, `accuracy`, `cpu_usage`, `memory_mb`, `current_model`.
+- **Actions**: `switch_model` (model_name: `yolov5n`, `yolov5s`, `yolov5m`, `yolov5l`, `yolov5x`).
+- **Baseline**: AdaMLS ([polaris/strategies/adamls.py](file:///home/prakhar/dev/prakhar479/polaris/polaris/strategies/adamls.py)).
+- **Running Simulation**:
+  ```bash
+  polaris --config config/switch.yaml
+  ```
+
+### D. SUAVE (Search and Underwater Autonomous Vehicle)
 - **Protocol**: ROS via `roslibpy` bridge on `localhost:9090`.
 - **Config**: [config/suave.yaml](file:///home/prakhar/dev/prakhar479/polaris/config/suave.yaml).
 
-### D. Kubernetes
+### E. Kubernetes
 - **Protocol**: Kubernetes client / kubeconfig.
 - **Metrics**: Pod CPU/memory, replica counts.
 - **Actions**: `scale_deployment`.
+
+### F. Scientific Replication Suite (`benchmarks/`)
+- **Automated Paper Reproduction**: Single CLI to compile LaTeX Tables (Tables 2, 3) and statistical significance tests ($p$-values, $\hat{A}_{12}$ effect sizes):
+  ```bash
+  # Fast analytical / synthetic replication
+  python3 benchmarks/reproduce_paper.py --mode fast --seeds 5
+
+  # Run universal shell benchmark
+  ./benchmarks/run_benchmark.sh all 5
+  ```
 
 ---
 

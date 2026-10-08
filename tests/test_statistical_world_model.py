@@ -422,3 +422,111 @@ class TestStatisticalWorldModel:
         assert prediction.predicted_metrics["dimmer"] == 0.6
         assert prediction.confidence >= 0.75
         assert "Simulated counterfactual impact" in prediction.reasoning
+
+    @pytest.mark.asyncio
+    async def test_closed_loop_delta_absorption(self, world_model):
+        """Test that in-flight actions absorb telemetry deltas automatically."""
+        t1 = datetime.now(timezone.utc)
+        pre_state = SystemState(
+            system_id="swim-sys",
+            timestamp=t1,
+            metrics={
+                "average_response_time": MetricValue("average_response_time", 800.0, "ms", t1),
+                "average_utilization": MetricValue("average_utilization", 0.90, "ratio", t1),
+            },
+            health_status=HealthStatus.WARNING,
+        )
+        await world_model.update(pre_state)
+
+        # Register pending action
+        action = AdaptationAction(
+            action_id="act-scale",
+            action_type="scale_up",
+            target_system="swim-sys",
+        )
+        world_model.record_pending_action(action, pre_state)
+
+        # Post-action update arrives
+        t2 = datetime.now(timezone.utc)
+        post_state = SystemState(
+            system_id="swim-sys",
+            timestamp=t2,
+            metrics={
+                "average_response_time": MetricValue("average_response_time", 550.0, "ms", t2),
+                "average_utilization": MetricValue("average_utilization", 0.60, "ratio", t2),
+            },
+            health_status=HealthStatus.HEALTHY,
+        )
+        await world_model.update(post_state)
+
+        # Verify deltas were recorded in action_effects
+        effects = world_model._action_effects["swim-sys"]["scale_up"]
+        assert "average_response_time" in effects
+        assert effects["average_response_time"] == [-250.0]
+        assert effects["average_utilization"] == [-0.30]
+
+    @pytest.mark.asyncio
+    async def test_queuing_surrogate_prediction(self, world_model):
+        """Test M/M/m queuing domain surrogate before empirical samples exist."""
+        t = datetime.now(timezone.utc)
+        state = SystemState(
+            system_id="swim-app",
+            timestamp=t,
+            metrics={
+                "server_count": MetricValue("server_count", 2.0, "count", t),
+                "average_utilization": MetricValue("average_utilization", 0.80, "ratio", t),
+                "average_response_time": MetricValue("average_response_time", 600.0, "ms", t),
+            },
+            health_status=HealthStatus.HEALTHY,
+        )
+        await world_model.update(state)
+
+        # Predict scale_up
+        action = AdaptationAction(
+            action_id="act-scale-up",
+            action_type="scale_up",
+            target_system="swim-app",
+        )
+        prediction = await world_model.predict(action, state)
+
+        # Server count increases to 3.0
+        assert prediction.predicted_metrics["server_count"] == 3.0
+        # Utilization scales down by ~2/3: 0.80 * 2/3 = ~0.533
+        assert prediction.predicted_metrics["average_utilization"] < 0.80
+        # Response time drops
+        assert prediction.predicted_metrics["average_response_time"] < 600.0
+        assert "uncertainty" in dir(prediction)
+        assert len(prediction.uncertainty) > 0
+
+    @pytest.mark.asyncio
+    async def test_switch_vision_surrogate_prediction(self, world_model):
+        """Test YOLOv5 profile surrogate prediction for SWITCH model switching."""
+        t = datetime.now(timezone.utc)
+        state = SystemState(
+            system_id="switch-sys",
+            timestamp=t,
+            metrics={
+                "confidence_mean": MetricValue("confidence_mean", 0.69, "ratio", t),
+                "response_time": MetricValue("response_time", 0.096, "s", t),
+                "cpu_usage": MetricValue("cpu_usage", 48.0, "percent", t),
+                "inference_rate": MetricValue("inference_rate", 244.0, "inf/min", t),
+            },
+            health_status=HealthStatus.HEALTHY,
+        )
+        await world_model.update(state)
+
+        # Predict switch to yolov5s (faster, lighter)
+        action = AdaptationAction(
+            action_id="act-switch",
+            action_type="switch_model",
+            target_system="switch-sys",
+            parameters={"model_name": "yolov5s"},
+        )
+        prediction = await world_model.predict(action, state)
+
+        # yolov5s: latency ~ 0.065s, confidence ~ 0.62, cpu ~ 40.0%
+        assert prediction.predicted_metrics["response_time"] == 0.065
+        assert prediction.predicted_metrics["confidence_mean"] == 0.62
+        assert prediction.predicted_metrics["cpu_usage"] == 40.0
+        assert prediction.predicted_metrics["inference_rate"] == 260.0
+        assert prediction.confidence >= 0.75

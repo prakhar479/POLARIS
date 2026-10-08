@@ -23,7 +23,16 @@ from polaris.abstractions.system_contract import (
     SLOContract,
     SystemContract,
 )
-from polaris.abstractions.world_model import PredictionResult, WorldModel
+from polaris.abstractions.verifier import (
+    InvariantSeverity,
+    InvariantViolation,
+    SafetyInvariant,
+    VerificationContext,
+    VerificationDecision,
+    VerificationResult,
+    Verifier,
+)
+from polaris.abstractions.world_model import DomainSurrogate, PredictionResult, WorldModel
 
 __all__ = [
     "Connector",
@@ -39,6 +48,7 @@ __all__ = [
     "AdaptationContext",
     "ParameterSpec",
     "WorldModel",
+    "DomainSurrogate",
     "PredictionResult",
     "KnowledgeStore",
     "MetaLearner",
@@ -48,4 +58,11 @@ __all__ = [
     "AppliedUpdate",
     "Logger",
     "MetricsCollector",
+    "Verifier",
+    "VerificationDecision",
+    "VerificationResult",
+    "VerificationContext",
+    "SafetyInvariant",
+    "InvariantViolation",
+    "InvariantSeverity",
 ]

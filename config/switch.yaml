@@ -1,0 +1,56 @@
+################################################################################
+# Polaris Configuration for SWITCH (Adaptive Machine Learning-Enabled System)
+################################################################################
+#
+# Exemplar: Vision Object Detection with Dynamic Model Switching (YOLOv5)
+# Paper: "Towards Self-Adaptive Machine Learning-Enabled Systems Through QoS-Aware Model Switching" (ASE 2023)
+#
+# Available models:
+#   yolov5n: confidence ~ 0.52, latency ~ 0.040s, cpu ~ 28%, rate ~ 280 inf/min
+#   yolov5s: confidence ~ 0.62, latency ~ 0.065s, cpu ~ 40%, rate ~ 260 inf/min
+#   yolov5m: confidence ~ 0.69, latency ~ 0.096s, cpu ~ 48%, rate ~ 244 inf/min
+#   yolov5l: confidence ~ 0.76, latency ~ 0.145s, cpu ~ 64%, rate ~ 210 inf/min
+#   yolov5x: confidence ~ 0.82, latency ~ 0.210s, cpu ~ 78%, rate ~ 180 inf/min
+#
+# Canonical actions:
+#   switch_model (params: {"model_name": "yolov5s"})
+#
+# SLA Targets:
+#   response_time <= 0.15s (150ms)
+#   confidence_mean >= 0.65
+#   cpu_usage <= 70%
+################################################################################
+
+systems:
+  - id: "switch"
+    connector_type: "switch"
+    enabled: true
+    connection:
+      base_url: "http://localhost:5001"
+      synthetic_mode: true
+      initial_model: "yolov5m"
+      timeout: 5.0
+    monitoring:
+      collection_interval: 2
+
+monitoring:
+  interval_seconds: 2
+
+strategy:
+  type: "adamls"
+  params:
+    latency_sla: 0.15
+    cpu_sla: 70.0
+    confidence_target: 0.65
+    headroom_factor: 0.70
+    cooldown_seconds: 5.0
+
+knowledge_store:
+  type: "memory"
+  max_history: 1000
+
+world_model:
+  type: "statistical"
+  history_window: 60
+  trend_threshold: 0.05
+  confidence_level: 0.95

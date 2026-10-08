@@ -2,11 +2,11 @@
 
 import statistics
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from polaris.abstractions.knowledge_store import KnowledgeStore
 from polaris.abstractions.observability import Logger, MetricsCollector
-from polaris.abstractions.world_model import PredictionResult, WorldModel
+from polaris.abstractions.world_model import DomainSurrogate, PredictionResult, WorldModel
 from polaris.core.models import AdaptationAction, SystemState
 
 
@@ -72,6 +72,18 @@ class StatisticalWorldModel(WorldModel):
         self._action_effects: Dict[str, Dict[str, Dict[str, list]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(list))
         )
+        # Pending in-flight actions awaiting post-adaptation observation
+        self._pending_actions: Dict[str, Tuple[AdaptationAction, SystemState]] = {}
+        # Pluggable domain physics/queuing surrogates
+        from polaris.world_model.surrogates import (
+            ModelSwitchingDomainSurrogate,
+            QueuingDomainSurrogate,
+        )
+
+        self._surrogates: List[DomainSurrogate] = [
+            QueuingDomainSurrogate(),
+            ModelSwitchingDomainSurrogate(),
+        ]
         self._logger = logger
         self._metrics = metrics
 
@@ -92,6 +104,24 @@ class StatisticalWorldModel(WorldModel):
                 "polaris.world_model.statistical.updates",
                 tags={"system_id": state.system_id},
             )
+
+        # Absorb observed action effect if an action was pending on this system
+        pending = self._pending_actions.pop(state.system_id, None)
+        if pending is not None:
+            pending_action, pre_state = pending
+            observed_deltas: Dict[str, float] = {}
+            for m_name, m_curr in state.metrics.items():
+                if m_name in pre_state.metrics:
+                    try:
+                        curr_v = float(m_curr.value)
+                        prev_v = float(pre_state.metrics[m_name].value)
+                        observed_deltas[m_name] = round(curr_v - prev_v, 4)
+                    except (ValueError, TypeError):
+                        pass
+            if observed_deltas:
+                self.record_action_effect(
+                    state.system_id, pending_action.action_type, observed_deltas
+                )
 
         values_recorded = 0
         for metric_name, metric in state.metrics.items():
@@ -204,6 +234,15 @@ class StatisticalWorldModel(WorldModel):
                 new_probs[name] = new_probs[name] / total
             self._regime_probs[system_id] = new_probs
 
+    def register_surrogate(self, surrogate: DomainSurrogate) -> None:
+        """Register a custom domain physics, queuing, or surrogate model."""
+        self._surrogates.append(surrogate)
+
+    def record_pending_action(self, action: AdaptationAction, pre_state: SystemState) -> None:
+        """Register an in-flight action to automatically record deltas on next state update."""
+        system_id = action.target_system or pre_state.system_id
+        self._pending_actions[system_id] = (action, pre_state)
+
     def record_action_effect(
         self, system_id: str, action_type: str, metric_deltas: Dict[str, float]
     ) -> None:
@@ -257,6 +296,14 @@ class StatisticalWorldModel(WorldModel):
                         continue
             predicted[metric_name] = statistics.mean(history)
 
+        if not predicted:
+            return PredictionResult(
+                predicted_metrics={},
+                confidence=0.5,
+                reasoning="Statistical baseline from historical mean",
+                uncertainty={},
+            )
+
         # Check for empirical action effects
         applied_deltas: Dict[str, float] = {}
         effects_for_action = self._action_effects.get(system_id, {}).get(action.action_type, {})
@@ -265,6 +312,17 @@ class StatisticalWorldModel(WorldModel):
                 avg_delta = statistics.mean(deltas)
                 predicted[metric_name] = max(0.0, predicted[metric_name] + avg_delta)
                 applied_deltas[metric_name] = avg_delta
+
+        # If no empirical effects recorded yet, apply pluggable domain surrogates
+        if not effects_for_action:
+            for surrogate in self._surrogates:
+                if surrogate.can_handle(system_id, action.action_type):
+                    surr_deltas = surrogate.predict_deltas(action, current_state)
+                    for m_name, d_val in surr_deltas.items():
+                        if m_name in predicted:
+                            predicted[m_name] = round(max(0.0, predicted[m_name] + d_val), 4)
+                            applied_deltas[m_name] = d_val
+                    break
 
         # Check for direct parameter assignments (e.g. set_dimmer)
         if action.parameters and isinstance(action.parameters, dict):
@@ -324,10 +382,25 @@ class StatisticalWorldModel(WorldModel):
                 confidence=confidence,
             )
 
+        # Compute metric uncertainties
+        uncertainties: Dict[str, float] = {}
+        for metric_name, pred_val in predicted.items():
+            if self._use_kalman and metric_name in self._kalman_filters.get(system_id, {}):
+                filt = self._kalman_filters[system_id][metric_name]
+                p_out = filt.predict()
+                uncertainties[metric_name] = round(p_out[1], 4) if p_out is not None else 1.0
+            else:
+                hist = self._metric_history[system_id].get(metric_name, [])
+                if len(hist) > 1:
+                    uncertainties[metric_name] = round(statistics.variance(hist), 4)
+                else:
+                    uncertainties[metric_name] = round(0.05 * max(abs(pred_val), 1.0), 4)
+
         return PredictionResult(
             predicted_metrics=predicted,
             confidence=confidence,
             reasoning=reasoning,
+            uncertainty=uncertainties,
         )
 
     async def get_insights(self) -> Dict[str, Any]:

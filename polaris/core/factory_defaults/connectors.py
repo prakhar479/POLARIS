@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from polaris.infrastructure.constants import (
     DEFAULT_CONNECTOR_TIMEOUT,
+    DEFAULT_SWITCH_PORT,
     DEFAULT_WILDFIRE_PORT,
     MAX_PORT,
     MIN_PORT,
@@ -28,6 +29,7 @@ def register_default_connector_factories(
         KubernetesConnector,
         SUAVEConnector,
         SWIMConnector,
+        SWITCHConnector,
         WildfireConnector,
     )
 
@@ -50,6 +52,18 @@ def register_default_connector_factories(
         port = connection.get("port")
         if port is not None:
             _validate_port(port, "SWIM")
+
+    def _validate_switch_connection(connection: Dict[str, Any]) -> None:
+        if not isinstance(connection, dict):
+            raise ValueError("SWITCH connection config must be a dictionary")
+
+        base_url = connection.get("base_url")
+        if base_url is not None and not isinstance(base_url, str):
+            raise ValueError("SWITCH connection base_url must be a string")
+
+        synthetic_mode = connection.get("synthetic_mode")
+        if synthetic_mode is not None and not isinstance(synthetic_mode, bool):
+            raise ValueError("SWITCH connection synthetic_mode must be a boolean")
 
     def _validate_wildfire_connection(connection: Dict[str, Any]) -> None:
         if not isinstance(connection, dict):
@@ -132,6 +146,27 @@ def register_default_connector_factories(
         )
 
     register_connector_factory("suave", _suave_factory)
+
+    def _switch_factory(
+        system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]
+    ) -> "Connector":
+        base_url = system_cfg.connection.get("base_url", f"http://localhost:{DEFAULT_SWITCH_PORT}")
+        synthetic_mode = system_cfg.connection.get("synthetic_mode", False)
+        initial_model = system_cfg.connection.get("initial_model", "yolov5m")
+        timeout = system_cfg.connection.get("timeout", DEFAULT_CONNECTOR_TIMEOUT)
+
+        return SWITCHConnector(
+            base_url=base_url,
+            system_id=system_cfg.id,
+            timeout=timeout,
+            synthetic_mode=synthetic_mode,
+            initial_model=initial_model,
+            logger=logger,
+            metrics=metrics,
+        )
+
+    register_connector_factory("switch", _switch_factory)
+    register_connector_config_validator("switch", _validate_switch_connection)
 
     def _kubernetes_factory(
         system_cfg: Any, logger: "Logger", metrics: Optional["MetricsCollector"]

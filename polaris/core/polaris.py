@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         MetaLearner,
         MetricsCollector,
         SystemContract,
+        Verifier,
         WorldModel,
     )
 
@@ -55,6 +56,7 @@ class Polaris:
         world_model: Optional["WorldModel"] = None,
         knowledge_store: Optional["KnowledgeStore"] = None,
         connectors: Optional[List["Connector"]] = None,
+        verifier: Optional["Verifier"] = None,
         # Meta-learning (optional, off by default)
         meta_learner: Optional["MetaLearner"] = None,
         enable_meta_learning: bool = False,
@@ -122,6 +124,15 @@ class Polaris:
                 logger=self.logger,
                 metrics=self.metrics,
             )
+
+        # Neuro-symbolic verifier gatekeeper
+        from polaris.core.verifier import NeuroSymbolicVerifier
+
+        self.verifier: "Verifier" = verifier or NeuroSymbolicVerifier(
+            safety_engine=self.safety_engine,
+            logger=self.logger,
+            metrics=self.metrics,
+        )
 
         # OpenTelemetry receiver
         self._otel_receiver: Optional[Any] = None
@@ -362,6 +373,7 @@ class Polaris:
                 ),
                 topology=self._topology,
                 safety_engine=self.safety_engine,
+                verifier=self.verifier,
             )
 
         monitoring = MonitoringLoop(
