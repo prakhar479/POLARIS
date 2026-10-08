@@ -127,15 +127,20 @@ class AdaMLSStrategy(AdaptationStrategy):
                     )
                 return []
 
-        # Extract QoS metrics
-        latency_metric = state.metrics.get("response_time")
-        latency = float(latency_metric.value) if latency_metric else None
+        # Extract QoS metrics defensively
+        def _get_metric_float(*keys: str) -> Optional[float]:
+            for k in keys:
+                mv = state.metrics.get(k)
+                if mv is not None and mv.value is not None:
+                    try:
+                        return float(mv.value)
+                    except (ValueError, TypeError):
+                        pass
+            return None
 
-        cpu_metric = state.metrics.get("cpu_usage")
-        cpu = float(cpu_metric.value) if cpu_metric else None
-
-        conf_metric = state.metrics.get("confidence_mean")
-        confidence = float(conf_metric.value) if conf_metric else None
+        latency = _get_metric_float("response_time", "latency")
+        cpu = _get_metric_float("cpu_usage", "cpu")
+        confidence = _get_metric_float("confidence_mean", "confidence", "accuracy")
 
         target_idx: Optional[int] = None
         reasoning = ""

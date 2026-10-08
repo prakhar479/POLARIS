@@ -361,7 +361,8 @@ class HybridStrategy(AdaptationStrategy):
                 mv = state.metrics.get(m_name)
                 if mv is not None:
                     try:
-                        if float(mv.value) > 75.0:
+                        u_val = float(mv.value)
+                        if u_val > 75.0 or (0.0 <= u_val <= 1.0 and u_val > 0.75):
                             high_load = True
                             break
                     except (TypeError, ValueError):
@@ -395,7 +396,8 @@ class HybridStrategy(AdaptationStrategy):
                         pmv = peer_state.metrics.get(m_name)
                         if pmv is not None:
                             try:
-                                if float(pmv.value) > 80.0:
+                                pu_val = float(pmv.value)
+                                if pu_val > 80.0 or (0.0 <= pu_val <= 1.0 and pu_val > 0.80):
                                     downstream_stressed = True
                                     break
                             except (TypeError, ValueError):

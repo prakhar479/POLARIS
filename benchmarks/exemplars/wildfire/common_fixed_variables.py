@@ -122,7 +122,7 @@ def euclidean_distance(x1, y1, x2, y2):
 # function that calculates the grade of influence of cell s' over cell s, based on a distance_limit
 def distance_rate(s, s_, distance_limit):
     m_d = euclidean_distance(s[0], s[1], s_[0], s_[1])
-    result = 0
-    if m_d <= distance_limit:
+    result = 0.0
+    if 0.0 < m_d <= distance_limit:
         result = m_d**-2.0
     return result

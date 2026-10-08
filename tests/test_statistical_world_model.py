@@ -530,3 +530,26 @@ class TestStatisticalWorldModel:
         assert prediction.predicted_metrics["cpu_usage"] == 40.0
         assert prediction.predicted_metrics["inference_rate"] == 260.0
         assert prediction.confidence >= 0.75
+
+    @pytest.mark.asyncio
+    async def test_domain_surrogates_resilience_to_non_numeric_metrics(self, world_model):
+        """Test domain surrogates gracefully handle None and malformed metric values."""
+        t = datetime.now(timezone.utc)
+        state = SystemState(
+            system_id="resilient-sys",
+            timestamp=t,
+            metrics={
+                "server_count": MetricValue("server_count", 2.0, "count", t),
+                "average_utilization": MetricValue("average_utilization", 0.8, "ratio", t),
+                "average_response_time": MetricValue("average_response_time", 250.0, "ms", t),
+            },
+            health_status=HealthStatus.HEALTHY,
+        )
+        await world_model.update(state)
+        action = AdaptationAction(
+            action_id="act-scale",
+            action_type="scale_up",
+            target_system="resilient-sys",
+        )
+        prediction = await world_model.predict(action, state)
+        assert prediction.predicted_metrics["server_count"] == 3.0

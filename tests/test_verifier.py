@@ -431,3 +431,30 @@ async def test_adaptation_pipeline_verifier_rejection_skips_execution():
     # Connector execution must NOT be called for rejected action
     assert mock_connector.execute_action.call_count == 0
     assert any(m[1] == "polaris.verifier.rejected" for m in mock_metrics.metrics)
+
+
+@pytest.mark.asyncio
+async def test_verifier_clamping_disabled_rejects_violating_action():
+    """Verify that when allow_clamping=False, actions requiring clamping are formally rejected."""
+    verifier = NeuroSymbolicVerifier(allow_clamping=False)
+    contract = make_test_contract()
+    state = make_system_state()
+
+    # Action that exceeds rate-of-change envelope (dimmer jump from 1.0 to 0.1 > max_step 0.25)
+    action = AdaptationAction(
+        action_id="act-clamp-disabled",
+        action_type="set_dimmer",
+        target_system="web-server-1",
+        parameters={"dimmer": 0.1},
+    )
+
+    context = VerificationContext(
+        system_id="web-server-1",
+        system_state=state,
+        system_contract=contract,
+    )
+
+    result = await verifier.verify(action, context)
+    assert result.decision == VerificationDecision.REJECTED
+    assert result.verified_action is None
+    assert "clamping is disabled" in result.explanation

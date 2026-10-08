@@ -7,7 +7,7 @@ Provides analytical, physics-based, and queuing theory surrogates:
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from polaris.abstractions.world_model import DomainSurrogate
 from polaris.core.models import AdaptationAction, SystemState
@@ -19,6 +19,16 @@ DEFAULT_VISION_MODELS: Dict[str, Dict[str, float]] = {
     "yolov5l": {"confidence": 0.76, "latency_s": 0.145, "cpu_percent": 64.0, "rate": 210.0},
     "yolov5x": {"confidence": 0.82, "latency_s": 0.210, "cpu_percent": 78.0, "rate": 180.0},
 }
+
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """Safely convert value to float with default fallback."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
 
 
 class QueuingDomainSurrogate(DomainSurrogate):
@@ -47,7 +57,7 @@ class QueuingDomainSurrogate(DomainSurrogate):
         params = action.parameters or {}
 
         s_count_mv = state.metrics.get("server_count")
-        s_val = float(s_count_mv.value) if s_count_mv and s_count_mv.value is not None else 2.0
+        s_val = _safe_float(s_count_mv.value if s_count_mv else None, 2.0)
 
         if act_type in ("scale_up", "scale-up"):
             deltas["server_count"] = 1.0
@@ -56,12 +66,12 @@ class QueuingDomainSurrogate(DomainSurrogate):
 
             ratio = s_val / (s_val + 1.0)
             if "average_utilization" in state.metrics:
-                old_u = float(state.metrics["average_utilization"].value)
+                old_u = _safe_float(state.metrics["average_utilization"].value, 0.5)
                 new_u = round(old_u * ratio, 4)
                 deltas["average_utilization"] = round(new_u - old_u, 4)
 
             if "average_response_time" in state.metrics:
-                old_r = float(state.metrics["average_response_time"].value)
+                old_r = _safe_float(state.metrics["average_response_time"].value, 200.0)
                 r_delta = -round(old_r * 0.25, 2)
                 deltas["average_response_time"] = r_delta
 
@@ -73,12 +83,12 @@ class QueuingDomainSurrogate(DomainSurrogate):
 
             ratio = s_val / new_s if new_s > 0 else 1.33
             if "average_utilization" in state.metrics:
-                old_u = float(state.metrics["average_utilization"].value)
+                old_u = _safe_float(state.metrics["average_utilization"].value, 0.5)
                 new_u = min(1.0, round(old_u * ratio, 4))
                 deltas["average_utilization"] = round(new_u - old_u, 4)
 
             if "average_response_time" in state.metrics:
-                old_r = float(state.metrics["average_response_time"].value)
+                old_r = _safe_float(state.metrics["average_response_time"].value, 200.0)
                 r_delta = round(old_r * 0.30, 2)
                 deltas["average_response_time"] = r_delta
 
@@ -88,7 +98,9 @@ class QueuingDomainSurrogate(DomainSurrogate):
                 try:
                     d_target = float(dim_val)
                     curr_dim = (
-                        float(state.metrics["dimmer"].value) if "dimmer" in state.metrics else 1.0
+                        _safe_float(state.metrics["dimmer"].value, 1.0)
+                        if "dimmer" in state.metrics
+                        else 1.0
                     )
                     deltas["dimmer"] = d_target - curr_dim
                     if "average_response_time" in state.metrics:
@@ -133,7 +145,7 @@ class ModelSwitchingDomainSurrogate(DomainSurrogate):
             }
             for m_k, prof_v in mapping.items():
                 if m_k in state.metrics:
-                    old_v = float(state.metrics[m_k].value)
+                    old_v = _safe_float(state.metrics[m_k].value, prof_v)
                     deltas[m_k] = round(prof_v - old_v, 4)
 
         return deltas

@@ -1,6 +1,7 @@
 # python libraries
 
 import functools
+import random
 
 import mesa
 from common_fixed_variables import *

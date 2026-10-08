@@ -313,8 +313,8 @@ class StatisticalWorldModel(WorldModel):
                 predicted[metric_name] = max(0.0, predicted[metric_name] + avg_delta)
                 applied_deltas[metric_name] = avg_delta
 
-        # If no empirical effects recorded yet, apply pluggable domain surrogates
-        if not effects_for_action:
+        # If no empirical effects applied yet, evaluate pluggable domain surrogates
+        if not applied_deltas:
             for surrogate in self._surrogates:
                 if surrogate.can_handle(system_id, action.action_type):
                     surr_deltas = surrogate.predict_deltas(action, current_state)

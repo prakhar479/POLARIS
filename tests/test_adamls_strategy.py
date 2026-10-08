@@ -154,3 +154,29 @@ async def test_adamls_tunable_parameters_and_update():
     perf = await strategy.get_performance_metrics()
     assert "total_assessments" in perf
     assert "total_switches" in perf
+
+
+@pytest.mark.asyncio
+async def test_adamls_metric_alias_and_none_resilience():
+    strategy = AdaMLSStrategy(
+        latency_sla=0.15,
+        cpu_sla=70.0,
+        cooldown_seconds=0.0,
+    )
+    context = AdaptationContext(system_id="switch", historical_states=[])
+
+    now = datetime.now(timezone.utc)
+    state = SystemState(
+        system_id="switch",
+        timestamp=now,
+        metrics={
+            "latency": MetricValue("latency", 0.17, unit="s", timestamp=now),
+            "cpu": MetricValue("cpu", 50.0, unit="percent", timestamp=now),
+            "confidence": MetricValue("confidence", None, timestamp=now),
+        },
+        health_status=HealthStatus.HEALTHY,
+        metadata={"active_model": "yolov5m"},
+    )
+    actions = await strategy.assess(state, context)
+    assert len(actions) == 1
+    assert actions[0].parameters["model_name"] == "yolov5s"

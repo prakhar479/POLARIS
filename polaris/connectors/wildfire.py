@@ -252,6 +252,19 @@ class WildfireConnector(Connector):
                 metadata={"error": str(exc)},
             )
 
+    def _extract_wildfire_actions(
+        self, parameters: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Extract list of wildfire actions handling both nested and flat parameter formats."""
+        params = parameters or {}
+        if "actions" in params and isinstance(params["actions"], list):
+            return list(params["actions"])
+        if "move" in params or "direction" in params:
+            uav = params.get("uav", 0)
+            move = params.get("move", params.get("direction", "hold"))
+            return [{"uav": uav, "move": move}]
+        return []
+
     async def execute_action(self, action: AdaptationAction) -> ExecutionResult:
         """Execute adaptation action on Wildfire system."""
         if not self._connected:
@@ -267,18 +280,17 @@ class WildfireConnector(Connector):
             client = await self._ensure_client()
             action_type = action.action_type.lower()
 
+            extracted_actions = self._extract_wildfire_actions(action.parameters)
             # Action handlers mapping
             action_handlers = {
                 "wildfire_reset": lambda: client.post("/api/v1/sim/reset"),
                 "wildfire_pause": lambda: client.post("/api/v1/sim/pause"),
                 "wildfire_resume": lambda: client.post("/api/v1/sim/resume"),
                 "wildfire_step": lambda: client.post("/api/v1/sim/step"),
-                "wildfire_move": lambda: client.post(
-                    "/api/v1/sim/action", json=(action.parameters or {}).get("actions", [])
-                ),
+                "wildfire_move": lambda: client.post("/api/v1/sim/action", json=extracted_actions),
                 "wildfire_batch_actions": lambda: client.post(
                     "/api/v1/sim/batch-actions",
-                    json={"actions": (action.parameters or {}).get("actions", [])},
+                    json={"actions": extracted_actions},
                 ),
             }
 

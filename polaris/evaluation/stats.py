@@ -9,11 +9,18 @@ Implements rigorous empirical software engineering statistical tests:
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Sequence, Tuple
 
 import numpy as np
-from scipy import stats
+
+# Defensive safeguard for environments where NumPy is reloaded (e.g. pytest-cov)
+_np_dtypes = sys.modules.get("numpy.dtypes")
+if _np_dtypes is not None and not hasattr(_np_dtypes, "VoidDType"):
+    _np_dtypes.VoidDType = getattr(np, "void", object)  # type: ignore[attr-defined]
+
+from scipy import stats  # noqa: E402
 
 
 def vargha_delaney_a12(treatment: Sequence[float], control: Sequence[float]) -> Tuple[float, str]:

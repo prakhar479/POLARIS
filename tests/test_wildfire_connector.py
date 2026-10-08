@@ -294,3 +294,27 @@ async def test_get_supported_actions(connector):
     assert action_types == expected
     for a in actions:
         assert a.target_system == "wildfire-test"
+
+
+@pytest.mark.asyncio
+async def test_execute_wildfire_move_flat_parameters(connector):
+    connector._connected = True
+    mock_client = AsyncMock()
+    mock_client.post.return_value = httpx.Response(
+        200,
+        json={"status": "applied", "moves": 1},
+        request=httpx.Request("POST", "/api/v1/sim/action"),
+    )
+
+    action = AdaptationAction(
+        action_id="move-flat",
+        action_type="wildfire_move",
+        target_system="wildfire-test",
+        parameters={"move": "north", "uav": 0},
+    )
+
+    with patch.object(connector, "_ensure_client", return_value=mock_client):
+        result = await connector.execute_action(action)
+
+    assert result.status == ExecutionStatus.SUCCESS
+    mock_client.post.assert_called_with("/api/v1/sim/action", json=[{"uav": 0, "move": "north"}])

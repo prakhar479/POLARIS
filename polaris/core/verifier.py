@@ -251,6 +251,7 @@ class RateOfChangeClampingInvariant(SafetyInvariant):
                                 prev_act.parameters
                                 and param_name in prev_act.parameters
                                 and isinstance(prev_act.parameters[param_name], (int, float))
+                                and not isinstance(prev_act.parameters[param_name], bool)
                             ):
                                 prev_val = float(prev_act.parameters[param_name])
                                 break
@@ -549,48 +550,75 @@ class NeuroSymbolicVerifier(Verifier):
                 latency_ms=latency_ms,
             )
 
-        if has_clamping and self._allow_clamping:
-            # Construct new verified action with clamped parameters
-            clamped_action = AdaptationAction(
-                action_id=action.action_id,
-                action_type=action.action_type,
-                target_system=action.target_system,
-                parameters=accumulated_clamped_params,
-                priority=action.priority,
-                timeout_seconds=action.timeout_seconds,
-                created_at=action.created_at,
-                rollback_action=action.rollback_action,
-                verification_window_seconds=action.verification_window_seconds,
-                metadata={
-                    **(action.metadata or {}),
-                    "verifier_clamped": True,
-                    "original_parameters": action.parameters,
-                },
-            )
-            explanation = "CLAMPED onto safety envelope: " + "; ".join(
-                v.message for v in violations if v.severity == InvariantSeverity.WARNING
-            )
-            if self._logger:
-                self._logger.info(
-                    f"Verifier clamped action: {explanation}",
-                    system_id=context.system_id,
+        if has_clamping:
+            if self._allow_clamping:
+                # Construct new verified action with clamped parameters
+                clamped_action = AdaptationAction(
                     action_id=action.action_id,
                     action_type=action.action_type,
-                    clamped_parameters=accumulated_clamped_params,
+                    target_system=action.target_system,
+                    parameters=accumulated_clamped_params,
+                    priority=action.priority,
+                    timeout_seconds=action.timeout_seconds,
+                    created_at=action.created_at,
+                    rollback_action=action.rollback_action,
+                    verification_window_seconds=action.verification_window_seconds,
+                    metadata={
+                        **(action.metadata or {}),
+                        "verifier_clamped": True,
+                        "original_parameters": action.parameters,
+                    },
                 )
-            if self._metrics:
-                self._metrics.increment(
-                    "polaris.verifier.clamped",
-                    tags={"system_id": context.system_id, "action_type": action.action_type},
+                explanation = "CLAMPED onto safety envelope: " + "; ".join(
+                    v.message for v in violations if v.severity == InvariantSeverity.WARNING
                 )
-            return VerificationResult(
-                decision=VerificationDecision.CLAMPED,
-                original_action=action,
-                verified_action=clamped_action,
-                violations=violations,
-                explanation=explanation,
-                latency_ms=latency_ms,
-            )
+                if self._logger:
+                    self._logger.info(
+                        f"Verifier clamped action: {explanation}",
+                        system_id=context.system_id,
+                        action_id=action.action_id,
+                        action_type=action.action_type,
+                        clamped_parameters=accumulated_clamped_params,
+                    )
+                if self._metrics:
+                    self._metrics.increment(
+                        "polaris.verifier.clamped",
+                        tags={"system_id": context.system_id, "action_type": action.action_type},
+                    )
+                return VerificationResult(
+                    decision=VerificationDecision.CLAMPED,
+                    original_action=action,
+                    verified_action=clamped_action,
+                    violations=violations,
+                    explanation=explanation,
+                    latency_ms=latency_ms,
+                )
+            else:
+                # Clamping disabled: soft violations become formal rejections
+                explanation = (
+                    "REJECTED: Parameter bounds violation and clamping is disabled: "
+                    + "; ".join(v.message for v in violations)
+                )
+                if self._logger:
+                    self._logger.warning(
+                        f"Verifier rejected action (clamping disabled): {explanation}",
+                        system_id=context.system_id,
+                        action_id=action.action_id,
+                        action_type=action.action_type,
+                    )
+                if self._metrics:
+                    self._metrics.increment(
+                        "polaris.verifier.rejected",
+                        tags={"system_id": context.system_id, "action_type": action.action_type},
+                    )
+                return VerificationResult(
+                    decision=VerificationDecision.REJECTED,
+                    original_action=action,
+                    verified_action=None,
+                    violations=violations,
+                    explanation=explanation,
+                    latency_ms=latency_ms,
+                )
 
         # Action fully accepted
         explanation = "ACCEPTED: All formal safety invariants verified successfully"

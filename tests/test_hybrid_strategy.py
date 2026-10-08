@@ -546,3 +546,35 @@ async def test_hybrid_strategy_pareto_parameter_update():
     assert updated is True
     assert hybrid.selection_mode == "pareto"
     assert "pareto" in hybrid.get_tunable_parameters()["selection_mode"].allowed_values
+
+
+@pytest.mark.asyncio
+async def test_hybrid_pareto_utility_recognizes_ratio_utilization():
+    """Verify that average_utilization in ratio format (0.85) triggers high load performance utility."""
+    now = datetime.now(timezone.utc)
+    overloaded_ratio_state = SystemState(
+        system_id="web-sys",
+        timestamp=now,
+        metrics={
+            "average_utilization": MetricValue("average_utilization", 0.85, "ratio", now),
+        },
+        health_status=HealthStatus.HEALTHY,
+    )
+    context = AdaptationContext(system_id="web-sys", historical_states=[])
+    scale_up_act = AdaptationAction(action_id="1", action_type="scale_up", target_system="web-sys")
+    scale_down_act = AdaptationAction(
+        action_id="2", action_type="scale_down", target_system="web-sys"
+    )
+
+    strat_up = MockSubStrategy(actions=[scale_up_act])
+    strat_down = MockSubStrategy(actions=[scale_down_act])
+
+    hybrid = HybridStrategy(
+        strategies=[(strat_up, 1.0), (strat_down, 1.0)],
+        selection_mode="pareto",
+        objective_weights={"performance": 0.8, "cost": 0.1, "qos": 0.1},
+    )
+
+    actions = await hybrid.assess(overloaded_ratio_state, context)
+    assert len(actions) == 1
+    assert actions[0].action_type == "scale_up"

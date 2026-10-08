@@ -326,7 +326,14 @@ class SWIMConnector(Connector):
                 command = "remove_server"
 
             elif action.action_type.upper() in ["SET_DIMMER", "ADJUST_QOS"]:
-                dimmer_value = (action.parameters or {}).get("value", 1.0)
+                dim_params = action.parameters or {}
+                raw_dimmer = dim_params.get("value")
+                if raw_dimmer is None:
+                    raw_dimmer = dim_params.get("dimmer", 1.0)
+                try:
+                    dimmer_value = float(raw_dimmer)
+                except (ValueError, TypeError):
+                    dimmer_value = -1.0
                 if not 0.0 <= dimmer_value <= 1.0:
                     if self._metrics:
                         self._metrics.increment("polaris.connector.swim.actions_validation_failed")
@@ -334,7 +341,7 @@ class SWIMConnector(Connector):
                         action_id=action.action_id,
                         status=ExecutionStatus.FAILED,
                         result_data={},
-                        error_message=f"Invalid dimmer value: {dimmer_value}",
+                        error_message=f"Invalid dimmer value: {raw_dimmer}",
                     )
                 command = f"set_dimmer {dimmer_value}"
 
